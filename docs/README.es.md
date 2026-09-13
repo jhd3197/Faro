@@ -4,6 +4,10 @@
 
 # Faro
 
+**File & Agent Remote Operations**
+
+El nombre FARO significa «File & Agent Remote Operations»: operaciones remotas con archivos y agentes.
+
 **Un cliente de escritorio moderno para SFTP, FTP, SSH, S3-compatible, WebDAV y almacenamiento en la nube.**
 
 Guarda un servidor una vez y explora sus archivos en una vista de doble panel,
