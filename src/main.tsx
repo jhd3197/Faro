@@ -4,8 +4,14 @@ import App from "./App";
 import { TerminalWindow } from "./components/TerminalWindow";
 import { useSettings } from "./stores/settingsStore";
 import { applyAccent } from "./lib/accent";
+import { startChineseTranslation } from "./lib/i18n";
 import { sweepStalePopoutBuffers } from "./lib/popout";
 import "./styles.css";
+
+// This fork ships a Chinese UI while preserving Faro's original protocol and
+// data behaviour. Translation runs at the DOM boundary because upstream UI
+// copy is currently inline rather than extracted into locale files.
+startChineseTranslation();
 
 // Demo/screenshot build: expose the stores on window.__demo so the headless
 // capture script can drive the UI. Stripped from normal builds.

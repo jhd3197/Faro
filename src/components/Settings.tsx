@@ -444,8 +444,7 @@ export function Settings({ onClose }: Props) {
               </>
             )}
             <Help>
-              Same setting as the Agent Bridge panel — applies to every
-              agent-enabled session and persists across restarts.
+              与智能代理桥接面板相同的设置 — 对所有启用代理的会话生效，并在重启后保留。
             </Help>
           </>
         );
@@ -716,10 +715,7 @@ function BackupSettings() {
       <div>
         <div className="mb-1 text-sm font-medium">Create an encrypted backup</div>
         <Help>
-          One password-protected file with your connection profiles, their saved
-          secrets (SSH passwords, cloud tokens, the AI API key), app settings, and
-          sync pairs. Argon2id + AES-256-GCM — useless without the password, so
-          store it somewhere safe.
+          一个受密码保护的文件，包含连接配置、已保存的凭据（SSH 密码、云令牌和 AI API 密钥）、应用设置及同步对。采用 Argon2id + AES-256-GCM 加密，没有密码无法使用，请妥善保管。
         </Help>
         <div className="mt-2 flex flex-col gap-2">
           <input
@@ -760,8 +756,7 @@ function BackupSettings() {
           <ShieldAlert size={14} /> Restore from a backup
         </div>
         <Help>
-          Replaces this machine's profiles, settings, and saved secrets with the
-          backup's. Takes effect after you restart Faro.
+          使用备份中的配置、设置和已保存凭据替换本机数据。重启 Faro 后生效。
         </Help>
         <div className="mt-2 flex flex-col gap-2">
           <div className="flex items-center gap-2">

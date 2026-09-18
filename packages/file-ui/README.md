@@ -1,6 +1,7 @@
 # @faro/file-ui
 
-A transport-agnostic React file-browser UI, extracted from [Faro](../../). It
+A transport-agnostic React file-browser UI, extracted from
+[Faro](../../) (File & Agent Remote Operations). It
 ships the file **list/grid/details pane** — breadcrumbs, multi-select, keyboard
 nav, type-ahead, drag-and-drop, sort, rename/delete/mkdir/chmod, and an optional
 edit-in-place action — with **zero knowledge of how files are fetched**.

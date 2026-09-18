@@ -4,6 +4,8 @@
 
 # Faro
 
+**File & Agent Remote Operations**
+
 **A modern desktop client for SFTP, FTP, SSH, S3-compatible, WebDAV, and cloud storage.**
 
 Save a server once, then browse its files in a dual-pane view and open a terminal

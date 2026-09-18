@@ -493,7 +493,17 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
     const finalName = name || res.hostname || `Agent @ ${host}`;
     setAgentKey(res.serverKey);
     if (!name) setName(finalName);
-    await saveProfile({ ...buildProfile(), name: finalName, agentKey: res.serverKey });
+    // Android's process directory is not shared storage. Start new/default
+    // connections where the companion's storage permission applies.
+    const initialPath = res.os === "android" && (!defaultRemotePath.trim() || defaultRemotePath === ".")
+      ? "/sdcard"
+      : defaultRemotePath;
+    await saveProfile({
+      ...buildProfile(),
+      name: finalName,
+      agentKey: res.serverKey,
+      defaultRemotePath: initialPath || undefined,
+    });
     toast.success(
       `Paired with ${res.hostname || host}`,
       `${res.os} · ${res.fingerprint}`
@@ -1428,9 +1438,9 @@ function AgentSection({
         </button>
         {found && found.length === 0 && !scanning && (
           <div className="mt-1.5 text-[11px] text-text-dim">
-            No machines found. Start <span className="font-mono">faro-agentd</span> on
-            the machine you want to control (or enable Remote control in its Faro
-            app), or enter its IP above.
+            No devices found. Enable Faro Agent on your phone or TV, or Remote
+            control in the desktop Faro app. Keep both devices on the same
+            network, or enter the device's IP above.
           </div>
         )}
         {found && found.length > 0 && (
@@ -1510,7 +1520,13 @@ function AgentSection({
               : "Pair with this machine"}
           </div>
           <div className="mb-2 text-[11px] leading-relaxed text-text-dim">
-            {selectedMachine && selectedMachine.pairable === false ? (
+            {selectedMachine?.os === "android" ? (
+              <>
+                On your phone or TV, open Faro Agent, grant storage access,
+                enable the agent, and select Show pairing code. Enter that
+                6-digit code here.
+              </>
+            ) : selectedMachine && selectedMachine.pairable === false ? (
               <>
                 <span className="font-medium text-text-muted">
                   {selectedMachine.hostname || host}

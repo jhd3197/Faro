@@ -4,6 +4,10 @@
 
 # Faro
 
+**File & Agent Remote Operations**
+
+FARO 是“File & Agent Remote Operations”的缩写，意为“文件与智能体远程操作”。
+
 **一款现代化的桌面客户端，支持 SFTP、FTP、SSH、S3 兼容存储、WebDAV 及云存储。**
 
 只需保存一次服务器，即可在双窗格视图中浏览其文件，并基于同一会话打开终端——
