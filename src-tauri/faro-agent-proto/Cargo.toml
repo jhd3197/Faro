@@ -1,6 +1,6 @@
 [package]
 name = "faro-agent-proto"
-version = "1.3.38"
+version = "1.3.39"
 edition = "2021"
 license = "MIT"
 description = "Wire protocol + encrypted channel for Faro's remote-agent (Faro-to-Faro) bridge."

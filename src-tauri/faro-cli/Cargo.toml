@@ -7,7 +7,7 @@
 # import name is preserved via `package = "faro"` so the source needs no edits.
 [package]
 name = "faro-cli"
-version = "1.3.38"
+version = "1.3.39"
 edition = "2021"
 description = "Faro CLI — SFTP / FTP / S3 / R2 / B2 / Azure Blob from the terminal."
 authors = ["Juan Denis"]
