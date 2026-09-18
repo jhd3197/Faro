@@ -244,6 +244,42 @@ easiest first:
    product flavor); the full DeviceKit fleet agent exposes the same Faro
    screen too.
 
+### Fire TV companion (Fire OS)
+
+The existing **Faro Agent** Android edition is the companion for this workflow;
+there is no separate desktop transport to configure. Its source and APK build
+live in DeviceKit's `agent-android` project, under the `faro` product flavor.
+The Fire TV compatibility changes need a newly built APK; previously published
+APKs should not be assumed to contain them.
+
+The current Android and native builds require API 26 or later. This excludes
+Fire OS 5 and 6; Fire OS 7 (API 28) and later Android-based Fire OS devices are
+the intended TV targets. Vega OS requires a different app package and is not
+supported by this APK. Check the exact model and OS in **Settings → My Fire TV →
+About**, using Amazon's [device specifications](https://developer.amazon.com/docs/device-specs/identify-fire-tv-devices.html).
+
+1. Install the newly built Faro Agent APK on the TV, then open **Faro Agent**.
+2. Grant shared-storage access using the app's permission button, enable the
+   agent, and select **Show pairing code**. Keep the PC and TV on the same LAN.
+3. In desktop Faro, choose **New Connection → Faro Agent**, select the TV (or
+   enter the IP and port shown by the companion), and enter the six-digit code.
+4. Newly paired Android connections open `/sdcard` when no custom starting
+   folder was chosen. Existing connections can set **Default remote path** to `/sdcard`
+   in their connection settings.
+5. Use the desktop file panes to transfer files or delete selected downloads.
+   **Allow writes** must be enabled on the companion. Shell access is not
+   required for file management.
+
+Shared-storage permission does not expose other apps' private data or caches.
+Copying an APK transfers a file; installing or uninstalling apps is a separate
+device-management feature and is not part of this workflow.
+
+**Device verification remains required:** launch and navigate using only the
+remote, grant storage access, pair, upload a disposable file to Downloads,
+download it and compare the bytes, rename and delete that file, and reconnect
+after sleep and reboot. Build checks and desktop loopback tests do not establish
+compatibility with a specific Fire TV model.
+
 ### `faro-agentd install` — what it sets up
 
 `install` writes a per-platform autostart entry that runs `faro-agentd run`
