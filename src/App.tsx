@@ -497,6 +497,7 @@ function StatusBar({
         onClick={onToggleTransfers}
         icon={<ArrowDownUp size={11} />}
         badge={activeTransfers > 0 ? activeTransfers : undefined}
+        title="Transfer queue"
       >
         Transfers
       </PillButton>

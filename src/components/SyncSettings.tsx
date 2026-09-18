@@ -50,8 +50,7 @@ export function SyncSettings() {
             Keep folders in sync automatically
           </div>
           <div className="mt-1 text-xs text-text-dim">
-            Watch a local folder and mirror changes to (or from) a server in the
-            background. Each pair runs on its own while Faro is open.
+            在后台监视本地文件夹并将更改同步到服务器（或从服务器同步回来）。Faro 打开时每个同步对都会独立运行。
           </div>
         </div>
         {!adding && (

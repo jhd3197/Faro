@@ -271,9 +271,7 @@ export function KeyboardSettings() {
       )}
 
       <p className="pt-1 text-[11px] leading-relaxed text-text-dim">
-        Click a shortcut, then press the keys. <kbd>Esc</kbd> cancels,{" "}
-        <kbd>Backspace</kbd> resets to default. File-browser keys apply while a
-        file pane is focused; they never fire while you're typing.
+        点击快捷键后按下按键。<kbd>Esc</kbd> 取消，<kbd>Backspace</kbd> 恢复默认。文件浏览器快捷键仅在文件面板获得焦点时生效，输入文字时不会触发。
       </p>
     </div>
   );
