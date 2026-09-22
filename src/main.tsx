@@ -11,7 +11,9 @@ import "./styles.css";
 // This fork ships a Chinese UI while preserving Faro's original protocol and
 // data behaviour. Translation runs at the DOM boundary because upstream UI
 // copy is currently inline rather than extracted into locale files.
-startChineseTranslation();
+// VITE_UI_LOCALE=en skips translation — used by the screenshot/video capture
+// tooling that records the English UI.
+if (import.meta.env.VITE_UI_LOCALE !== "en") startChineseTranslation();
 
 // Demo/screenshot build: expose the stores on window.__demo so the headless
 // capture script can drive the UI. Stripped from normal builds.
