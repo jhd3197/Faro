@@ -436,6 +436,10 @@ export const diskScanSnapshot: ScanSnapshot = {
   startedAt: (T - 6) * 1000,
 };
 
+// The shell prompt, reused by terminal_write echo in core.ts.
+export const TERMINAL_PROMPT =
+  "\x1b[1;32mroot@api-prod\x1b[0m:\x1b[1;34m/var/www/api\x1b[0m# ";
+
 // A short colored shell transcript emitted when a mock terminal opens.
 export const TERMINAL_TRANSCRIPT =
   "\x1b[1;32mroot@api-prod\x1b[0m:\x1b[1;34m/var/www/api\x1b[0m# ls -la\r\n" +
