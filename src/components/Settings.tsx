@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { ACCENTS } from "@/lib/accent";
+import type { UiLanguage } from "@/lib/i18n";
 import {
   useSettings,
   COLOR_THEMES,
@@ -108,6 +109,20 @@ export function Settings({ onClose }: Props) {
               help="Full presets that also re-tint the surfaces, not just the accent."
             >
               <ThemeGrid value={s.appTheme} onChange={s.setAppTheme} />
+            </Field>
+            <Field
+              label="Language"
+              help="System follows your OS language."
+            >
+              <Segmented<UiLanguage>
+                value={s.uiLanguage}
+                onChange={s.setUiLanguage}
+                options={[
+                  { value: "system", label: "System" },
+                  { value: "en", label: "English" },
+                  { value: "zh-CN", label: "中文" },
+                ]}
+              />
             </Field>
           </>
         );
@@ -444,7 +459,8 @@ export function Settings({ onClose }: Props) {
               </>
             )}
             <Help>
-              与智能代理桥接面板相同的设置 — 对所有启用代理的会话生效，并在重启后保留。
+              Same setting as the Agent Bridge panel — applies to every
+              agent-enabled session and persists across restarts.
             </Help>
           </>
         );
@@ -715,7 +731,10 @@ function BackupSettings() {
       <div>
         <div className="mb-1 text-sm font-medium">Create an encrypted backup</div>
         <Help>
-          一个受密码保护的文件，包含连接配置、已保存的凭据（SSH 密码、云令牌和 AI API 密钥）、应用设置及同步对。采用 Argon2id + AES-256-GCM 加密，没有密码无法使用，请妥善保管。
+          One password-protected file with your connection profiles, their saved
+          secrets (SSH passwords, cloud tokens, the AI API key), app settings, and
+          sync pairs. Argon2id + AES-256-GCM — useless without the password, so
+          store it somewhere safe.
         </Help>
         <div className="mt-2 flex flex-col gap-2">
           <input
@@ -756,7 +775,8 @@ function BackupSettings() {
           <ShieldAlert size={14} /> Restore from a backup
         </div>
         <Help>
-          使用备份中的配置、设置和已保存凭据替换本机数据。重启 Faro 后生效。
+          Replaces this machine's profiles, settings, and saved secrets with the
+          backup's. Takes effect after you restart Faro.
         </Help>
         <div className="mt-2 flex flex-col gap-2">
           <div className="flex items-center gap-2">

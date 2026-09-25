@@ -4,16 +4,16 @@ import App from "./App";
 import { TerminalWindow } from "./components/TerminalWindow";
 import { useSettings } from "./stores/settingsStore";
 import { applyAccent } from "./lib/accent";
-import { startChineseTranslation } from "./lib/i18n";
+import { applyUiLanguage, type UiLanguage } from "./lib/i18n";
 import { sweepStalePopoutBuffers } from "./lib/popout";
 import "./styles.css";
 
-// This fork ships a Chinese UI while preserving Faro's original protocol and
-// data behaviour. Translation runs at the DOM boundary because upstream UI
-// copy is currently inline rather than extracted into locale files.
-// VITE_UI_LOCALE=en skips translation — used by the screenshot/video capture
-// tooling that records the English UI.
-if (import.meta.env.VITE_UI_LOCALE !== "en") startChineseTranslation();
+// Optional Chinese UI (Settings → Appearance → Language; "system" follows the
+// OS locale). Translation runs at the DOM boundary because UI copy is inline
+// rather than extracted into locale files. VITE_UI_LOCALE pins the language
+// for the screenshot/video capture tooling.
+const pinnedLocale = import.meta.env.VITE_UI_LOCALE as UiLanguage | undefined;
+applyUiLanguage(pinnedLocale || useSettings.getState().uiLanguage);
 
 // Demo/screenshot build: expose the stores on window.__demo so the headless
 // capture script can drive the UI. Stripped from normal builds.
@@ -41,11 +41,16 @@ applyAccent(useSettings.getState().accentColor || null);
 // then drop it once the transition is done.
 let prevTheme = useSettings.getState().appTheme;
 let prevAccent = useSettings.getState().accentColor;
+let prevLanguage = useSettings.getState().uiLanguage;
 let themingTimer: ReturnType<typeof setTimeout> | undefined;
 useSettings.subscribe((s) => {
   if (s.accentColor !== prevAccent) {
     prevAccent = s.accentColor;
     applyAccent(s.accentColor || null);
+  }
+  if (s.uiLanguage !== prevLanguage) {
+    prevLanguage = s.uiLanguage;
+    if (!pinnedLocale) applyUiLanguage(s.uiLanguage);
   }
   if (s.appTheme === prevTheme) return;
   prevTheme = s.appTheme;
