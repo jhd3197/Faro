@@ -75,6 +75,11 @@ faro-agent-proto = { path = "faro-agent-proto" }
 faro-agentd = { path = "faro-agentd" }
 mdns-sd = "0.11"
 
+# Vela companion app: transfers, Agent Bridge requests and folder sync on the
+# Vela desk and phones. Switch to the git dependency once the crate is on
+# GitHub: vela-companion = { git = "https://github.com/jhd3197/vela-companion" }
+vela-companion = { path = "../../vela-companion" }
+
 # FTP / FTPS — sync API, driven from tokio via spawn_blocking.
 suppaftp = { version = "6", features = ["native-tls"] }
 

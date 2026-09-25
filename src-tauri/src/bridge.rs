@@ -278,6 +278,9 @@ pub struct BridgeState {
     /// Whether saved commands have been seeded into Skills (one-time).
     skills_migrated: Mutex<bool>,
     approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
+    /// What each pending approval asks, beside its sender, so something other
+    /// than the webview (the Vela companion) can say what is waiting.
+    pending: Mutex<HashMap<String, ApprovalRequest>>,
     activity: Mutex<Vec<ActivityEntry>>,
     config_path: Option<PathBuf>,
     /// The frontend's currently focused session id, if any. Not persisted.
@@ -647,6 +650,7 @@ impl BridgeState {
             .await
             .remove(request_id)
             .ok_or_else(|| anyhow!("no pending approval {request_id}"))?;
+        self.pending.lock().await.remove(request_id);
         tx.send(decision)
             .map_err(|_| anyhow!("approval receiver dropped"))?;
         Ok(())
@@ -664,24 +668,41 @@ impl BridgeState {
     ) -> bool {
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
+        let request = ApprovalRequest {
+            request_id: request_id.clone(),
+            session_id: session_id.to_string(),
+            session_name: session_name.to_string(),
+            kind: kind.to_string(),
+            command: summary.to_string(),
+        };
         self.approvals.lock().await.insert(request_id.clone(), tx);
-        let _ = app.emit(
-            "bridge://approval",
-            ApprovalRequest {
-                request_id: request_id.clone(),
-                session_id: session_id.to_string(),
-                session_name: session_name.to_string(),
-                kind: kind.to_string(),
-                command: summary.to_string(),
-            },
-        );
+        self.pending.lock().await.insert(request_id.clone(), request.clone());
+        let _ = app.emit("bridge://approval", request);
         let approved = matches!(
             tokio::time::timeout(APPROVAL_TIMEOUT, rx).await,
             Ok(Ok(ApprovalDecision::Approve))
         );
         // If it timed out, the entry is still in the map — clean it up.
         self.approvals.lock().await.remove(&request_id);
+        self.pending.lock().await.remove(&request_id);
         approved
+    }
+
+    /// Approvals waiting on the user right now.
+    pub async fn pending_approvals(&self) -> Vec<ApprovalRequest> {
+        self.pending.lock().await.values().cloned().collect()
+    }
+
+    /// Deny everything waiting. Returns how many were denied.
+    pub async fn deny_all_pending(&self) -> usize {
+        let ids: Vec<String> = self.approvals.lock().await.keys().cloned().collect();
+        let mut denied = 0;
+        for id in ids {
+            if self.resolve_approval(&id, ApprovalDecision::Deny).await.is_ok() {
+                denied += 1;
+            }
+        }
+        denied
     }
 
     async fn log(&self, app: &AppHandle, entry: ActivityEntry) {

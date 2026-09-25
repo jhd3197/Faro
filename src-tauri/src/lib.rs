@@ -35,6 +35,7 @@ pub mod session;
 pub mod sync;
 mod terminal;
 mod transfer;
+mod vela;
 mod virtualfs;
 
 pub struct AppState {
@@ -304,6 +305,9 @@ pub fn run() {
                 cli_updater.auto_start_if_enabled(cli_handle).await;
             });
 
+            // Show transfers, agent requests and folder sync in Vela.
+            vela::start(app.handle());
+
             // Restart any folder-sync pairs the user left enabled.
             let foldersync = app.state::<AppState>().foldersync.clone();
             let foldersync_handle = app.handle().clone();
@@ -472,6 +476,12 @@ pub fn run() {
             commands::bridge_run_skill,
             commands::export_agent_log,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Unregister from Vela on the way out, so it shows Faro as closed.
+            if let tauri::RunEvent::Exit = event {
+                vela::stop(app);
+            }
+        });
 }
