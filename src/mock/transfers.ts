@@ -115,3 +115,37 @@ export function handle(cmd: string, a: Record<string, any>): void {
       break;
   }
 }
+
+let started = 0;
+
+/** start_download / start_upload: enqueue a fresh row and animate it to done
+ *  over a few seconds, so demos and walkthrough videos show a real transfer
+ *  instead of a silent no-op. Returns the new transfer id. */
+export function start(
+  kind: "download" | "upload",
+  source: string,
+  destDir: string,
+  knownSize?: number
+): string {
+  const id = `t-new-${++started}`;
+  const name = source.split(/[\/]/).pop() || "file";
+  const sep = destDir.includes("\\") ? "\\" : "/";
+  const destination = destDir.replace(/[\/]+$/, "") + sep + name;
+  // The listing's size when the caller knows it, else a deterministic
+  // per-name size between ~2 and ~18 MB.
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const size = knownSize || 2_000_000 + (h % 16_000_000);
+  let t: Transfer = { id, kind, source, destination, size, transferred: 0, status: "transferring", startedAt: Date.now() };
+  update(t);
+  const steps = 24;
+  let i = 0;
+  const timer = setInterval(() => {
+    i++;
+    const done = i >= steps;
+    t = { ...t, transferred: done ? size : Math.round((size * i) / steps), status: done ? "done" : "transferring" };
+    update(t);
+    if (done) clearInterval(timer);
+  }, 350);
+  return id;
+}

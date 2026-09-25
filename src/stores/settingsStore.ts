@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
+import type { UiLanguage } from "@/lib/i18n";
 
 export type OverwritePolicy = "overwrite" | "skip" | "rename";
 export type SortField = "name" | "size" | "modified";
@@ -84,6 +85,8 @@ interface SettingsState {
   appTheme: AppTheme;
   /** Optional accent override (hex). "" = use the theme's own accent. */
   accentColor: string;
+  /** UI language. "system" follows the OS locale (Chinese only when it's zh). */
+  uiLanguage: UiLanguage;
 
   // Transfers
   overwritePolicy: OverwritePolicy;
@@ -139,6 +142,7 @@ interface SettingsState {
 
   setAppTheme: (t: AppTheme) => void;
   setAccentColor: (hex: string) => void;
+  setUiLanguage: (lang: UiLanguage) => void;
   setOverwritePolicy: (p: OverwritePolicy) => void;
   setPromptOnOverwrite: (v: boolean) => void;
   setAutoOpenTransferPanel: (v: boolean) => void;
@@ -172,6 +176,7 @@ type Persisted = Omit<
   SettingsState,
   | "setAppTheme"
   | "setAccentColor"
+  | "setUiLanguage"
   | "setOverwritePolicy"
   | "setPromptOnOverwrite"
   | "setAutoOpenTransferPanel"
@@ -202,6 +207,7 @@ type Persisted = Omit<
 const DEFAULTS: Persisted = {
   appTheme: "dark",
   accentColor: "",
+  uiLanguage: "system",
   overwritePolicy: "overwrite",
   promptOnOverwrite: true,
   autoOpenTransferPanel: true,
@@ -294,6 +300,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
 
   setAppTheme: (t) => mutate(set, get, "appTheme", t),
   setAccentColor: (hex) => mutate(set, get, "accentColor", hex),
+  setUiLanguage: (lang) => mutate(set, get, "uiLanguage", lang),
   setOverwritePolicy: (p) => mutate(set, get, "overwritePolicy", p),
   setPromptOnOverwrite: (v) => mutate(set, get, "promptOnOverwrite", v),
   setAutoOpenTransferPanel: (v) =>

@@ -10,6 +10,8 @@ type Args = Record<string, any>;
 // Each open_terminal call gets a distinct id so split panes each render their
 // own transcript (Plan 11). The registry opens one PTY per pane.
 let terminalCounter = 0;
+// Terminals that have received input (see terminal_write).
+const echoed = new Set<string>();
 
 // A tiny in-memory snippets store so the demo's Snippets panel / palette work
 // (save/delete round-trip) without the Rust backend (Plan 11 Phase 4).
@@ -150,7 +152,20 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       );
       return id;
     }
-    case "terminal_write":
+    case "terminal_write": {
+      // Echo keystrokes like a real PTY so typed commands and inserted
+      // snippets show up. The first write backs over the transcript's
+      // painted cursor; Enter starts a fresh prompt.
+      let out = echoed.has(a.terminalId) ? "" : "\b";
+      echoed.add(a.terminalId);
+      for (const ch of String(a.data)) {
+        if (ch === "\r") out += "\r\n" + data.TERMINAL_PROMPT;
+        else if (ch === "\x7f") out += "\b \b";
+        else if (ch >= " " || ch === "\t") out += ch;
+      }
+      emit("terminal://data", { terminalId: a.terminalId, data: out });
+      return null;
+    }
     case "terminal_resize":
     case "close_terminal":
       return null;
@@ -177,8 +192,14 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- transfers ----
     case "list_transfers":
       return transfers.listTransfers();
-    case "start_download":
+    case "start_download": {
+      const dir = a.remotePath.replace(/\/[^/]*$/, "") || "/";
+      const name = a.remotePath.split("/").pop();
+      const size = data.listDir(a.sessionId, dir).find((e) => e.name === name)?.size;
+      return transfers.start("download", a.remotePath, a.localDir, size);
+    }
     case "start_upload":
+      return transfers.start("upload", a.localPath, a.remoteDir);
     case "start_archive":
       return "t-new";
     case "start_directory_download":

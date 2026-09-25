@@ -1,8 +1,8 @@
 /**
- * Chinese UI layer for the Faro fork.
+ * Optional Chinese UI layer (Settings → Appearance → Language).
  *
  * Faro currently keeps its UI copy inline in React components rather than in
- * locale files. Keeping the translation at the DOM boundary lets this fork
+ * locale files. Keeping the translation at the DOM boundary lets it
  * cover existing dialogs and future components without changing connection
  * or transfer behaviour. Technical values (paths, commands and host names)
  * are deliberately left untouched.
@@ -548,6 +548,13 @@ const ZH: Record<string, string> = {
   "Takes effect on the next opened terminal.": "下次打开终端时生效。",
   "Skip toasts while the window is in the foreground (in-app toasts already cover it).": "窗口位于前台时不显示桌面通知（应用内通知已覆盖此场景）。",
   "Allow paired controllers — and any AI agent driving them — to run shell commands on this machine. The headline capability; turn off for a browse/read-only foothold.": "允许已配对的控制端及其驱动的 AI 代理在本机运行 Shell 命令。这是核心权限；如只需浏览和读取，请关闭。",
+  Language: "语言",
+  "System follows your OS language.": "“系统”将跟随操作系统语言。",
+  System: "系统",
+  "Put the": "将",
+  "command on your PATH so it works in any terminal. Per-user only — no admin required.": "命令加入 PATH，使其可在任意终端使用。仅对当前用户生效，无需管理员权限。",
+  "cancels,": "取消，",
+  "resets to default. File-browser keys apply while a file pane is focused; they never fire while you're typing.": "恢复默认。文件浏览器快捷键仅在文件面板获得焦点时生效，输入文字时不会触发。",
   "Allow paired controllers to modify this machine's filesystem. Reads and directory listings are always allowed once paired.": "允许已配对的控制端修改本机文件系统。配对后始终允许读取和列出目录。",
 };
 
@@ -635,12 +642,22 @@ function translate(value: string): string {
     .replace(/^(.+) ago$/i, "$1 前");
 }
 
+// Original English for every node/attribute we rewrote, so switching back to
+// English can restore the DOM in place. React re-setting a node's text fires
+// the observer, which re-records the fresh original before re-translating.
+const originalText = new WeakMap<Node, string>();
+const originalAttrs = new WeakMap<Element, Record<string, string>>();
+let observer: MutationObserver | null = null;
+
 function visit(root: Node): void {
   if (root.nodeType === Node.TEXT_NODE) {
     const text = root.nodeValue;
     if (text && text.trim() && !root.parentElement?.closest("code, pre")) {
       const next = translate(text);
-      if (next !== text) root.nodeValue = next;
+      if (next !== text) {
+        originalText.set(root, text);
+        root.nodeValue = next;
+      }
     }
     return;
   }
@@ -651,18 +668,42 @@ function visit(root: Node): void {
     const value = element.getAttribute(attr);
     if (!value) continue;
     const next = translate(value);
-    if (next !== value) element.setAttribute(attr, next);
+    if (next !== value) {
+      const saved = originalAttrs.get(element) ?? {};
+      saved[attr] = value;
+      originalAttrs.set(element, saved);
+      element.setAttribute(attr, next);
+    }
   }
   for (const child of Array.from(element.childNodes)) visit(child);
 }
 
+function restore(root: Node): void {
+  const text = originalText.get(root);
+  if (text !== undefined) {
+    root.nodeValue = text;
+    originalText.delete(root);
+  }
+  if (root.nodeType === Node.ELEMENT_NODE) {
+    const element = root as Element;
+    const saved = originalAttrs.get(element);
+    if (saved) {
+      for (const [attr, value] of Object.entries(saved)) {
+        element.setAttribute(attr, value);
+      }
+      originalAttrs.delete(element);
+    }
+  }
+  for (const child of Array.from(root.childNodes)) restore(child);
+}
+
 /** Start the Chinese renderer. Idempotent so pop-out windows can call it too. */
 export function startChineseTranslation(): void {
-  if (document.documentElement.dataset.faroLocale === "zh-CN") return;
+  if (observer) return;
   document.documentElement.lang = "zh-CN";
   document.documentElement.dataset.faroLocale = "zh-CN";
   visit(document.body);
-  const observer = new MutationObserver((records) => {
+  observer = new MutationObserver((records) => {
     for (const record of records) {
       if (record.type === "characterData") visit(record.target);
       else for (const node of Array.from(record.addedNodes)) visit(node);
@@ -676,4 +717,27 @@ export function startChineseTranslation(): void {
     attributes: true,
     attributeFilter: ATTRIBUTES,
   });
+}
+
+/** Stop translating and put the English copy back. */
+export function stopChineseTranslation(): void {
+  if (!observer) return;
+  observer.disconnect();
+  observer = null;
+  document.documentElement.lang = "en";
+  delete document.documentElement.dataset.faroLocale;
+  restore(document.body);
+}
+
+export type UiLanguage = "system" | "en" | "zh-CN";
+
+/** Resolve "system" against the OS/browser locale. */
+export function resolveUiLanguage(lang: UiLanguage): "en" | "zh-CN" {
+  if (lang !== "system") return lang;
+  return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+export function applyUiLanguage(lang: UiLanguage): void {
+  if (resolveUiLanguage(lang) === "zh-CN") startChineseTranslation();
+  else stopChineseTranslation();
 }

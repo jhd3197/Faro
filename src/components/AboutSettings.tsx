@@ -301,7 +301,8 @@ function PathRow() {
         faro-cli on PATH
       </div>
       <p className="mb-2 text-xs text-text-muted">
-        将 <code className="text-text">faro-cli</code> 命令加入 PATH，使其可在任意终端使用。仅对当前用户生效，无需管理员权限。
+        Put the <code className="text-text">faro-cli</code> command on your PATH so
+        it works in any terminal. Per-user only — no admin required.
       </p>
 
       <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm">
