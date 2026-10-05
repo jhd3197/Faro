@@ -666,7 +666,7 @@ function DeepLinkListener() {
 /// Map a parsed deep link to editor seed values. `pair` links become a
 /// faro-agent profile; everything else a server profile of the named protocol.
 function deepLinkToPrefill(dl: DeepLink): Partial<ConnectionProfile> {
-  const known: Protocol[] = ["sftp", "ftp", "ftps", "s3", "azure", "gcs", "webdav", "http", "dropbox", "onedrive", "gdrive", "box", "shopify", "hubspot", "dynamics", "faro-agent"];
+  const known: Protocol[] = ["sftp", "ftp", "ftps", "s3", "azure", "gcs", "webdav", "http", "dropbox", "onedrive", "gdrive", "box", "shopify", "hubspot", "dynamics", "wordpress", "faro-agent"];
   const protocol: Protocol =
     dl.action === "pair"
       ? "faro-agent"
@@ -682,7 +682,9 @@ function deepLinkToPrefill(dl: DeepLink): Partial<ConnectionProfile> {
     defaultRemotePath: dl.path ?? undefined,
     bucket: dl.bucket ?? undefined,
     region: dl.region ?? undefined,
-    endpoint: dl.endpoint ?? undefined,
+    // WordPress keeps its site URL in `endpoint`; a link's `host` is the site.
+    endpoint:
+      dl.endpoint ?? (protocol === "wordpress" ? (dl.host ?? undefined) : undefined),
     account: dl.account ?? undefined,
   };
 }

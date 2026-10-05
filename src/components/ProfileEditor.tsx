@@ -68,6 +68,16 @@ function hostFromUrl(u: string): string {
   }
 }
 
+/// The port a site URL implies: explicit, else 80 for http and 443 otherwise.
+function portFromUrl(u: string): number {
+  try {
+    const url = new URL(u.includes("://") ? u : `https://${u}`);
+    return url.port ? Number(url.port) : url.protocol === "http:" ? 80 : 443;
+  } catch {
+    return 443;
+  }
+}
+
 /// Normalize a Shopify store domain for the profile host: strip any
 /// scheme/path, and append `.myshopify.com` when only the shop name was typed.
 function normalizeShopDomain(s: string): string {
@@ -117,7 +127,7 @@ function guessProvider(endpoint?: string): S3Provider {
 const PROTOCOL_GROUPS: { label: string; items: Protocol[] }[] = [
   { label: "Servers", items: ["sftp", "ftp", "ftps"] },
   { label: "Object storage", items: ["s3", "azure", "gcs"] },
-  { label: "Web", items: ["webdav", "http"] },
+  { label: "Web", items: ["webdav", "http", "wordpress"] },
   { label: "Cloud drives", items: ["dropbox", "onedrive", "gdrive", "box"] },
   { label: "Commerce", items: ["shopify", "hubspot", "dynamics"] },
   { label: "Machine", items: ["faro-agent"] },
@@ -259,6 +269,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const isShopify = protocol === "shopify";
   const isHubSpot = protocol === "hubspot";
   const isDynamics = protocol === "dynamics";
+  const isWordPress = protocol === "wordpress";
   const isCloudOAuth = isDropbox || isOnedrive || isGdrive || isBox;
   const isObject = isObjectProtocol(protocol);
   const isAgent = isAgentProtocol(protocol);
@@ -379,6 +390,24 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           !!dynamicsClientSecret.trim())
       : dynamicsAuthed;
 
+  // WordPress: the Application Password lives in the OS keychain
+  // (`wordpress:{profile_id}`) — never in profiles.json. The editor only ever
+  // sets it (one-way) and asks whether one already exists.
+  const [wpPassword, setWpPassword] = useState("");
+  const [wpSecretSaved, setWpSecretSaved] = useState(false);
+  useEffect(() => {
+    if (protocol === "wordpress") {
+      ipc
+        .apiKeyStatus(`wordpress:${id}`)
+        .then(setWpSecretSaved)
+        .catch(() => {});
+    }
+  }, [protocol, id]);
+  const wpSiteOk =
+    /^(https?:\/\/)?[^\s/.]+(\.[^\s/.]+)+(\/\S*)?$/i.test(endpoint.trim()) ||
+    /^(https?:\/\/)?localhost(:\d+)?(\/\S*)?$/i.test(endpoint.trim());
+  const wpSecretOk = wpSecretSaved || !!wpPassword.trim();
+
   /// Build the profile from the current form state. Shared by Save and by the
   /// pairing flow (which must persist the profile before it can pair by id).
   const buildProfile = (): ConnectionProfile => {
@@ -413,6 +442,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                       ? "HubSpot"
                       : isDynamics
                         ? normalizeDynamicsUrl(host) || "Dynamics 365"
+                        : isWordPress
+                        ? hostFromUrl(endpoint) || "WordPress"
                         : isAgent
                         ? `Agent @ ${host}`
                         : `${username}@${host}`),
@@ -434,15 +465,17 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 ? normalizeShopDomain(host)
                 : isDynamics
                   ? normalizeDynamicsUrl(host)
-                  : host,
-      port,
+                  : isWordPress
+                    ? hostFromUrl(endpoint)
+                    : host,
+      port: isWordPress ? portFromUrl(endpoint) : port,
       username: isAzure
         ? azureAccount
         : isAgent || isGcs || isCloudOAuth || isShopify || isHubSpot || isDynamics
           ? ""
           : username,
       auth:
-        isAgent || isCloudOAuth || isShopify || isHubSpot || isDynamics
+        isAgent || isCloudOAuth || isShopify || isHubSpot || isDynamics || isWordPress
           ? { kind: "password", password: "" }
           : auth,
       defaultRemotePath: defaultRemotePath || undefined,
@@ -450,7 +483,13 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       autoConnect: autoConnect || undefined,
       bucket: isObject ? bucket : undefined,
       region: isS3 ? region : undefined,
-      endpoint: isObject || isWebdav || isHttp ? endpoint || undefined : undefined,
+      // WordPress keeps the full site URL (scheme + subdirectory) here.
+      endpoint:
+        isObject || isWebdav || isHttp
+          ? endpoint || undefined
+          : isWordPress
+            ? endpoint.trim().replace(/\/+$/, "") || undefined
+            : undefined,
       account: isAzure
         ? azureAccount
         : isCloudOAuth
@@ -478,6 +517,11 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
     // it never lands in profiles.json). Blank fields keep the saved one.
     if (isShopify && shopifySecretEntered) {
       await ipc.setApiKey(`shopify:${id}`, shopifySecret);
+    }
+    // WordPress: same one-way keychain set for the Application Password.
+    // WordPress shows it in groups of four; spaces are part of the display only.
+    if (isWordPress && wpPassword.trim()) {
+      await ipc.setApiKey(`wordpress:${id}`, wpPassword.replace(/\s+/g, ""));
     }
     // HubSpot: same one-way keychain set for the private-app token.
     if (isHubSpot && hubspotToken.trim()) {
@@ -544,6 +588,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 ? hubspotSecretOk
                 : isDynamics
                   ? dynamicsUrlOk && dynamicsCredOk
+                  : isWordPress
+                    ? wpSiteOk && !!username.trim() && wpSecretOk
                   : isCloudOAuth
                 ? cloudAuthed
                 : isAgent
@@ -579,6 +625,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                             ? "client credentials"
                             : "Microsoft sign-in"),
                       ]
+                    : isWordPress
+                      ? [
+                          !wpSiteOk && "site address",
+                          !username.trim() && "username",
+                          !wpSecretOk && "application password",
+                        ]
                     : isCloudOAuth
                 ? [!cloudAuthed && `${PROTOCOL_LABEL[protocol]} authorization`]
                 : isAgent
@@ -784,6 +836,17 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               setDynamicsAuthed(false);
               setDynamicsAccount("");
             }}
+          />
+        ) : isWordPress ? (
+          <WordPressSection
+            site={endpoint}
+            setSite={setEndpoint}
+            siteOk={wpSiteOk}
+            username={username}
+            setUsername={setUsername}
+            password={wpPassword}
+            setPassword={setWpPassword}
+            secretSaved={wpSecretSaved}
           />
         ) : isCloudOAuth ? (
           <OAuthConnectSection
@@ -2084,6 +2147,123 @@ function ShopifySection({
   );
 }
 
+function WordPressSection({
+  site,
+  setSite,
+  siteOk,
+  username,
+  setUsername,
+  password,
+  setPassword,
+  secretSaved,
+}: {
+  site: string;
+  setSite: (v: string) => void;
+  siteOk: boolean;
+  username: string;
+  setUsername: (v: string) => void;
+  password: string;
+  setPassword: (v: string) => void;
+  secretSaved: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState("");
+
+  // Opens WordPress's own "Authorize Application" page with Faro's name
+  // filled in. WordPress shows the new password there; the user pastes it.
+  const createPassword = async () => {
+    setBusy(true);
+    try {
+      const res = await ipc.wordpressAuthorize(site);
+      setSite(res.site);
+      setLink(res.authorizeUrl);
+    } catch (e) {
+      toast.error("Couldn't open WordPress", String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Field label="Site address">
+        <input
+          value={site}
+          onChange={(e) => setSite(e.target.value)}
+          placeholder="https://example.com"
+          className={inputCls}
+          spellCheck={false}
+        />
+      </Field>
+
+      <Hint>
+        Works without FTP or SSH: Faro talks to the site's REST API with an
+        Application Password (WordPress 5.6+). You'll see the media library, and
+        every plugin API the site offers (Gravity Forms, WooCommerce…) as JSON
+        files you can open, edit and save. Needs an administrator account.
+      </Hint>
+
+      <button
+        type="button"
+        onClick={createPassword}
+        disabled={!siteOk || busy}
+        className="btn-accent mb-3 flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 size={14} className="animate-spin" />
+        ) : (
+          <BrandIcon icon="simple-icons:wordpress" size={14} />
+        )}
+        Create an application password
+      </button>
+
+      {link && (
+        <Hint>
+          In the browser, log in if asked and click{" "}
+          <b>Yes, I approve of this connection</b>. Copy the password WordPress
+          shows and paste it below with your WordPress username. Browser didn't
+          open?{" "}
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(link);
+              toast.success("Link copied");
+            }}
+            className="underline hover:text-text"
+          >
+            Copy the link
+          </button>
+          .
+        </Hint>
+      )}
+
+      <div className="flex gap-2">
+        <Field label="Username" className="w-48">
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="admin"
+            className={inputCls}
+            spellCheck={false}
+          />
+        </Field>
+        <Field label="Application password" className="flex-1">
+          <PasswordInput value={password} onChange={setPassword} generate={false} />
+        </Field>
+      </div>
+
+      <Hint>
+        Not your login password — you can revoke it any time in wp-admin → Users
+        → Profile → Application Passwords. Stored in your OS keychain, never in
+        the connections file.
+        {secretSaved ? " One is already saved; leave the field blank to keep it." : ""}
+        {" "}If the site runs Wordfence, Login Security → Settings → "Disable
+        application passwords" must be off.
+      </Hint>
+    </>
+  );
+}
+
 function HubSpotSection({
   token,
   setToken,
@@ -2480,6 +2660,8 @@ function protocolHint(p: Protocol): string {
       return "Design files · :443";
     case "dynamics":
       return "Web resources · :443";
+    case "wordpress":
+      return "REST API · :443";
     case "faro-agent":
       return "Machine · :8722";
   }
@@ -2606,9 +2788,13 @@ function Field({
 function PasswordInput({
   value,
   onChange,
+  generate: canGenerate = true,
 }: {
   value: string;
   onChange: (v: string) => void;
+  /** Offer "Generate strong password" — off for credentials a service
+   *  issues (e.g. a WordPress application password). */
+  generate?: boolean;
 }) {
   const [reveal, setReveal] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -2647,18 +2833,20 @@ function PasswordInput({
           {reveal ? <EyeOff size={13} /> : <Eye size={13} />}
         </button>
       </div>
-      <button
-        type="button"
-        onClick={generate}
-        className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-border bg-bg-subtle px-2 py-1 text-[11.5px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
-      >
-        {copied ? (
-          <Check size={11} className="text-accent" />
-        ) : (
-          <Wand2 size={11} />
-        )}
-        {copied ? "Generated & copied" : "Generate strong password"}
-      </button>
+      {canGenerate && (
+        <button
+          type="button"
+          onClick={generate}
+          className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-border bg-bg-subtle px-2 py-1 text-[11.5px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
+        >
+          {copied ? (
+            <Check size={11} className="text-accent" />
+          ) : (
+            <Wand2 size={11} />
+          )}
+          {copied ? "Generated & copied" : "Generate strong password"}
+        </button>
+      )}
     </div>
   );
 }

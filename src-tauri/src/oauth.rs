@@ -124,7 +124,7 @@ pub async fn authorize_loopback(config: &OAuthConfig) -> Result<(TokenSet, serde
         .await
         .with_context(|| format!("bind loopback :{REDIRECT_PORT} for OAuth redirect"))?;
 
-    open_url(auth_url.as_str())?;
+    crate::proc::open_in_browser(auth_url.as_str())?;
 
     // Wait (bounded) for the browser redirect and pull the ?code= out of it.
     let code = tokio::time::timeout(Duration::from_secs(300), accept_code(&listener))
@@ -277,29 +277,6 @@ fn token_set_from(raw: &serde_json::Value) -> Result<TokenSet> {
 /// True when a token is expired or within 60s of it (or its expiry is unknown).
 pub fn is_expired(tokens: &TokenSet) -> bool {
     tokens.expires_at == 0 || tokens.expires_at <= now_secs() + 60
-}
-
-fn open_url(url: &str) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = std::process::Command::new("rundll32");
-        c.args(["url.dll,FileProtocolHandler", url]);
-        c
-    };
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut c = std::process::Command::new("open");
-        c.arg(url);
-        c
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut cmd = {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
-    cmd.spawn().context("open the system browser")?;
-    Ok(())
 }
 
 // ---- Token storage (OS keychain) ----

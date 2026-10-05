@@ -1,6 +1,7 @@
 import { useId, useRef } from "react";
 import { Github, ExternalLink, X } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
+import { openExternal } from "@/lib/openExternal";
 
 interface Props {
   onClose: () => void;
@@ -8,10 +9,6 @@ interface Props {
 
 const VERSION = "1.3.0";
 const REPO_URL = "https://github.com/jhd3197/faro";
-
-function openExternal(url: string) {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
 
 export function AboutDialog({ onClose }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);

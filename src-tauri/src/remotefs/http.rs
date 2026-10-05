@@ -127,6 +127,7 @@ impl RemoteFs for HttpFs {
             // Autoindex exposes real subdirectories; direct-file mode just has one.
             has_directories: true,
             has_shell: false,
+            has_commands: false,
             change_signal: ChangeSignal::Etag,
         }
     }

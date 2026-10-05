@@ -11,6 +11,7 @@ pub mod object;
 pub mod onedrive;
 pub mod shopify;
 pub mod webdav;
+pub mod wordpress;
 pub use agent::{agent_pair, AgentSession};
 pub use boxdrive::{box_connect, BoxSession};
 pub use dropbox::{dropbox_connect, DropboxSession};
@@ -23,6 +24,7 @@ pub use object::{object_connect, ObjectSession};
 pub use onedrive::{onedrive_connect, OneDriveSession};
 pub use shopify::{shopify_connect, ShopifySession};
 pub use webdav::{webdav_connect, WebdavSession};
+pub use wordpress::{wordpress_connect, WordPressSession};
 
 use crate::known_hosts;
 use crate::profiles::{AuthMethod, ConnectionProfile};
@@ -1339,6 +1341,10 @@ pub async fn open_session(
             let dynm = dynamics_connect(profile).await?;
             Ok(Session::Dynamics(Arc::new(dynm)))
         }
+        "wordpress" => {
+            let wp = wordpress_connect(profile).await?;
+            Ok(Session::WordPress(Arc::new(wp)))
+        }
         other => Err(anyhow!("unsupported protocol: {other}")),
     }
 }
@@ -1697,6 +1703,7 @@ pub enum Session {
     Shopify(Arc<ShopifySession>),
     HubSpot(Arc<HubSpotSession>),
     Dynamics(Arc<DynamicsSession>),
+    WordPress(Arc<WordPressSession>),
     Agent(Arc<AgentSession>),
 }
 
@@ -1715,6 +1722,7 @@ impl Session {
             Self::Shopify(s) => &s.profile,
             Self::HubSpot(s) => &s.profile,
             Self::Dynamics(s) => &s.profile,
+            Self::WordPress(s) => &s.profile,
             Self::Agent(s) => &s.profile,
         }
     }
@@ -1733,6 +1741,7 @@ impl Session {
             Self::Shopify(_) => "shopify",
             Self::HubSpot(_) => "hubspot",
             Self::Dynamics(_) => "dynamics",
+            Self::WordPress(_) => "wordpress",
             Self::Agent(_) => "faro-agent",
         }
     }
@@ -1863,6 +1872,12 @@ impl SessionManager {
                 let id = dynm.id.clone();
                 (id, Session::Dynamics(Arc::new(dynm)))
             }
+            "wordpress" => {
+                let _ = app; // Credential loaded from the keychain; no prompt.
+                let wp = wordpress_connect(&profile).await?;
+                let id = wp.id.clone();
+                (id, Session::WordPress(Arc::new(wp)))
+            }
             "faro-agent" => {
                 let agent = AgentSession::connect(profile).await?;
                 let id = agent.id.clone();
@@ -1907,6 +1922,16 @@ impl SessionManager {
 
     /// Convenience accessor for a Faro Agent session (e.g. the bridge routing an
     /// exec to a paired daemon). None if the session is another protocol/missing.
+    pub async fn get_wordpress(&self, id: &str) -> Option<Arc<WordPressSession>> {
+        match self.sessions.lock().await.get(id) {
+            Some(s) => match &**s {
+                Session::WordPress(w) => Some(w.clone()),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
     pub async fn get_agent(&self, id: &str) -> Option<Arc<AgentSession>> {
         match self.sessions.lock().await.get(id) {
             Some(s) => match &**s {
@@ -1978,6 +2003,9 @@ impl SessionManager {
                 }
                 Session::Dynamics(_) => {
                     // Dynamics/Dataverse is stateless HTTP — nothing to close.
+                }
+                Session::WordPress(_) => {
+                    // WordPress REST is stateless HTTP — nothing to close.
                 }
                 Session::Agent(agent) => {
                     agent.disconnect().await;

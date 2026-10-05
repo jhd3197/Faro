@@ -12,6 +12,7 @@ import {
   Download,
 } from "lucide-react";
 import { ipc } from "@/lib/ipc";
+import { openExternal } from "@/lib/openExternal";
 import { toast } from "@/stores/toastStore";
 import { useSettings } from "@/stores/settingsStore";
 import { useUpdater } from "@/stores/updaterStore";
@@ -146,7 +147,7 @@ function UpdaterCard() {
             </button>
           )}
           <button
-            onClick={() => window.open(RELEASES_URL, "_blank", "noopener,noreferrer")}
+            onClick={() => openExternal(RELEASES_URL)}
             className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text"
           >
             Release notes

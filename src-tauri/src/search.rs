@@ -726,6 +726,7 @@ fn needs_content_optin(session: Option<&Session>) -> bool {
                 | Session::Shopify(_)
                 | Session::HubSpot(_)
                 | Session::Dynamics(_)
+                | Session::WordPress(_)
         )
     )
 }

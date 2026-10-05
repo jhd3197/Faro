@@ -103,6 +103,7 @@ impl RemoteFs for BoxFs {
             can_rename: true,
             has_directories: true,
             has_shell: false,
+            has_commands: false,
             change_signal: ChangeSignal::Etag,
         }
     }

@@ -19,11 +19,18 @@ import {
   SplitSquareVertical,
   Maximize2,
   X,
+  ZoomIn,
+  ZoomOut,
+  Search,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useTransfers } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
-import { useSettings, APP_THEMES } from "@/stores/settingsStore";
+import {
+  useSettings,
+  APP_THEMES,
+  stepUiZoom,
+} from "@/stores/settingsStore";
 import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import { useTerminals } from "@/stores/terminalsStore";
@@ -63,6 +70,8 @@ export function useCommands(): Command[] {
 
   const appTheme = useSettings((s) => s.appTheme);
   const setAppTheme = useSettings((s) => s.setAppTheme);
+  const uiZoom = useSettings((s) => s.uiZoom);
+  const setUiZoom = useSettings((s) => s.setUiZoom);
 
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const supportsTerminal = activeProfile?.protocol === "sftp";
@@ -170,6 +179,34 @@ export function useCommands(): Command[] {
       icon: <SunMoon size={14} />,
       combo: "mod+shift+t",
       run: () => setAppTheme(appTheme === "light" ? "dark" : "light"),
+    },
+    {
+      id: "zoom-in",
+      title: "Zoom In",
+      group: "View",
+      icon: <ZoomIn size={14} />,
+      combo: "mod+=",
+      keywords: "zoom scale bigger larger font size ui",
+      run: () => setUiZoom(stepUiZoom(uiZoom, 1)),
+    },
+    {
+      id: "zoom-out",
+      title: "Zoom Out",
+      group: "View",
+      icon: <ZoomOut size={14} />,
+      combo: "mod+-",
+      keywords: "zoom scale smaller font size ui",
+      run: () => setUiZoom(stepUiZoom(uiZoom, -1)),
+    },
+    {
+      id: "zoom-reset",
+      title: "Actual Size",
+      group: "View",
+      icon: <Search size={14} />,
+      combo: "mod+0",
+      keywords: "zoom reset 100% scale ui",
+      enabled: uiZoom !== 100,
+      run: () => setUiZoom(100),
     },
   ];
 

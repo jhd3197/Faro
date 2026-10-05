@@ -87,6 +87,9 @@ interface SettingsState {
   accentColor: string;
   /** UI language. "system" follows the OS locale (Chinese only when it's zh). */
   uiLanguage: UiLanguage;
+  /** Whole-UI zoom in percent (100 = actual size). Applied as native webview
+   *  zoom so text, icons and layout scale together on high-DPI screens. */
+  uiZoom: number;
 
   // Transfers
   overwritePolicy: OverwritePolicy;
@@ -149,6 +152,7 @@ interface SettingsState {
   setAppTheme: (t: AppTheme) => void;
   setAccentColor: (hex: string) => void;
   setUiLanguage: (lang: UiLanguage) => void;
+  setUiZoom: (pct: number) => void;
   setOverwritePolicy: (p: OverwritePolicy) => void;
   setPromptOnOverwrite: (v: boolean) => void;
   setAutoOpenTransferPanel: (v: boolean) => void;
@@ -178,6 +182,22 @@ interface SettingsState {
   setNotifications: (v: NotificationSettings) => void;
 }
 
+/** The UI zoom stops Zoom In / Zoom Out walk through (percent). */
+export const UI_ZOOM_STEPS = [80, 90, 100, 110, 125, 140, 150, 175, 200];
+const UI_ZOOM_MIN = UI_ZOOM_STEPS[0];
+const UI_ZOOM_MAX = UI_ZOOM_STEPS[UI_ZOOM_STEPS.length - 1];
+
+export function clampUiZoom(pct: number): number {
+  if (!Number.isFinite(pct)) return 100;
+  return Math.max(UI_ZOOM_MIN, Math.min(UI_ZOOM_MAX, Math.round(pct)));
+}
+
+/** The next zoom stop above (`dir` 1) or below (`dir` -1) `pct`. */
+export function stepUiZoom(pct: number, dir: 1 | -1): number {
+  if (dir > 0) return UI_ZOOM_STEPS.find((z) => z > pct) ?? UI_ZOOM_MAX;
+  return [...UI_ZOOM_STEPS].reverse().find((z) => z < pct) ?? UI_ZOOM_MIN;
+}
+
 const STORAGE_KEY = "faro.settings.v1";
 
 type Persisted = Omit<
@@ -185,6 +205,7 @@ type Persisted = Omit<
   | "setAppTheme"
   | "setAccentColor"
   | "setUiLanguage"
+  | "setUiZoom"
   | "setOverwritePolicy"
   | "setPromptOnOverwrite"
   | "setAutoOpenTransferPanel"
@@ -218,6 +239,7 @@ const DEFAULTS: Persisted = {
   appTheme: "dark",
   accentColor: "",
   uiLanguage: "system",
+  uiZoom: 100,
   overwritePolicy: "overwrite",
   promptOnOverwrite: true,
   autoOpenTransferPanel: true,
@@ -313,6 +335,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setAppTheme: (t) => mutate(set, get, "appTheme", t),
   setAccentColor: (hex) => mutate(set, get, "accentColor", hex),
   setUiLanguage: (lang) => mutate(set, get, "uiLanguage", lang),
+  setUiZoom: (pct) => mutate(set, get, "uiZoom", clampUiZoom(pct)),
   setOverwritePolicy: (p) => mutate(set, get, "overwritePolicy", p),
   setPromptOnOverwrite: (v) => mutate(set, get, "promptOnOverwrite", v),
   setAutoOpenTransferPanel: (v) =>

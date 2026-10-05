@@ -5,6 +5,7 @@ import { TerminalWindow } from "./components/TerminalWindow";
 import { useSettings } from "./stores/settingsStore";
 import { applyAccent } from "./lib/accent";
 import { applyUiLanguage, type UiLanguage } from "./lib/i18n";
+import { applyUiZoom } from "./lib/uiZoom";
 import { sweepStalePopoutBuffers } from "./lib/popout";
 import "./styles.css";
 
@@ -35,6 +36,9 @@ if (!document.documentElement.getAttribute("data-theme")) {
 // Apply any saved accent override on top of the theme's own accent. (Accent
 // isn't part of the pre-paint injection; the store seeds it synchronously.)
 applyAccent(useSettings.getState().accentColor || null);
+// UI zoom: idempotent for the main window (Rust already applied it pre-paint),
+// required for popouts, which get no injection.
+applyUiZoom(useSettings.getState().uiZoom);
 
 // Keep the html data-theme in sync with the setting store. On an actual theme
 // change, add `.theming` so the (otherwise dormant) crossfade transition runs,
@@ -42,6 +46,7 @@ applyAccent(useSettings.getState().accentColor || null);
 let prevTheme = useSettings.getState().appTheme;
 let prevAccent = useSettings.getState().accentColor;
 let prevLanguage = useSettings.getState().uiLanguage;
+let prevZoom = useSettings.getState().uiZoom;
 let themingTimer: ReturnType<typeof setTimeout> | undefined;
 useSettings.subscribe((s) => {
   if (s.accentColor !== prevAccent) {
@@ -51,6 +56,10 @@ useSettings.subscribe((s) => {
   if (s.uiLanguage !== prevLanguage) {
     prevLanguage = s.uiLanguage;
     if (!pinnedLocale) applyUiLanguage(s.uiLanguage);
+  }
+  if (s.uiZoom !== prevZoom) {
+    prevZoom = s.uiZoom;
+    applyUiZoom(s.uiZoom);
   }
   if (s.appTheme === prevTheme) return;
   prevTheme = s.appTheme;

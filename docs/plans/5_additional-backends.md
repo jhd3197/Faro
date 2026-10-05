@@ -176,6 +176,18 @@ a push/delta signal so folder-sync skips polling — a follow-up (needs a new
 **Chunked upload** is only implemented for OneDrive; Dropbox refuses >150 MB and
 GDrive/Box buffer the file for multipart — a follow-up for very large files.
 
+### Phase 8 — WordPress (REST API as a filesystem) — ✅ shipped (Plan 25)
+Shipped per **`docs/plans/25_wordpress-backend.md`**, same recipe: an
+Application Password (Basic auth, keychain as `wordpress:{profile_id}`, no
+OAuth) over the site's REST API. `session/wordpress.rs` (discovery with a
+`?rest_route=` fallback, admin check, shared throttle) + `remotefs/wordpress.rs`
+(`media/` = the media library; `rest/` = every namespace, collection routes as
+directories of `{id}.json`, singles as `{name}.json`; save = PUT with a
+stale-save check, core routes get only the edited fields). Adds
+`Capabilities.has_commands`, `faro-cli wp`, `fetch -X/-d/-H`, and the
+`faro_wp_rest` bridge tool. Verified live against WordPress in Docker
+(`src-tauri/tests/wordpress/setup.sh`) and in the real app.
+
 ### Considered and passed (for now)
 - **Mega** — client-side crypto protocol, no sane Rust path.
 - **Proton Drive / iCloud Drive** — no official public API.

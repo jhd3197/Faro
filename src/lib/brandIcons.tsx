@@ -33,6 +33,7 @@ const PROTOCOL_ICON: Record<Protocol, string> = {
   shopify: "simple-icons:shopify",
   hubspot: "simple-icons:hubspot",
   dynamics: "simple-icons:dynamics365",
+  wordpress: "simple-icons:wordpress",
   "faro-agent": "mdi:lighthouse-on",
 };
 

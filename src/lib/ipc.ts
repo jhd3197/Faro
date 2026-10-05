@@ -135,6 +135,13 @@ export const ipc = {
   dynamicsAuthorize: (profileId: string, host: string) =>
     invoke<{ accountLabel: string }>("dynamics_authorize", { profileId, host }),
 
+  /** Open the site's "Authorize Application" page in the browser with Faro's
+   *  name filled in; WordPress shows the new Application Password there for
+   *  the user to paste. Resolves to the normalized site address and the link
+   *  (a fallback if no browser opened). */
+  wordpressAuthorize: (site: string) =>
+    invoke<{ site: string; authorizeUrl: string }>("wordpress_authorize", { site }),
+
   // ---- Remote control: host THIS machine as a Faro Agent (Settings) ----
 
   /** Current state of the in-app agent host (enabled, running, policy, peers,
@@ -413,6 +420,10 @@ export const ipc = {
   /** Whether a credential exists for `purpose` (for the Set/••••/Clear UI). */
   apiKeyStatus: (purpose: string) =>
     invoke<boolean>("api_key_status", { purpose }),
+
+  /** Open an http(s) link in the system browser (`window.open` can't). */
+  openExternalUrl: (url: string) =>
+    invoke<void>("open_external_url", { url }),
 
   // ---- Settings (Plan 12 Phase 2): faro.db is the source of truth ----
   /** Every setting as `key -> raw JSON value`. */

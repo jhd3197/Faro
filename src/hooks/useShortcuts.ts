@@ -33,7 +33,11 @@ export function useShortcuts() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const combo = keyCombo(e);
+      let combo = keyCombo(e);
+      // Zoom In is bound to "mod+=", but the same physical key reports "+"
+      // when shifted (and the numpad's plus always does) — treat them alike,
+      // as browsers do.
+      if (combo === "mod++" || combo === "mod+shift++") combo = "mod+=";
       const hasMod = e.ctrlKey || e.metaKey;
       // The palette toggle is a fixed binding (not a registry command).
       if (combo === "mod+k") {

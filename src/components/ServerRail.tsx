@@ -50,7 +50,7 @@ type RowState = "focused" | "connected" | "connecting" | "error" | "idle";
 
 // Servers sort by protocol (SFTP first — the primary use), then by name, so the
 // rail order stays learnable as connections come and go.
-const GROUP_ORDER: Protocol[] = ["sftp", "ftps", "ftp", "s3", "azure", "gcs", "webdav", "http", "dropbox", "onedrive", "gdrive", "box", "shopify", "hubspot", "dynamics", "faro-agent"];
+const GROUP_ORDER: Protocol[] = ["sftp", "ftps", "ftp", "s3", "azure", "gcs", "webdav", "http", "dropbox", "onedrive", "gdrive", "box", "shopify", "hubspot", "dynamics", "wordpress", "faro-agent"];
 
 const fallbackColor = "rgb(var(--accent))";
 
@@ -66,6 +66,10 @@ function profileAddress(p: ConnectionProfile): string {
   if (p.protocol === "shopify") return p.host;
   if (p.protocol === "hubspot") return p.host;
   if (p.protocol === "dynamics") return p.host;
+  if (p.protocol === "wordpress") {
+    const site = (p.endpoint ?? p.host).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    return p.username ? `${p.username}@${site}` : site;
+  }
   const port =
     p.port !== PROTOCOL_DEFAULT_PORT[p.protocol] ? `:${p.port}` : "";
   // A Faro Agent connection controls a machine, not a login — no username.

@@ -1073,6 +1073,7 @@ async fn route(app: &AppHandle, state: &Arc<BridgeState>, req: &Request) -> (u16
         ("POST", "/jobs") => handle_jobs(app, state, &req.body).await,
         ("POST", "/write") => handle_write(app, state, &req.body).await,
         ("POST", "/list") => handle_list(app, state, &req.body).await,
+        ("POST", "/wp_rest") => handle_wp_rest(app, state, &req.body).await,
         ("POST", "/read") => handle_read(app, state, &req.body).await,
         ("POST", "/download") => handle_download(app, state, &req.body).await,
         ("POST", "/delete") => handle_delete(app, state, &req.body).await,
@@ -1340,6 +1341,20 @@ async fn handle_list(app: &AppHandle, state: &Arc<BridgeState>, body: &[u8]) -> 
     op_list_dir(app, state, &session_id, &path).await
 }
 
+async fn handle_wp_rest(app: &AppHandle, state: &Arc<BridgeState>, body: &[u8]) -> (u16, Value) {
+    let parsed = match parse_body(body) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let session_id = body_str(&parsed, "sessionId");
+    let method = body_str(&parsed, "method");
+    let route = body_str(&parsed, "route");
+    if session_id.is_empty() || route.is_empty() {
+        return (400, json!({"error": "sessionId and route are required"}));
+    }
+    op_wp_rest(app, state, &session_id, &method, &route, parsed.get("body")).await
+}
+
 async fn handle_read(app: &AppHandle, state: &Arc<BridgeState>, body: &[u8]) -> (u16, Value) {
     let parsed = match parse_body(body) {
         Ok(v) => v,
@@ -1590,7 +1605,7 @@ pub(crate) async fn exec_on(
     } else {
         return (
             400,
-            json!({"error": "the requested connection can't run commands. Exec works on SSH/SFTP and Faro Agent connections; use list_dir/read/download/upload for other protocols."}),
+            json!({"error": "the requested connection can't run commands. Exec works on SSH/SFTP and Faro Agent connections; use list_dir/read/download/upload for other protocols, and faro_wp_rest for WordPress connections."}),
         );
     };
 
@@ -2350,6 +2365,86 @@ async fn exec_core(
                 )
                 .await;
             (500, json!({"error": e.to_string()}))
+        }
+    }
+}
+
+/// Call a REST route on a WordPress connection (Plan 25). GET/HEAD are
+/// reads (auto-approved when "auto-approve reads" is on); every other method
+/// changes the live site and always asks the user, showing the route and a
+/// preview of the body. `body` may be a JSON value or a string.
+pub(crate) async fn op_wp_rest(
+    app: &AppHandle,
+    state: &Arc<BridgeState>,
+    session_id: &str,
+    method: &str,
+    route: &str,
+    body: Option<&Value>,
+) -> (u16, Value) {
+    let manager = app.state::<AppState>().sessions.clone();
+    let Some(wp) = manager.get_wordpress(session_id).await else {
+        return (400, json!({"error": "that connection isn't a WordPress connection. wp_rest works on WordPress connections only; use faro_list_sessions to find one."}));
+    };
+    let method = match method.to_ascii_uppercase().as_str() {
+        "" | "GET" => reqwest::Method::GET,
+        "HEAD" => reqwest::Method::HEAD,
+        "POST" => reqwest::Method::POST,
+        "PUT" => reqwest::Method::PUT,
+        "PATCH" => reqwest::Method::PATCH,
+        "DELETE" => reqwest::Method::DELETE,
+        other => return (400, json!({"error": format!("unsupported method {other}")})),
+    };
+    let route = if route.starts_with('/') { route.to_string() } else { format!("/{route}") };
+    let body_bytes = match body {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.as_bytes().to_vec()),
+        Some(v) => Some(serde_json::to_vec(v).unwrap_or_default()),
+    };
+    let read = matches!(method, reqwest::Method::GET | reqwest::Method::HEAD);
+    let mut summary = format!("{method} {route}");
+    if let Some(b) = &body_bytes {
+        let preview: String = String::from_utf8_lossy(b).chars().take(400).collect();
+        let more = if b.len() > 400 { " …" } else { "" };
+        summary.push_str(&format!("\n{preview}{more}"));
+    }
+    let name = wp.profile.name.clone();
+    if let Err(resp) = gate(
+        app,
+        state,
+        session_id,
+        &name,
+        if read { OpClass::Read } else { OpClass::Write },
+        if read { "read" } else { "write" },
+        &summary,
+        None,
+    )
+    .await
+    {
+        return resp;
+    }
+    match wp.rest(method.clone(), &route, body_bytes).await {
+        Ok(resp) => {
+            let ok = (200..300).contains(&resp.status);
+            state
+                .log(
+                    app,
+                    activity(
+                        if read { "read" } else { "write" },
+                        session_id,
+                        format!("{method} {route} → HTTP {}", resp.status),
+                        ok,
+                    ),
+                )
+                .await;
+            let body = serde_json::from_str::<Value>(&resp.body)
+                .unwrap_or(Value::String(resp.body));
+            (200, json!({ "status": resp.status, "body": body }))
+        }
+        Err(e) => {
+            state
+                .log(app, activity("error", session_id, format!("{method} {route}: {e}"), false))
+                .await;
+            (502, json!({ "error": format!("{e:#}") }))
         }
     }
 }
@@ -5119,6 +5214,21 @@ async fn mcp_tools_list(state: &Arc<BridgeState>) -> Value {
                 }
             },
             {
+                "name": "faro_wp_rest",
+                "description": "Call the WordPress REST API of a WordPress connection in Faro (an Application Password the user saved — you never see it). Reaches core routes (/wp/v2/posts, /wp/v2/settings, /wp/v2/plugins) and any plugin that registers routes, e.g. Gravity Forms (/gf/v2/forms/1, /gf/v2/feeds?addon=gravityformshubspot) or WooCommerce (/wc/v3/products). GET/HEAD are reads; POST/PUT/PATCH/DELETE change the live site and the user approves each one in Faro. To edit a resource: GET it, change the fields, PUT the whole object back. Returns {status, body}. Use faro_list_dir on rest/ of the connection to discover namespaces and routes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "method": { "type": "string", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], "description": "HTTP method. Default GET." },
+                        "route": { "type": "string", "description": "Route under /wp-json, e.g. /gf/v2/forms/1 or /wp/v2/posts?per_page=5." },
+                        "body": { "description": "Request body for POST/PUT/PATCH: a JSON object/array (sent as application/json) or a string." },
+                        "session": session_prop
+                    },
+                    "required": ["route"],
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "faro_list_dir",
                 "description": "List a directory on a server the user has open in Faro (their own machine; SFTP, FTP or S3). Returns entries with name, path, kind, size and modified time.",
                 "inputSchema": {
@@ -5682,6 +5792,16 @@ async fn mcp_tools_call(app: &AppHandle, state: &Arc<BridgeState>, params: &Valu
             Ok(id) => mcp_wrap(op_server_info(app, state, &id).await),
             Err(msg) => tool_error(&msg),
         },
+        "faro_wp_rest" => {
+            let Some(route) = arg_str(&args, "route") else {
+                return tool_error("`route` is required");
+            };
+            let method = arg_str(&args, "method").unwrap_or_else(|| "GET".to_string());
+            match resolve_session(app, state, session_arg, SessionNeed::Any).await {
+                Ok(id) => mcp_wrap(op_wp_rest(app, state, &id, &method, &route, args.get("body")).await),
+                Err(msg) => tool_error(&msg),
+            }
+        }
         "faro_list_dir" => {
             let path = arg_str(&args, "path").unwrap_or_else(|| ".".to_string());
             match resolve_session(app, state, session_arg, SessionNeed::Any).await {

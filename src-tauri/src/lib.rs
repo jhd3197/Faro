@@ -1,3 +1,6 @@
+// The MCP tool list in bridge.rs is one large `json!` literal.
+#![recursion_limit = "256"]
+
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -106,6 +109,17 @@ fn build_settings_init_script(db: &db::Db) -> String {
     )
 }
 
+/// The saved UI zoom as a webview scale factor (`uiZoom` is stored in percent),
+/// or `None` when unset / at actual size. Clamped to the frontend's 80–200%.
+fn saved_ui_zoom(db: &db::Db) -> Option<f64> {
+    let raw = db.settings_get_all().ok()?.remove("uiZoom")?;
+    let pct = serde_json::from_str::<f64>(&raw).ok()?;
+    if !pct.is_finite() || (pct - 100.0).abs() < f64::EPSILON {
+        return None;
+    }
+    Some(pct.clamp(80.0, 200.0) / 100.0)
+}
+
 #[cfg(test)]
 mod init_script_tests {
     use super::*;
@@ -120,6 +134,18 @@ mod init_script_tests {
         assert!(script.contains("setAttribute('data-theme'"));
         assert!(script.contains("\"appTheme\":\"nord\""));
         assert!(script.contains("\"terminalFontSize\":15"));
+    }
+
+    #[test]
+    fn reads_saved_ui_zoom() {
+        let db = db::Db::open_in_memory().unwrap();
+        assert_eq!(saved_ui_zoom(&db), None);
+        db.settings_set("uiZoom", "100").unwrap();
+        assert_eq!(saved_ui_zoom(&db), None);
+        db.settings_set("uiZoom", "125").unwrap();
+        assert_eq!(saved_ui_zoom(&db), Some(1.25));
+        db.settings_set("uiZoom", "900").unwrap();
+        assert_eq!(saved_ui_zoom(&db), Some(2.0));
     }
 
     #[test]
@@ -211,7 +237,7 @@ pub fn run() {
             // itself synchronously instead of an async round-trip.
             {
                 let init_script = build_settings_init_script(&db);
-                tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                let main = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
                     .title("Faro")
                     .inner_size(1280.0, 800.0)
                     .min_inner_size(900.0, 600.0)
@@ -221,6 +247,11 @@ pub fn run() {
                     .initialization_script(&init_script)
                     .build()
                     .expect("failed to create main window");
+                // Settings → Appearance → UI zoom, applied before the frontend
+                // loads so a zoomed UI doesn't paint at 100% first.
+                if let Some(scale) = saved_ui_zoom(&db) {
+                    let _ = main.set_zoom(scale);
+                }
             }
 
             let state = AppState {
@@ -479,6 +510,8 @@ pub fn run() {
             commands::api_key_status,
             commands::settings_get_all,
             commands::settings_set,
+            commands::open_external_url,
+            commands::wordpress_authorize,
             commands::settings_delete,
             commands::settings_set_all,
             grant::fetch_grant_manifest,

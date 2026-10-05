@@ -123,6 +123,7 @@ impl RemoteFs for DropboxFs {
             can_rename: true,
             has_directories: true,
             has_shell: false,
+            has_commands: false,
             // Dropbox's per-file `rev` changes on every edit — a reliable token.
             change_signal: ChangeSignal::Etag,
         }
