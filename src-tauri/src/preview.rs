@@ -298,6 +298,11 @@ pub(crate) async fn read_head(session: Option<&Session>, path: &str, max: u64) -
             let data = crate::remotefs::dynamics::read_file(dynm, path).await?;
             Ok(data.into_iter().take(max as usize).collect())
         }
+        Some(Session::WordPress(wp)) => {
+            // Media comes from its public URL; REST resources whole.
+            let data = crate::remotefs::wordpress::read_file(wp, path).await?;
+            Ok(data.into_iter().take(max as usize).collect())
+        }
         // The consumer-cloud four stream the whole body (their download
         // endpoints ignore Range), so `collect_capped` stops reading and drops
         // the rest once it has `max` bytes.

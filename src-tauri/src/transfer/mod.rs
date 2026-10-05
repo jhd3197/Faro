@@ -1,6 +1,6 @@
 use crate::session::{
     BoxSession, DropboxSession, DynamicsSession, FtpSession, GDriveSession, HttpSession,
-    HubSpotSession, ObjectSession, OneDriveSession, Session, ShopifySession, SshSession,
+    HubSpotSession, ObjectSession, WordPressSession, OneDriveSession, Session, ShopifySession, SshSession,
     WebdavSession,
 };
 use anyhow::{Context, Result};
@@ -3062,6 +3062,28 @@ impl TransferManager {
         Ok(size)
     }
 
+    /// Upload to WordPress: a media library file (WordPress picks the
+    /// year/month folder) or a REST resource saved back as JSON.
+    async fn run_wordpress_upload(
+        &self,
+        id: &str,
+        session: Arc<WordPressSession>,
+        local_path: &Path,
+        remote_path: &str,
+    ) -> Result<u64> {
+        self.update(id, |t| t.status = TransferStatus::Transferring)
+            .await;
+
+        let data = tokio::fs::read(local_path)
+            .await
+            .with_context(|| format!("read {}", local_path.display()))?;
+        let size = data.len() as u64;
+        self.checkpoint(id, size).await?;
+        crate::remotefs::wordpress::write_file(&session, remote_path, &data).await?;
+        self.update(id, |t| t.transferred = size).await;
+        Ok(size)
+    }
+
     /// Upload to OneDrive: a single `PUT …/content` for small files, or a
     /// chunked upload session for larger ones (Graph caps simple PUT at 4 MB).
     async fn run_onedrive_upload(
@@ -3411,6 +3433,7 @@ fn fs_for_session(session: &Arc<Session>) -> Box<dyn crate::remotefs::RemoteFs> 
         Session::Shopify(sh) => Box::new(crate::remotefs::shopify::ShopifyFs::new(sh.clone())),
         Session::HubSpot(hs) => Box::new(crate::remotefs::hubspot::HubSpotFs::new(hs.clone())),
         Session::Dynamics(dynm) => Box::new(crate::remotefs::dynamics::DynamicsFs::new(dynm.clone())),
+        Session::WordPress(wp) => Box::new(crate::remotefs::wordpress::WordPressFs::new(wp.clone())),
         Session::Agent(agent) => Box::new(crate::remotefs::agent::AgentFs::new(agent.clone())),
     }
 }
@@ -3508,6 +3531,7 @@ pub(crate) async fn remote_size(session: &Arc<Session>, path: &str) -> Result<u6
         Session::Shopify(sh) => Ok(crate::remotefs::shopify::asset_size(sh, path).await),
         Session::HubSpot(hs) => Ok(crate::remotefs::hubspot::file_size(hs, path).await),
         Session::Dynamics(dynm) => Ok(crate::remotefs::dynamics::file_size(dynm, path).await),
+        Session::WordPress(wp) => Ok(crate::remotefs::wordpress::file_size(wp, path).await),
         Session::Agent(agent) => Ok(agent_stat(agent, path).await.0),
     }
 }
@@ -3744,6 +3768,25 @@ async fn remote_resolve(
                 }
             })
         }
+        Session::WordPress(wp) => {
+            let exists = crate::remotefs::wordpress::file_exists(wp, initial_remote).await;
+            Ok(match policy {
+                OverwritePolicy::Overwrite => (initial_remote.to_string(), false),
+                OverwritePolicy::Skip => (initial_remote.to_string(), exists),
+                OverwritePolicy::Rename if !exists => (initial_remote.to_string(), false),
+                OverwritePolicy::Rename => {
+                    let mut candidate = initial_remote.to_string();
+                    for i in 1..=999 {
+                        let (stem, ext) = split_ext(initial_remote);
+                        candidate = format!("{stem}_{i}{ext}");
+                        if !crate::remotefs::wordpress::file_exists(wp, &candidate).await {
+                            break;
+                        }
+                    }
+                    (candidate, false)
+                }
+            })
+        }
         Session::Agent(agent) => {
             let (_, exists) = agent_stat(agent, initial_remote).await;
             Ok(match policy {
@@ -3916,6 +3959,10 @@ async fn upload_by_backend(
         }
         Session::Dynamics(dynm) => {
             mgr.run_dynamics_upload(id, dynm.clone(), local, final_remote)
+                .await
+        }
+        Session::WordPress(wp) => {
+            mgr.run_wordpress_upload(id, wp.clone(), local, final_remote)
                 .await
         }
         Session::Agent(agent) => {

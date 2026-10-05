@@ -117,6 +117,7 @@ impl RemoteFs for AgentFs {
             can_rename: true,
             has_directories: true,
             has_shell: false,
+            has_commands: false,
             // A Faro daemon fronts a POSIX-ish filesystem (Android's emulated
             // storage included) — mtime+size is the reliable change hint.
             change_signal: ChangeSignal::MtimeSize,

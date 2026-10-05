@@ -135,6 +135,13 @@ export const ipc = {
   dynamicsAuthorize: (profileId: string, host: string) =>
     invoke<{ accountLabel: string }>("dynamics_authorize", { profileId, host }),
 
+  /** Open the site's "Authorize Application" page in the browser with Faro's
+   *  name filled in; WordPress shows the new Application Password there for
+   *  the user to paste. Resolves to the normalized site address and the link
+   *  (a fallback if no browser opened). */
+  wordpressAuthorize: (site: string) =>
+    invoke<{ site: string; authorizeUrl: string }>("wordpress_authorize", { site }),
+
   // ---- Remote control: host THIS machine as a Faro Agent (Settings) ----
 
   /** Current state of the in-app agent host (enabled, running, policy, peers,

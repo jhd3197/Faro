@@ -25,6 +25,9 @@ export interface Capabilities {
    *  terminal here". Optional so older adapters that omit it just don't get
    *  those actions. */
   hasShell?: boolean;
+  /** Backend runs typed, non-shell commands (WordPress REST). Optional;
+   *  absent means no. */
+  hasCommands?: boolean;
   /** How this backend reports change — drives the sync index's staleness check.
    *  Optional so older adapters that omit it default to mtime+size behaviour. */
   changeSignal?: "mtimeSize" | "etag" | "hash";

@@ -489,6 +489,12 @@ async fn download_to(
             file.write_all(&data).await?;
             file.flush().await?;
         }
+        Session::WordPress(wp) => {
+            let data = crate::remotefs::wordpress::read_file(wp, remote_path).await?;
+            let mut file = tokio::fs::File::create(local_path).await?;
+            file.write_all(&data).await?;
+            file.flush().await?;
+        }
         Session::Agent(agent) => {
             use base64::Engine as _;
             use faro_agent_proto::msg::{Request, Response};
@@ -716,6 +722,12 @@ pub(crate) async fn upload_from(
             // Create or update by name lookup, then publish — save = deployed.
             let data = tokio::fs::read(&local).await?;
             crate::remotefs::dynamics::write_file(dynm, remote_path, &data).await?;
+        }
+        Session::WordPress(wp) => {
+            // A REST resource is PUT back (refused if it changed since it was
+            // opened); a media file can only be added, not replaced.
+            let data = tokio::fs::read(&local).await?;
+            crate::remotefs::wordpress::write_file(wp, remote_path, &data).await?;
         }
         Session::Agent(agent) => {
             use base64::Engine as _;

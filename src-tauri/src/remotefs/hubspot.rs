@@ -455,6 +455,7 @@ impl RemoteFs for HubSpotFs {
             can_rename: true,
             has_directories: true,
             has_shell: false,
+            has_commands: false,
             change_signal: ChangeSignal::MtimeSize,
         }
     }

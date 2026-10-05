@@ -64,6 +64,7 @@ export type Protocol =
   | "shopify"
   | "hubspot"
   | "dynamics"
+  | "wordpress"
   | "faro-agent";
 
 export interface ConnectionProfile {
@@ -128,6 +129,7 @@ export const PROTOCOL_DEFAULT_PORT: Record<Protocol, number> = {
   shopify: 443,
   hubspot: 443,
   dynamics: 443,
+  wordpress: 443,
   "faro-agent": 8722,
 };
 
@@ -147,6 +149,7 @@ export const PROTOCOL_LABEL: Record<Protocol, string> = {
   shopify: "Shopify",
   hubspot: "HubSpot",
   dynamics: "Dynamics 365",
+  wordpress: "WordPress",
   "faro-agent": "Faro Agent",
 };
 

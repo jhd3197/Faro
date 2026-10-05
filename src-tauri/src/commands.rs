@@ -1033,6 +1033,7 @@ pub fn fs_for_session(session: &Arc<Session>) -> Box<dyn RemoteFs> {
         Session::Shopify(sh) => Box::new(crate::remotefs::shopify::ShopifyFs::new(sh.clone())),
         Session::HubSpot(hs) => Box::new(crate::remotefs::hubspot::HubSpotFs::new(hs.clone())),
         Session::Dynamics(dynm) => Box::new(crate::remotefs::dynamics::DynamicsFs::new(dynm.clone())),
+        Session::WordPress(wp) => Box::new(crate::remotefs::wordpress::WordPressFs::new(wp.clone())),
         Session::Agent(agent) => Box::new(crate::remotefs::agent::AgentFs::new(agent.clone())),
     }
 }
@@ -1822,6 +1823,43 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
         return Err(format!("refusing to open a {} link", parsed.scheme()));
     }
     crate::proc::open_in_browser(parsed.as_str()).map_err(|e| e.to_string())
+}
+
+/// Faro's fixed app id for WordPress's "Authorize Application" page (it
+/// must be a UUID; WordPress uses it to group the passwords it issues).
+const WORDPRESS_APP_ID: &str = "8c4e4c26-3b8f-4f0e-9a6e-2f6d7f3c5a91";
+
+/// Open the site's "Authorize Application" page in the browser with Faro's
+/// name filled in. The admin approves there and WordPress shows the new
+/// Application Password on the page; they paste it into the editor.
+/// (WordPress can't hand it back by itself: its page drops redirect URLs
+/// that aren't http(s), and plain-http loopback is refused off local sites.)
+/// Returns the normalized site address and the link, shown as a fallback
+/// when no browser opens.
+#[tauri::command]
+pub async fn wordpress_authorize(site: String) -> Result<WordPressAuthorize, String> {
+    let (base, authorize) = crate::session::wordpress::authorize_endpoint(&site)
+        .await
+        .map_err(err)?;
+    let mut url = url::Url::parse(&authorize).map_err(|e| format!("bad authorize URL: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("the site's authorize page isn't http(s)".into());
+    }
+    url.query_pairs_mut()
+        .append_pair("app_name", "Faro")
+        .append_pair("app_id", WORDPRESS_APP_ID);
+    // A browser that fails to start isn't fatal — the editor shows the link.
+    if let Err(e) = crate::proc::open_in_browser(url.as_str()) {
+        tracing::warn!("wordpress authorize: couldn't open the browser: {e}");
+    }
+    Ok(WordPressAuthorize { site: base, authorize_url: url.to_string() })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WordPressAuthorize {
+    site: String,
+    authorize_url: String,
 }
 
 /// Upsert one setting. `value` is a raw JSON string (the frontend stringifies).

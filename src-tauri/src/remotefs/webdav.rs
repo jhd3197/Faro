@@ -119,6 +119,7 @@ impl RemoteFs for WebdavFs {
             can_rename: true,
             has_directories: true,
             has_shell: false,
+            has_commands: false,
             // ETag is the reliable change token; entries also carry mtime+size
             // for servers that omit getetag.
             change_signal: ChangeSignal::Etag,

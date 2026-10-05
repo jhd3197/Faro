@@ -154,6 +154,7 @@ impl RemoteFs for ObjectFs {
             can_rename: true,
             has_directories: false,
             has_shell: false,
+            has_commands: false,
             // Object stores expose an ETag per object — an opaque change token
             // (not necessarily an MD5 for multipart uploads). See ChangeSignal.
             change_signal: ChangeSignal::Etag,

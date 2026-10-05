@@ -154,6 +154,7 @@ impl RemoteFs for SftpFs {
             can_rename: true,
             has_directories: true,
             has_shell: true,
+            has_commands: false,
             change_signal: ChangeSignal::MtimeSize,
         }
     }

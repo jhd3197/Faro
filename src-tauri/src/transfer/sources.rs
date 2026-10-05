@@ -258,6 +258,15 @@ pub async fn source_for(
                 Box::pin(async move { crate::remotefs::dynamics::read_file(&dynm, &p).await })
             })
         }
+        Session::WordPress(wp) => {
+            let wp = wp.clone();
+            let p = path_s.clone();
+            one_shot(move || {
+                let wp = wp.clone();
+                let p = p.clone();
+                Box::pin(async move { crate::remotefs::wordpress::read_file(&wp, &p).await })
+            })
+        }
     })
 }
 
@@ -266,7 +275,7 @@ pub async fn source_for(
 pub fn size_is_advisory(session: &Session) -> bool {
     matches!(
         session,
-        Session::Shopify(_) | Session::HubSpot(_) | Session::Dynamics(_)
+        Session::Shopify(_) | Session::HubSpot(_) | Session::Dynamics(_) | Session::WordPress(_)
     )
 }
 

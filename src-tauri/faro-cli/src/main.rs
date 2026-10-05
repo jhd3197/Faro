@@ -231,18 +231,41 @@ enum Cmd {
         check: bool,
     },
 
-    /// Fetch a URL behind HTTP Basic Auth using a saved HTTP(S) profile's creds.
+    /// Fetch a URL behind HTTP Basic Auth using a saved profile's creds.
     ///
-    /// Reuses the stored username/password of a saved HTTP(S) connection (Plan 5
-    /// Phase 4's HttpFs) to GET an auth-walled page — e.g. a rendered page on a
-    /// staging site — and writes the body to stdout. The profile is matched by the
-    /// URL's host; pass --profile to choose explicitly. Never echoes credentials.
+    /// Reuses the stored login of a saved HTTP(S) or WordPress connection (an
+    /// Application Password is Basic Auth) to request an auth-walled URL — a
+    /// rendered page on a staging site, or a REST endpoint — and writes the
+    /// body to stdout. GET by default; `-X PUT -d @form.json` sends changes.
+    /// The profile is matched by the URL's host; pass --profile to choose
+    /// explicitly. Never echoes credentials.
     Fetch {
-        /// The URL to GET (http/https).
+        /// The URL to request (http/https).
         url: String,
-        /// Saved HTTP(S) profile to use (by name/id). Omit to match on the host.
+        /// Saved HTTP(S)/WordPress profile to use (by name/id). Omit to match on the host.
         #[arg(long)]
         profile: Option<String>,
+        /// HTTP method: GET, HEAD, POST, PUT, PATCH or DELETE.
+        #[arg(long, short = 'X', default_value = "GET")]
+        method: String,
+        /// Request body: `@file`, `-` for stdin, or the literal text. JSON
+        /// bodies are sent as application/json.
+        #[arg(long, short = 'd')]
+        data: Option<String>,
+        /// Extra header, `Name: value` (repeatable).
+        #[arg(long = "header", short = 'H')]
+        headers: Vec<String>,
+    },
+
+    /// WordPress helpers over the REST API of a saved WordPress connection.
+    ///
+    /// Uses the connection's Application Password. Reads print JSON; writes go
+    /// straight to the site — there is no undo, so `GET` first and keep a copy.
+    Wp {
+        /// Saved WordPress connection (name or id).
+        connection: String,
+        #[command(subcommand)]
+        action: WpCmd,
     },
 
     /// Export or restore an encrypted backup of profiles, secrets, and state.
@@ -663,7 +686,11 @@ async fn run(cli: Cli) -> Result<()> {
         // Self-update fetches a release asset from GitHub over HTTPS.
         Cmd::SelfUpdate { tag, check } => cmd_self_update(tag, check),
         // Authenticated GET through a saved HTTP profile's creds.
-        Cmd::Fetch { url, profile } => cmd_fetch(&store, &url, profile).await,
+        Cmd::Fetch { url, profile, method, data, headers } => {
+            cmd_fetch(&store, &url, profile, &method, data.as_deref(), &headers).await
+        }
+        // WordPress REST helpers through a saved WordPress connection.
+        Cmd::Wp { connection, action } => cmd_wp(&store, &connection, action).await,
         // Encrypted backup / restore — sync, no bridge or session needed.
         Cmd::Backup { action } => cmd_backup(action),
     }
@@ -808,6 +835,9 @@ fn fs_for(session: &Session) -> Box<dyn RemoteFs> {
         Session::HubSpot(hs) => Box::new(faro_lib::remotefs::hubspot::HubSpotFs::new(hs.clone())),
         Session::Dynamics(dynm) => {
             Box::new(faro_lib::remotefs::dynamics::DynamicsFs::new(dynm.clone()))
+        }
+        Session::WordPress(wp) => {
+            Box::new(faro_lib::remotefs::wordpress::WordPressFs::new(wp.clone()))
         }
         Session::Agent(agent) => Box::new(faro_lib::remotefs::agent::AgentFs::new(agent.clone())),
     }
@@ -1539,18 +1569,29 @@ fn print_search_human(result: &faro_lib::search::SearchResult) {
 /// write the body to stdout. The profile is chosen explicitly (`--profile`) or
 /// matched to the URL's host. The Authorization header is applied by the session
 /// and never printed.
-async fn cmd_fetch(store: &ProfileStore, url_str: &str, profile_opt: Option<String>) -> Result<()> {
+async fn cmd_fetch(
+    store: &ProfileStore,
+    url_str: &str,
+    profile_opt: Option<String>,
+    method: &str,
+    data: Option<&str>,
+    headers: &[String],
+) -> Result<()> {
     let url = reqwest::Url::parse(url_str).with_context(|| format!("parse URL {url_str}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         bail!("fetch needs an http/https URL (got {})", url.scheme());
     }
     let host = url.host_str().ok_or_else(|| anyhow!("URL has no host"))?;
+    let method = parse_method(method)?;
+    let body = data.map(read_body).transpose()?;
+    let fetchable =
+        |p: &ConnectionProfile| matches!(p.protocol.as_str(), "http" | "https" | "wordpress");
 
     let profile = match profile_opt {
         Some(name) => {
             let p = find_profile(store, &name).await?;
-            if p.protocol != "http" && p.protocol != "https" {
-                bail!("`{}` is not an HTTP/HTTPS profile", p.name);
+            if !fetchable(&p) {
+                bail!("`{}` is not an HTTP/HTTPS or WordPress profile", p.name);
             }
             p
         }
@@ -1559,7 +1600,7 @@ async fn cmd_fetch(store: &ProfileStore, url_str: &str, profile_opt: Option<Stri
             let matches: Vec<ConnectionProfile> = profiles
                 .into_iter()
                 .filter(|p| {
-                    (p.protocol == "http" || p.protocol == "https")
+                    fetchable(p)
                         && profile_host(p).as_deref().map(|h| h.eq_ignore_ascii_case(host))
                             .unwrap_or(false)
                 })
@@ -1578,14 +1619,27 @@ async fn cmd_fetch(store: &ProfileStore, url_str: &str, profile_opt: Option<Stri
     };
 
     let session = open_session(&profile).await?;
-    let Session::Http(http) = session else {
-        bail!("`{}` is not an HTTP/HTTPS profile", profile.name);
+    let mut rb = match &session {
+        Session::Http(http) => http.request(method.clone(), url),
+        Session::WordPress(wp) => wp.request_url(method.clone(), url),
+        _ => bail!("`{}` is not an HTTP/HTTPS or WordPress profile", profile.name),
     };
-    let resp = http
-        .request(reqwest::Method::GET, url)
-        .send()
-        .await
-        .context("GET failed")?;
+    for h in headers {
+        let (k, v) = h
+            .split_once(':')
+            .ok_or_else(|| anyhow!("header `{h}` should look like `Name: value`"))?;
+        rb = rb.header(k.trim(), v.trim());
+    }
+    if let Some(b) = body {
+        let has_ct = headers
+            .iter()
+            .any(|h| h.to_ascii_lowercase().starts_with("content-type"));
+        if !has_ct && serde_json::from_slice::<serde_json::Value>(&b).is_ok() {
+            rb = rb.header("Content-Type", "application/json");
+        }
+        rb = rb.body(b);
+    }
+    let resp = rb.send().await.with_context(|| format!("{method} failed"))?;
     let status = resp.status();
     let body = resp.bytes().await.context("read response body")?;
     let mut so = io::stdout();
@@ -1601,6 +1655,11 @@ async fn cmd_fetch(store: &ProfileStore, url_str: &str, profile_opt: Option<Stri
 /// The host of an HTTP(S) profile's URL (stored in `endpoint`), for matching a
 /// `fetch` URL to a saved profile.
 fn profile_host(p: &ConnectionProfile) -> Option<String> {
+    if p.protocol == "wordpress" {
+        let site = faro_lib::session::wordpress::profile_site(p);
+        let base = faro_lib::session::wordpress::site_base(site).ok()?;
+        return reqwest::Url::parse(&base).ok()?.host_str().map(|h| h.to_string());
+    }
     let raw = p.endpoint.as_deref()?.trim();
     let with_scheme = if raw.contains("://") {
         raw.to_string()
@@ -1608,6 +1667,153 @@ fn profile_host(p: &ConnectionProfile) -> Option<String> {
         format!("https://{raw}")
     };
     reqwest::Url::parse(&with_scheme).ok()?.host_str().map(|h| h.to_string())
+}
+
+fn parse_method(m: &str) -> Result<reqwest::Method> {
+    match m.to_ascii_uppercase().as_str() {
+        "GET" => Ok(reqwest::Method::GET),
+        "HEAD" => Ok(reqwest::Method::HEAD),
+        "POST" => Ok(reqwest::Method::POST),
+        "PUT" => Ok(reqwest::Method::PUT),
+        "PATCH" => Ok(reqwest::Method::PATCH),
+        "DELETE" => Ok(reqwest::Method::DELETE),
+        other => bail!("unsupported method `{other}` (GET, HEAD, POST, PUT, PATCH, DELETE)"),
+    }
+}
+
+/// A request body from `@file`, `-` (stdin) or literal text.
+fn read_body(spec: &str) -> Result<Vec<u8>> {
+    if spec == "-" {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut io::stdin(), &mut buf).context("read stdin")?;
+        Ok(buf)
+    } else if let Some(path) = spec.strip_prefix('@') {
+        std::fs::read(path).with_context(|| format!("read {path}"))
+    } else {
+        Ok(spec.as_bytes().to_vec())
+    }
+}
+
+// ---- WordPress (Plan 25) ---------------------------------------------------
+
+#[derive(Subcommand)]
+enum WpCmd {
+    /// Call any REST route: `rest GET /gf/v2/forms/1`, `rest PUT /gf/v2/forms/1 -d @form.json`.
+    Rest {
+        /// GET, POST, PUT, PATCH or DELETE.
+        method: String,
+        /// Route under /wp-json, e.g. `wp/v2/posts?per_page=5`. The leading `/`
+        /// is optional (leave it off in Git Bash, which rewrites `/…` arguments).
+        route: String,
+        /// Request body: `@file`, `-` for stdin, or literal JSON.
+        #[arg(long, short = 'd')]
+        data: Option<String>,
+    },
+    /// List the site's REST routes ("what can I reach?"), optionally filtered.
+    Routes {
+        /// Only routes containing this text (e.g. `gf/v2`).
+        filter: Option<String>,
+    },
+    /// List plugins, or `plugins activate|deactivate <slug>`.
+    Plugins {
+        /// `activate` or `deactivate`.
+        action: Option<String>,
+        /// Plugin slug (`akismet`) or id (`akismet/akismet`).
+        plugin: Option<String>,
+    },
+    /// Site settings (`/wp/v2/settings`); pass a name to print one value.
+    Options { name: Option<String> },
+    /// Gravity Forms: list forms, or print one form (`forms 1`).
+    Forms { id: Option<String> },
+}
+
+/// A REST route as typed: the leading `/` is optional. A drive-prefixed route
+/// can only be Git Bash's MSYS path conversion (`/wp/v2` → `C:/Program
+/// Files/Git/wp/v2`), so say so instead of sending it.
+fn wp_route(route: &str) -> Result<String> {
+    if is_windows_drive_path(route) {
+        bail!(
+            "`{route}` looks like Git Bash rewrote the route (MSYS path conversion). Leave off \
+             the leading slash (`wp/v2/posts`), or re-run with `MSYS_NO_PATHCONV=1`."
+        );
+    }
+    Ok(format!("/{}", route.trim_start_matches('/')))
+}
+
+async fn cmd_wp(store: &ProfileStore, connection: &str, action: WpCmd) -> Result<()> {
+    let profile = find_profile(store, connection).await?;
+    if profile.protocol != "wordpress" {
+        bail!("`{}` is not a WordPress connection", profile.name);
+    }
+    let session = open_session(&profile).await?;
+    let Session::WordPress(wp) = session else {
+        bail!("`{}` is not a WordPress connection", profile.name);
+    };
+    let print_json = |v: &serde_json::Value| {
+        println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+    };
+    match action {
+        WpCmd::Rest { method, route, data } => {
+            let method = parse_method(&method)?;
+            let route = wp_route(&route)?;
+            let body = data.as_deref().map(read_body).transpose()?;
+            let resp = wp.rest(method, &route, body).await?;
+            match serde_json::from_str::<serde_json::Value>(&resp.body) {
+                Ok(v) => print_json(&v),
+                Err(_) => println!("{}", resp.body),
+            }
+            if !(200..300).contains(&resp.status) {
+                eprintln!("{}", warn(&format!("HTTP {}", resp.status)));
+                std::process::exit(1);
+            }
+        }
+        WpCmd::Routes { filter } => {
+            for r in wp.routes() {
+                if filter.as_deref().is_some_and(|f| !r.route.contains(f)) {
+                    continue;
+                }
+                println!("{:<24} {}", r.methods.join(","), r.route);
+            }
+        }
+        WpCmd::Plugins { action, plugin } => match action.as_deref() {
+            None => {
+                for p in wp.core_plugins().await? {
+                    let s = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    println!("{:<10} {:<40} {}", s("status"), s("plugin"), s("version"));
+                }
+            }
+            Some(a @ ("activate" | "deactivate")) => {
+                let which = plugin.ok_or_else(|| anyhow!("which plugin? `plugins {a} <slug>`"))?;
+                let v = wp.core_plugin_set(&which, a == "activate").await?;
+                println!(
+                    "{} {}",
+                    v.get("plugin").and_then(|x| x.as_str()).unwrap_or(&which),
+                    v.get("status").and_then(|x| x.as_str()).unwrap_or("")
+                );
+            }
+            Some(other) => bail!("unknown plugins action `{other}` (activate, deactivate)"),
+        },
+        WpCmd::Options { name } => {
+            let v = wp.json(reqwest::Method::GET, "/wp/v2/settings", None).await?;
+            match name {
+                Some(n) => print_json(
+                    v.get(&n).ok_or_else(|| anyhow!("no setting `{n}` in /wp/v2/settings"))?,
+                ),
+                None => print_json(&v),
+            }
+        }
+        WpCmd::Forms { id } => {
+            if !wp.has_namespace("gf/v2") {
+                bail!("Gravity Forms' REST API (gf/v2) isn't available on this site");
+            }
+            let route = match id {
+                Some(id) => format!("/gf/v2/forms/{id}"),
+                None => "/gf/v2/forms".to_string(),
+            };
+            print_json(&wp.json(reqwest::Method::GET, &route, None).await?);
+        }
+    }
+    Ok(())
 }
 
 async fn cmd_profiles_list(store: &ProfileStore) -> Result<()> {
@@ -3014,7 +3220,8 @@ async fn upload_file(
         | Session::Box(_)
         | Session::Shopify(_)
         | Session::HubSpot(_)
-        | Session::Dynamics(_) => {
+        | Session::Dynamics(_)
+        | Session::WordPress(_) => {
             anyhow::bail!("uploads to this connection type are not yet supported in the CLI")
         }
         Session::Agent(_) => anyhow::bail!("faro-agent connections are not supported in the CLI"),
@@ -3148,7 +3355,8 @@ async fn download_file(session: &Session, remote_path: &str, local_dir: &str) ->
         | Session::Box(_)
         | Session::Shopify(_)
         | Session::HubSpot(_)
-        | Session::Dynamics(_) => {
+        | Session::Dynamics(_)
+        | Session::WordPress(_) => {
             anyhow::bail!("downloads from this connection type are not yet supported in the CLI")
         }
         Session::Agent(_) => anyhow::bail!("faro-agent connections are not supported in the CLI"),
@@ -3229,6 +3437,7 @@ fn fmt_bytes(n: u64) -> String {
 mod tests {
     use super::{
         asset_url, check_mangled_remote_path, is_windows_drive_path, parse_semver, swap_binary_at,
+        wp_route,
     };
 
     #[test]
@@ -3308,6 +3517,11 @@ mod tests {
 
     #[test]
     fn detects_windows_drive_paths() {
+        // WordPress routes: slash optional, MSYS rewrites refused.
+        assert_eq!(wp_route("wp/v2/posts").unwrap(), "/wp/v2/posts");
+        assert_eq!(wp_route("/gf/v2/forms/1").unwrap(), "/gf/v2/forms/1");
+        assert!(wp_route("C:/Program Files/Git/wp/v2/posts").is_err());
+
         // MSYS-mangled remote paths (Plan 10 Phase 3) — these trip the guard.
         assert!(is_windows_drive_path("C:/Program Files/Git/var/www"));
         assert!(is_windows_drive_path(r"C:\Users\me"));

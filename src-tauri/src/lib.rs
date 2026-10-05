@@ -1,3 +1,6 @@
+// The MCP tool list in bridge.rs is one large `json!` literal.
+#![recursion_limit = "256"]
+
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -508,6 +511,7 @@ pub fn run() {
             commands::settings_get_all,
             commands::settings_set,
             commands::open_external_url,
+            commands::wordpress_authorize,
             commands::settings_delete,
             commands::settings_set_all,
             grant::fetch_grant_manifest,

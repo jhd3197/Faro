@@ -15,6 +15,7 @@ pub mod onedrive;
 pub mod sftp;
 pub mod shopify;
 pub mod webdav;
+pub mod wordpress;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -69,6 +70,11 @@ pub struct Capabilities {
     /// Backend runs shell commands (gates server-side archive + "open terminal
     /// here"). True for SSH; false for local/FTP/object stores.
     pub has_shell: bool,
+    /// Backend runs typed, non-shell commands (gates the WordPress command
+    /// palette/console and the Agent Bridge `wp` tool). True only for
+    /// WordPress; SSH keeps `has_shell`.
+    #[serde(default)]
+    pub has_commands: bool,
     /// How this backend reports change — drives the sync index's staleness check.
     pub change_signal: ChangeSignal,
 }
