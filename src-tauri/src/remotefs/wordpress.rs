@@ -581,6 +581,11 @@ mod tests {
         let key = credential_key(&profile.id);
         crate::credentials::set_secret(&key, &pw).expect("seed secret");
         let session = Arc::new(wordpress_connect(&profile).await.expect("connect"));
+        // The fixture blocks /wp/v2/users like host hardening does; connect
+        // must not depend on it, and the label falls back to the username.
+        let blocked = session.rest(Method::GET, "/wp/v2/users/me", None).await.unwrap();
+        assert_eq!(blocked.status, 403, "fixture should block the users endpoint");
+        assert!(session.label.starts_with(&format!("{}@", profile.username)), "{}", session.label);
         let fs = WordPressFs::new(session.clone());
         let names = |v: Vec<DirEntry>| v.into_iter().map(|e| e.name).collect::<Vec<_>>();
 

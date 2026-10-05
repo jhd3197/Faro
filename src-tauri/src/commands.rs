@@ -156,6 +156,25 @@ pub async fn connect(
     Ok(session_id)
 }
 
+/// "Test connection" in the editor: connect with the profile as it stands in
+/// the form (not necessarily saved), then disconnect right away. Uses the
+/// normal connect path, so host-key and login prompts behave exactly as they
+/// will for real. Keychain-held secrets must already be set by the caller.
+#[tauri::command]
+pub async fn test_connection(
+    profile: ConnectionProfile,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), FaroError> {
+    let session_id = state
+        .sessions
+        .connect(profile, app)
+        .await
+        .map_err(FaroError::from)?;
+    let _ = state.sessions.disconnect(&session_id).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn disconnect(
     session_id: String,

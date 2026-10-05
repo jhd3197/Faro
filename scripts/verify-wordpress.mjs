@@ -119,14 +119,50 @@ try {
     check("editor shows the WordPress section", text.includes("Create an application password") && text.includes("Application password"), text.replace(/\s+/g, " ").slice(0, 160));
     check("no password generator on the application password", !text.includes("Generate strong password"));
 
-    // Fill the form like a person and Save.
+    // Fill the form like a person: a wrong password first, then Test.
     await page.type("[role=dialog] input[placeholder='my-prod-box']", "WP ui");
     await page.type("[role=dialog] input[placeholder='https://example.com']", `${WP_URL}/`);
     await page.type("[role=dialog] input[placeholder='admin']", WP_USER);
-    await page.type("[role=dialog] input[type=password]", WP_APP_PASSWORD);
-    const saveBtn = await page.$$("xpath/.//*[@role='dialog']//button[normalize-space(.)='Save']");
-    if (saveBtn.length) await saveBtn[0].click();
-    await sleep(800);
+    const pw = "[role=dialog] input[type=password]";
+    await page.type(pw, "wrong wrong wrong wrong wrong wrong");
+    const btn = async (label) =>
+      (await page.$$(`xpath/.//*[@role='dialog']//button[normalize-space(.)='${label}']`))[0];
+    const dialogText = () => page.evaluate(() => document.querySelector("[role=dialog]")?.innerText ?? "");
+    const waitFor = async (pred, ms = 15000) => {
+      for (let t = 0; t < ms; t += 250) {
+        const txt = await dialogText();
+        if (pred(txt)) return txt;
+        await sleep(250);
+      }
+      return await dialogText();
+    };
+    await (await btn("Test connection")).click();
+    let txt = await waitFor((t) => t.includes("Couldn't connect") || t.includes("Connection works"));
+    check("Test connection reports a bad password", txt.includes("Couldn't connect") && txt.includes("accept the login"), txt.replace(/\s+/g, " ").slice(-220));
+    check("the test error has a Copy button", !!(await btn("Copy")));
+    await page.screenshot({ path: path.join(OUT, "wp-test-failed.png") });
+
+    await page.click(pw, { clickCount: 3 });
+    await page.keyboard.press("Backspace");
+    await page.type(pw, WP_APP_PASSWORD);
+    await (await btn("Test connection")).click();
+    txt = await waitFor((t) => t.includes("Connection works"));
+    check("Test connection succeeds with the right password", txt.includes("Connection works"));
+    check("nothing was saved by testing", !(await invoke("list_profiles")).some((p) => p.name === "WP ui"));
+    const cas = await page.$("[role=dialog] input[type=checkbox]:not([disabled])");
+    check(
+      "Connect after saving is on by default",
+      await page.evaluate(() =>
+        [...document.querySelectorAll("[role=dialog] label")].some(
+          (l) => l.innerText.includes("Connect after saving") && l.querySelector("input")?.checked,
+        ),
+      ),
+    );
+    void cas;
+    await page.screenshot({ path: path.join(OUT, "wp-test-ok.png") });
+
+    await (await btn("Save")).click();
+    await sleep(3000);
     const saved = (await invoke("list_profiles")).find((p) => p.name === "WP ui");
     check(
       "Save stores the site URL, host and port",
@@ -135,13 +171,35 @@ try {
         saved.username === WP_USER && !saved.auth?.password,
       JSON.stringify(saved),
     );
+    const body = await page.evaluate(() => document.body.innerText);
+    check("Save connected right away", body.includes("Connected") && body.includes("WP ui"));
+    await page.screenshot({ path: path.join(OUT, "wp-saved-connected.png") });
     if (saved) {
       check("Save put the password in the keychain", await invoke("api_key_status", { purpose: `wordpress:${saved.id}` }));
-      const sid2 = await invoke("connect", { profileId: saved.id });
-      check("the UI-saved connection connects", typeof sid2 === "string");
-      await invoke("disconnect", { sessionId: sid2 }).catch(() => {});
       await invoke("delete_profile", { id: saved.id });
       await invoke("set_api_key", { purpose: `wordpress:${saved.id}`, value: "" });
+    }
+
+    // Notifications: every row expands to the full text and can be copied.
+    await page.evaluate(() => window.__TAURI_INTERNALS__ && null);
+    const bell = await page.$$("xpath/.//button[.//*[contains(@class,'lucide-bell')]]");
+    if (bell.length) {
+      await bell[bell.length - 1].click();
+      await sleep(400);
+      const row = await page.$("[role=button][aria-expanded]");
+      check("notification rows are clickable", !!row);
+      if (row) {
+        await row.click();
+        await sleep(200);
+        const expanded = await page.evaluate((el) => el.getAttribute("aria-expanded"), row);
+        check("clicking a notification expands it", expanded === "true");
+        const copyBtn = await row.$("button[aria-label='Copy the full text']");
+        check("an expanded notification has a Copy button", !!copyBtn);
+        await page.screenshot({ path: path.join(OUT, "wp-notifications.png") });
+      }
+      await page.keyboard.press("Escape");
+    } else {
+      check("found the notifications bell", false);
     }
     await page.keyboard.press("Escape");
   } else {

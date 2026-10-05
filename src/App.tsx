@@ -36,7 +36,8 @@ import {
   FolderSync,
 } from "lucide-react";
 import { useEditor } from "./stores/editorStore";
-import { useToasts, type ToastVariant } from "./stores/toastStore";
+import { useToasts, type Toast, type ToastVariant } from "./stores/toastStore";
+import { CopyTextButton, notificationText } from "./components/ui/CopyText";
 import { useBridge } from "./stores/bridgeStore";
 import { useSync } from "./stores/syncStore";
 import { useSettings } from "./stores/settingsStore";
@@ -406,23 +407,7 @@ function StatusBar({
             ) : (
               <div className="max-h-72 overflow-y-auto">
                 {history.slice(0, 50).map((n) => (
-                  <div
-                    key={n.id}
-                    className="flex items-start gap-2 border-b border-border-subtle px-3 py-2 last:border-0"
-                  >
-                    <NotifIcon variant={n.variant} />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[11px] font-medium">{n.title}</div>
-                      {n.message && (
-                        <div className="truncate text-[10px] text-text-dim">
-                          {n.message}
-                        </div>
-                      )}
-                    </div>
-                    <span className="shrink-0 text-[9px] text-text-dim">
-                      {relTime(n.createdAt)}
-                    </span>
-                  </div>
+                  <NotificationRow key={n.id} n={n} />
                 ))}
               </div>
             )}
@@ -687,6 +672,50 @@ function deepLinkToPrefill(dl: DeepLink): Partial<ConnectionProfile> {
       dl.endpoint ?? (protocol === "wordpress" ? (dl.host ?? undefined) : undefined),
     account: dl.account ?? undefined,
   };
+}
+
+/// One notification-center row. Click to expand the full text (selectable)
+/// with a Copy button; collapsed rows still offer Copy on the right.
+function NotificationRow({ n }: { n: Toast }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      onClick={() => setOpen((o) => !o)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpen((o) => !o);
+        }
+      }}
+      title={open ? undefined : "Show the full notification"}
+      className="flex cursor-pointer items-start gap-2 border-b border-border-subtle px-3 py-2 last:border-0 hover:bg-bg-hover"
+    >
+      <NotifIcon variant={n.variant} />
+      <div className="min-w-0 flex-1">
+        <div className={cn("text-[11px] font-medium", open && "select-text")}>{n.title}</div>
+        {n.message && (
+          <div
+            onClick={(e) => open && e.stopPropagation()}
+            className={cn(
+              "text-[10px] text-text-dim",
+              open
+                ? "mt-0.5 max-h-48 cursor-text select-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                : "truncate"
+            )}
+          >
+            {n.message}
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <span className="text-[9px] text-text-dim">{relTime(n.createdAt)}</span>
+        <CopyTextButton text={notificationText(n)} label={open} />
+      </div>
+    </div>
+  );
 }
 
 function NotifIcon({ variant }: { variant: ToastVariant }) {

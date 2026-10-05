@@ -97,6 +97,11 @@ export const ipc = {
   disconnect: (sessionId: SessionId) =>
     invoke<void>("disconnect", { sessionId }),
 
+  /** Connect with a profile as it stands in the editor (saved or not), then
+   *  disconnect. Keychain-held secrets must be set first. */
+  testConnection: (profile: ConnectionProfile) =>
+    invoke<void>("test_connection", { profile }),
+
   // ---- Faro Agent (Faro-to-Faro remote control) ----
 
   /** Browse the LAN for faro-agentd daemons over mDNS (best-effort). */
