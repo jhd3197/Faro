@@ -153,19 +153,39 @@ fn strip_tags(s: &str) -> String {
     out
 }
 
+/// The `<title>` of an HTML page, if the text is one.
+fn html_title(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    if !lower.trim_start().starts_with("<!doctype html") && !lower.trim_start().starts_with("<html") {
+        return None;
+    }
+    let start = lower.find("<title>")? + "<title>".len();
+    let end = start + lower[start..].find("</title>")?;
+    let title = text[start..end].trim();
+    Some(if title.is_empty() { "untitled page".into() } else { strip_tags(title) })
+}
+
 /// An HTTP failure, phrased for a person: the WP error code + message when
-/// the body has one, the raw status otherwise.
+/// the body has one; for an HTML page (a firewall, CDN or server rule in
+/// front of WordPress answered, not WordPress) its title; else the raw text.
 pub fn describe_failure(what: &str, status: StatusCode, text: &str) -> anyhow::Error {
-    match wp_error(text) {
-        Some((code, msg)) => anyhow!("{what}: {msg} ({code}, HTTP {})", status.as_u16()),
-        None => {
-            let snippet: String = text.trim().chars().take(200).collect();
-            if snippet.is_empty() {
-                anyhow!("{what}: HTTP {}", status.as_u16())
-            } else {
-                anyhow!("{what}: HTTP {} — {snippet}", status.as_u16())
-            }
-        }
+    if let Some((code, msg)) = wp_error(text) {
+        return anyhow!("{what}: {msg} ({code}, HTTP {})", status.as_u16());
+    }
+    if let Some(title) = html_title(text) {
+        return anyhow!(
+            "{what}: blocked before WordPress answered (HTTP {}, \"{title}\"). A firewall, \
+             CDN or server security rule in front of the site refused the request — check \
+             the host's panel (e.g. Plesk/cPanel security, ModSecurity, Cloudflare) or \
+             security plugins for a rule blocking the REST API.",
+            status.as_u16()
+        );
+    }
+    let snippet: String = text.trim().chars().take(200).collect();
+    if snippet.is_empty() {
+        anyhow!("{what}: HTTP {}", status.as_u16())
+    } else {
+        anyhow!("{what}: HTTP {} — {snippet}", status.as_u16())
     }
 }
 
@@ -849,10 +869,11 @@ pub async fn wordpress_connect(profile: &ConnectionProfile) -> Result<WordPressS
         read_originals: StdMutex::new(HashMap::new()),
     };
 
-    // Who are we, and are we an admin?
-    let resp = session
-        .send(Method::GET, "/wp/v2/users/me?context=edit", &[], None)
-        .await?;
+    // Are we an admin? `/wp/v2/settings` needs `manage_options`, so one GET
+    // proves both the login and the role. (Not `/wp/v2/users/me`: hosting
+    // panels and hardening plugins often block the users endpoints outright
+    // to stop user enumeration, which would fail the whole connect.)
+    let resp = session.send(Method::GET, "/wp/v2/settings", &[], None).await?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -867,7 +888,13 @@ pub async fn wordpress_connect(profile: &ConnectionProfile) -> Result<WordPressS
                  (Wordfence: Login Security → Settings → Disable application passwords) or a \
                  non-HTTPS site can do this. Turn them back on, then reconnect."
             ),
-            "rest_not_logged_in" => anyhow!(
+            // Logged in, but not allowed to manage options.
+            "rest_forbidden" | "rest_cannot_view" if status == StatusCode::FORBIDDEN => anyhow!(
+                "This WordPress user isn't an administrator. Faro needs an admin account \
+                 (manage_options)."
+            ),
+            // The route answered as if no one were logged in.
+            "rest_not_logged_in" | "rest_forbidden" | "rest_cannot_view" => anyhow!(
                 "WordPress didn't receive the login. The host may strip the Authorization \
                  header; on Apache, adding `SetEnvIf Authorization \"(.*)\" \
                  HTTP_AUTHORIZATION=$1` to .htaccess usually fixes it."
@@ -875,23 +902,21 @@ pub async fn wordpress_connect(profile: &ConnectionProfile) -> Result<WordPressS
             _ => describe_failure("WordPress login check", status, &text),
         });
     }
-    let me: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    let is_admin = me
-        .pointer("/capabilities/manage_options")
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false);
-    if !is_admin {
-        return Err(anyhow!(
-            "This WordPress user isn't an administrator. Faro needs an admin account \
-             (manage_options)."
-        ));
-    }
-    let login = me
-        .get("username")
-        .or_else(|| me.get("slug"))
-        .and_then(|u| u.as_str())
-        .unwrap_or("")
-        .to_string();
+
+    // The display name is a nicety: if the users endpoint is blocked, fall
+    // back to the profile's username.
+    let login = match session
+        .json(Method::GET, "/wp/v2/users/me?context=edit", None)
+        .await
+    {
+        Ok(me) => me
+            .get("username")
+            .or_else(|| me.get("slug"))
+            .and_then(|u| u.as_str())
+            .unwrap_or("")
+            .to_string(),
+        Err(_) => session.profile.username.trim().to_string(),
+    };
     let mut session = session;
     session.label = if login.is_empty() { host } else { format!("{login}@{host}") };
 
@@ -945,6 +970,16 @@ mod tests {
         });
         flatten_raw(&mut v);
         assert_eq!(v, serde_json::json!({"title": "Hi", "status": "publish"}));
+    }
+
+    #[test]
+    fn firewall_pages_are_summarized_not_dumped() {
+        let page = "<!DOCTYPE html>\n<html><head><title>403 Forbidden</title></head><body>nope</body></html>";
+        let msg = describe_failure("check", StatusCode::FORBIDDEN, page).to_string();
+        assert!(msg.contains("blocked before WordPress answered"), "{msg}");
+        assert!(msg.contains("403 Forbidden") && !msg.contains("<html"), "{msg}");
+        let wp = r#"{"code":"rest_forbidden","message":"Sorry","data":{"status":401}}"#;
+        assert!(describe_failure("check", StatusCode::UNAUTHORIZED, wp).to_string().contains("rest_forbidden"));
     }
 
     #[test]

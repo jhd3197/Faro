@@ -1,5 +1,17 @@
 <?php
 /* Plugin Name: Faro test items — a tiny REST CRUD collection for Faro's WordPress backend tests. */
+
+// Mimic host hardening that blocks the users endpoints to stop user
+// enumeration (seen on Plesk): a bare HTML 403 before WordPress answers.
+// Faro must still connect without them.
+$faro_uri = isset($_SERVER['REQUEST_URI']) ? urldecode($_SERVER['REQUEST_URI']) : '';
+if (strpos($faro_uri, '/wp/v2/users') !== false && strpos($faro_uri, 'application-passwords') === false) {
+    http_response_code(403);
+    header('Content-Type: text/html');
+    echo "<!DOCTYPE html>\n<html><head><title>403 Forbidden</title></head><body><h1>Forbidden</h1></body></html>";
+    exit;
+}
+
 add_action('rest_api_init', function () {
     $admin = function () { return current_user_can('manage_options'); };
     $all = function () { return get_option('faro_test_items', array('1' => array('id' => '1', 'title' => 'Contact', 'notifications' => array(array('to' => 'old@example.com'))))); };
