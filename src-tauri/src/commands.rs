@@ -1811,6 +1811,19 @@ pub async fn settings_get_all(
     state.db.settings_get_all().map_err(err)
 }
 
+/// Open a web link (About → GitHub, Help → Report an issue, release notes) in
+/// the system browser. The webview's `window.open` doesn't reach the OS
+/// browser under Tauri 2, so the frontend routes every external link here.
+/// Only http(s) — anything else could launch an arbitrary local handler.
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(&url).map_err(|e| format!("invalid URL: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("refusing to open a {} link", parsed.scheme()));
+    }
+    crate::proc::open_in_browser(parsed.as_str()).map_err(|e| e.to_string())
+}
+
 /// Upsert one setting. `value` is a raw JSON string (the frontend stringifies).
 #[tauri::command]
 pub async fn settings_set(

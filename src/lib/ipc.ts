@@ -414,6 +414,10 @@ export const ipc = {
   apiKeyStatus: (purpose: string) =>
     invoke<boolean>("api_key_status", { purpose }),
 
+  /** Open an http(s) link in the system browser (`window.open` can't). */
+  openExternalUrl: (url: string) =>
+    invoke<void>("open_external_url", { url }),
+
   // ---- Settings (Plan 12 Phase 2): faro.db is the source of truth ----
   /** Every setting as `key -> raw JSON value`. */
   settingsGetAll: () =>

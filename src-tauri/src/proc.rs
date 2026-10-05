@@ -30,3 +30,30 @@ impl NoConsoleWindow for tokio::process::Command {
         self
     }
 }
+
+/// Open `url` in the user's default browser (the OS URL handler).
+pub(crate) fn open_in_browser(url: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.no_console_window()
+        .spawn()
+        .context("open the system browser")?;
+    Ok(())
+}

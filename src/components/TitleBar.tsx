@@ -1,12 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-/// Tauri opens any `window.open(url)` call to an http(s) URL in the user's
-/// system browser by default — no plugin required. We funnel external links
-/// through this helper so the policy stays in one place.
-function openExternal(url: string) {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
 import {
   Sun,
   Moon,
@@ -36,6 +29,7 @@ import { useTransfers } from "@/stores/transfersStore";
 import { useResolvedCommands } from "@/lib/keybindings";
 import { formatCombo } from "@/lib/shortcuts";
 import { cn } from "@/lib/cn";
+import { openExternal } from "@/lib/openExternal";
 
 const APP_VERSION = "v1.3";
 const REPO_URL = "https://github.com/jhd3197/faro";
