@@ -5,6 +5,7 @@ import {
   type ToastVariant,
 } from "@/stores/toastStore";
 import { cn } from "@/lib/cn";
+import { CopyTextButton, notificationText } from "./CopyText";
 
 const ICON = {
   info: Info,
@@ -55,13 +56,14 @@ function ToastCard({
     >
       <Icon size={15} className={cn("mt-0.5 shrink-0", ACCENT[toast.variant])} />
       <div className="min-w-0 flex-1">
-        <div className="text-xs font-medium">{toast.title}</div>
+        <div className="select-text text-xs font-medium">{toast.title}</div>
         {toast.message && (
-          <div className="mt-0.5 break-words [overflow-wrap:anywhere] text-[11px] text-text-muted">
+          <div className="mt-0.5 max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] text-text-muted">
             {toast.message}
           </div>
         )}
       </div>
+      <CopyTextButton text={notificationText(toast)} />
       <button
         onClick={onDismiss}
         className="rounded p-0.5 text-text-dim hover:bg-bg-hover hover:text-text"
