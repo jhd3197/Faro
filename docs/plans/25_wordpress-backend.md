@@ -43,17 +43,43 @@ Scope honesty: this is not a shell. Commands are a fixed, typed set (no `exec`
 it inherits `max_execution_time`, `memory_limit` and `post_max_size`, and a WAF
 can get in the way. All declared up front via the handshake and `Capabilities`.
 
+**Hosts with SSH need none of this.** Where the host offers SSH (e.g. WP
+Engine's SSH Gateway: add a key in the User Portal, then an SSH profile for
+`{install}@{install}.ssh.wpengine.net`), a plain Faro SSH profile already
+gives real WP-CLI today. This plan is for every site without that.
+
+**Order: REST first, plugin second.** WordPress's REST API, with an
+Application Password, already reaches most of what a site exposes: core
+posts/pages/users/plugins/settings, plus any plugin that registers routes
+(Gravity Forms `gf/v2`, WooCommerce `wc/v3`, Yoast, ACF…). That needs no
+plugin and adds no attack surface, so it ships first (Phase 1). The connector
+plugin fills the gaps REST doesn't cover (files, caches, DB, plugin settings
+with no endpoint, Elementor data) and comes after.
+
+Worked example (the motivating task): change who a Gravity Forms notification
+goes to, and check the HubSpot feed, on an FTP-only site:
+
+```
+faro-cli wp <site> rest GET /gf/v2/forms/1 > form.json        # read notifications
+# edit notifications[].to in form.json
+faro-cli wp <site> rest PUT /gf/v2/forms/1 --data @form.json  # save (approval in Faro)
+faro-cli wp <site> rest GET "/gf/v2/feeds?addon=gravityformshubspot"
+```
+
+…or in the GUI: open `/rest/gf/v2/forms/1.json` on the connection, edit it in
+place, save — the save is the `PUT`.
+
 ---
 
 ## Two tiers
 
 | Tier | Needs | What Faro gets |
 |------|-------|----------------|
-| **Core** (no plugin) | Admin user + Application Password | Media library as files (`/media/…`), plugin/theme list, site health. Read-mostly. |
-| **Connector** (Faro Connector plugin) | Same, plus the plugin installed | Full `ABSPATH` filesystem + the command surface. The real product. |
+| **REST** (no plugin) | Admin user + Application Password | Any REST route on the site, core or plugin (`rest` passthrough + editable JSON resources), media library as files, plugin toggle. Ships first. |
+| **Connector** (Faro Connector plugin) | Same, plus the plugin installed | Full `ABSPATH` filesystem + the command surface + DB. Covers what REST can't. |
 
-Core tier exists so a connection is useful before the plugin is installed, and
-so the "install connector" step can happen *from inside Faro*.
+The REST tier is useful on its own (most edits, e.g. Gravity Forms, need
+nothing more) and lets the "install connector" step happen *from inside Faro*.
 
 ---
 
@@ -69,10 +95,18 @@ so the "install connector" step can happen *from inside Faro*.
   `date`, `mime_type`). Upload = raw body + `Content-Disposition`.
 - `GET /plugins`, `GET /themes` — listing; `POST /plugins/{plugin}` with
   `status` toggles activation (the "rescue a white screen" op works even in
-  core tier).
+  REST tier).
 - `POST /plugins {slug, status:"active"}` — install from wordpress.org.
   This is the zero-FTP install route for the connector once it is listed
   (Phase 2).
+- **Any other namespace** — `GET /wp-json/` lists every registered
+  namespace and route (`gf/v2`, `wc/v3`, `yoast/v1`, `acf/v3`…). Faro does
+  not model these; it passes them through (`rest` command) and exposes the
+  ones that look like resources as editable JSON files (see Path mapping).
+
+What REST does *not* reach: page-builder content stored in post meta
+(Elementor `_elementor_data` is not REST-exposed by default), raw DB, files,
+caches, and plugin settings with no route. That is the connector's job.
 
 ### Faro Connector (`{site}/wp-json/faro/v1/`)
 
@@ -208,12 +242,23 @@ Connector tier:
 /wp-config.php            → real file (guarded write)
 ```
 
-Core tier (no connector):
+REST tier (no connector; under `/.rest/` and `/.media/` once the connector is in):
 
 ```
-/                         → virtual: media/  +  (banner: "Install Faro Connector for full access")
+/                         → virtual: media/  rest/   (banner: "Install Faro Connector for full access")
 /media/2026/10/photo.jpg  → attachment, path from its upload subdir + filename
+/rest/gf/v2/forms/        → GET /gf/v2/forms, one entry per item
+/rest/gf/v2/forms/1.json  → GET /gf/v2/forms/1 (pretty JSON); write = PUT
 ```
+
+- `rest/` is built from the discovery index: namespaces → routes. A route
+  becomes a directory when its GET returns an array of objects with an `id`;
+  each item is `{id}.json`. Writing a file `PUT`s it back (falls back to
+  `POST` when the route only accepts that); deleting it `DELETE`s it. Routes
+  that don't fit the pattern are left to the `rest` command.
+- Edits are whole-resource round-trips: Faro re-`GET`s before save and
+  refuses if it changed since open (body hash), so a stale editor can't
+  clobber someone else's change.
 
 - Connector `DirEntry` carries `size`, `mtime`, `mode` →
   `change_signal: ChangeSignal::MtimeSize`.
@@ -222,15 +267,85 @@ Core tier (no connector):
   **`has_commands: bool`** — true here; gates the WordPress command palette
   and the Agent Bridge `wp` tool. (False for every existing backend; SSH keeps
   `has_shell`.)
-- Core tier: `can_chmod: false, can_rename: false` (media can't be moved),
-  `has_commands: false` except the plugin activate/deactivate pair, which is
-  exposed through the same palette.
+- REST tier: `can_chmod: false, can_rename: false` (media can't be moved),
+  `has_commands: true` with only `rest` + plugin activate/deactivate.
 
 ---
 
 ## Phases
 
-### Phase 1 — Connector plugin + connector-tier filesystem
+### Phase 1 — WordPress REST profile (no plugin)
+
+The smallest useful slice; makes the Gravity Forms example work.
+
+1. **`faro-cli fetch` sends changes, not just reads.** Add
+   `--method GET|POST|PUT|PATCH|DELETE` (default GET), `--data @file|-|<json>`
+   and repeatable `--header`. Body defaults to `Content-Type:
+   application/json` when it parses as JSON. Today `cmd_fetch`
+   (`faro-cli/src/main.rs`) hard-codes `Method::GET`; it already reuses an
+   HTTP profile's stored Basic Auth, which is exactly what an Application
+   Password is. Also accept `wordpress` profiles in its host matching.
+2. **`wordpress` profile type.** Site URL, username, Application Password
+   (keychain, `wordpress:{profile_id}`). On save, Faro checks
+   `GET /wp-json/wp/v2/users/me?context=edit` and reports the exact failure:
+   bad password, Application Passwords disabled (Wordfence and similar have a
+   switch for this), not an admin, REST blocked.
+   - NEW `session/wordpress.rs` — `WordPressSession` on the
+     `session/shopify.rs` shape: shared `reqwest::Client`,
+     `env_or("FARO_WP_…")` override for tests, one `send()` with the
+     auth-header fallback + 429/5xx backoff (`http_throttle.rs`), REST vs
+     `?rest_route=` URL builder decided at connect, cached discovery index.
+     `account_label()` → `user@host`.
+   - NEW `remotefs/wordpress.rs` — `WordPressFs` REST tier: `media/` and
+     `rest/` as in Path mapping.
+   - `remotefs/mod.rs` — `has_commands` on `Capabilities` (default false;
+     the compiler finds every literal).
+   - `session/mod.rs` — `Session::WordPress` + arms (`protocol()` →
+     `"wordpress"`); `fs_for*` factory arms in `commands.rs`, `transfer.rs`,
+     `faro-cli`; `editor.rs` read/write arms (this is what makes
+     `rest/gf/v2/forms/1.json` editable in place).
+   - Frontend: `"wordpress"` in `types.ts`, brand icon
+     (`simple-icons:wordpress`, add to `CURATED`, regen), `WordPressSection`
+     in `ProfileEditor` (manual fields for now), "Websites" picker group,
+     `ServerRail` label, deep-link `known` protocols.
+3. **Agent Bridge `wp_rest` tool** / `POST /sessions/{id}/wp/rest`
+   `{method, path, body}` through `gate()` with the exec rule: `GET`/`HEAD`
+   run without a prompt under `auto_safe_exec`; `POST/PUT/PATCH/DELETE`
+   always ask for approval in Faro, showing method, route and a body
+   preview. `exec_on`'s "can't run commands" error points WordPress
+   connections here.
+4. **`faro-cli wp <connection> …` helpers** over REST so agents and people
+   don't hand-build requests: `rest <METHOD> <route> [--data]`,
+   `plugins [activate|deactivate <slug>]`, `options` (`/wp/v2/settings`),
+   `forms [<id>]` (only when `gf/v2` is registered), `routes` (prints the
+   discovery index — "what can I reach on this site?").
+
+**Tests:** Docker WordPress (`wordpress:php8.3-apache` + `mariadb`,
+`WP_ENVIRONMENT_TYPE=local`) with a tiny test plugin that registers a
+`faro-test/v1/items` CRUD route standing in for Gravity Forms.
+`live_wordpress_rest` (`#[ignore]`, env-gated on `FARO_WP_TEST_URL`): connect
+→ users/me check → list `rest/` → edit an item via the fs path → `PUT` lands →
+stale-edit refusal → plugin deactivate/activate. Unit tests for `fetch`
+argument parsing and the route→directory heuristic.
+
+**Done when:** in the GUI, open a JSON resource on the Docker site, edit it,
+save, and see the change via a fresh GET; and the same edit through
+`faro-cli wp … rest PUT` and through the bridge (with its approval prompt).
+
+### Phase 2 — Easy sign-in & connector install
+
+- `deeplink.rs` — `wp-auth` action; pending-state map in the session manager
+  (nonce, TTL, single use); writes the password to the keychain directly.
+- `ProfileEditor` — "Sign in with WordPress" button (primary), manual fields
+  behind "Enter an application password instead".
+- *Add WordPress access…* context-menu entry on FTP/SFTP connections.
+- Connector install flows: FTP/SFTP drop-in to `mu-plugins` (picks a saved
+  connection whose tree contains `wp-config.php`; asks which if several),
+  wp.org install via REST, zip export fallback.
+- Submit the plugin to the wordpress.org directory (maintainer action — the
+  account is theirs). Until listed, the REST install route is hidden.
+
+### Phase 3 — Connector plugin + full filesystem
 
 **Plugin (new package):**
 
@@ -244,37 +359,18 @@ Core tier (no connector):
 
 **Rust:**
 
-1. NEW `src-tauri/src/session/wordpress.rs` — `WordPressSession` on the
-   `session/shopify.rs` shape: shared `reqwest::Client`, `env_or("FARO_WP_…")`
-   override for tests, one `send()` with header fallback + 429/5xx backoff
-   (reuse `http_throttle.rs`), REST-vs-`rest_route` URL builder decided once at
-   connect. `wordpress_connect(profile)`: discovery → `users/me` capability
-   probe → `/hello` (sets tier + limits). `account_label()` → `user@host`.
-2. NEW `src-tauri/src/remotefs/wordpress.rs` — `WordPressFs`: `list_dir`,
-   `rename`, `delete` (loops on `more:true`), `create_dir`, `chmod`,
-   `capabilities()`. Inline unit tests: path normalization, jail-relative
-   mapping, `/hello` parsing, chunk sizing from limits.
-3. `remotefs/mod.rs` — add `has_commands` to `Capabilities` (default false;
-   update every backend's literal — the compiler finds them).
-4. `session/mod.rs` — `Session::WordPress(Arc<WordPressSession>)` + the usual
-   arms (`protocol()` → `"wordpress"`).
-5. `commands.rs` / `transfer.rs` / `faro-cli` `fs_for*` factory arms.
-6. `transfer.rs` — download via `fs/read` on the Plan 24 ranged engine
+1. `session/wordpress.rs` — connect also probes `/hello`; when present the
+   tier flips to connector and the limits are cached.
+2. `remotefs/wordpress.rs` — connector arms: `/` = `ABSPATH`, REST tier moves
+   under `/.rest/` and `/.media/`; `rename`, `delete` (loops on `more:true`),
+   `create_dir`, `chmod`. Unit tests: jail-relative mapping, `/hello`
+   parsing, chunk sizing from limits.
+3. `transfer.rs` — download via `fs/read` on the Plan 24 ranged engine
    (Range supported ⇒ parallel + resume for free); upload via chunked
    `fs/write` with `offset` resume.
-7. `editor.rs`, `preview.rs`, `search.rs` arms (same list as Plan 18).
+4. `preview.rs`, `search.rs` arms (same list as Plan 18).
 
-**Frontend:**
-
-- `src/lib/types.ts` — `"wordpress"` protocol + label; `has_commands` in the
-  capabilities type.
-- `src/lib/brandIcons.tsx` — `wordpress: "simple-icons:wordpress"`; add to
-  `CURATED`, `npm run gen:brand-icons`.
-- `src/components/ProfileEditor.tsx` — `WordPressSection`: Site URL,
-  username, `PasswordInput` (Application Password or Faro key), hint copy:
-  *"Full access over HTTPS — no FTP or SSH needed once Faro Connector is
-  installed."* Picker group: "Websites" (new) alongside HTTP/WebDAV.
-- `ServerRail.tsx` label (`host`), `App.tsx` deep-link `known` protocols.
+**Frontend:** file-pane banner while in REST tier; nothing else new.
 
 **Tests:** run **real WordPress** in Docker (`wordpress:php8.3-apache` +
 `mariadb`, `WP_ENVIRONMENT_TYPE=local` so Application Passwords work over
@@ -287,23 +383,7 @@ recursive delete. Plus a PHPUnit-free PHP smoke script for the jail
 **Done when:** browse a Docker WordPress in the GUI with no FTP configured,
 edit `wp-content/themes/…/style.css` in place, drag a folder in, see it land.
 
-### Phase 2 — Connecting & installing, the easy way
-
-- `deeplink.rs` — `wp-auth` action; pending-state map in the session manager
-  (nonce, TTL, single use); writes the password to the keychain directly.
-- `ProfileEditor` — "Sign in with WordPress" button (primary), manual fields
-  behind "Enter an application password instead".
-- Core tier in `WordPressFs` (`/media`) + plugin activate/deactivate, so a
-  connection is useful before the connector exists.
-- Connector install flows: FTP/SFTP drop-in to `mu-plugins` (picks a saved
-  connection whose tree contains `wp-config.php`; asks which if several),
-  wp.org install via REST, zip export fallback. Banner in the file pane while
-  the site is in core tier.
-- *Add WordPress access…* context-menu entry on FTP/SFTP connections.
-- Submit the plugin to the wordpress.org directory (maintainer action — the
-  account is theirs). Until listed, the REST install route is hidden.
-
-### Phase 3 — Commands without a shell
+### Phase 4 — Commands without a shell
 
 - Connector: the `cmd/*` routes from the table above (minus DB, Phase 4).
 - `session/wordpress.rs` — typed `run_command(op, args)`.
@@ -313,15 +393,14 @@ edit `wp-content/themes/…/style.css` in place, drag a folder in, see it land.
   parses a wp-cli-shaped subset (`wp plugin deactivate woocommerce`,
   `wp option get siteurl`) into ops and prints wp-cli-like tables. Unknown
   commands say so and list what is supported — no pretending it's a shell.
-- **Agent Bridge**: new `wp` tool / REST route `POST /sessions/{id}/wp`,
+- **Agent Bridge**: `wp` tool / `POST /sessions/{id}/wp` beside Phase 1's `wp_rest`,
   through `gate()`. Read ops (`*.list`, `option.get`, `debug.tail`,
   `core.version`) are auto-safe under the existing `auto_safe_exec` policy;
-  everything else prompts. The `exec_on` "can't run commands" error points
-  WordPress connections at the `wp` tool.
-- **faro-cli**: `faro-cli wp <connection> <args…>` — same parser as the
-  console; `--json` output.
+  everything else prompts.
+- **faro-cli**: `faro-cli wp <connection> <args…>` gains these ops — same
+  parser as the console; `--json` output.
 
-### Phase 4 — Database
+### Phase 5 — Database
 
 - `db.query` (read-only, row-capped) in console/CLI/bridge.
 - `db.export` → streamed `.sql` download through the transfer queue (shows
@@ -340,8 +419,9 @@ edit `wp-content/themes/…/style.css` in place, drag a folder in, see it land.
 - **No DB writes beyond search-replace and options** — no arbitrary
   `UPDATE/DELETE`. A bad query on a client's production DB with no shell to
   recover from is the worst case this plan exists to avoid.
-- **No content editing** (posts/pages as files) — possible later via core
-  REST, same caveats as Shopify Phase 3.
+- **No friendly content editing** (posts/pages as Markdown) — posts are
+  reachable as raw JSON under `rest/wp/v2/`; a nicer mapping is later work,
+  same caveats as Shopify Phase 3.
 - **No multisite network-wide fan-out** — one site per connection; network
   admins get the network's `ABSPATH` and per-site ops take a `url` arg later.
 - **No auto-update of the connector** — v1 shows "connector outdated" from
