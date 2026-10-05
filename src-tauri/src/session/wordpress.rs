@@ -893,10 +893,14 @@ pub async fn wordpress_connect(profile: &ConnectionProfile) -> Result<WordPressS
                 "This WordPress user isn't an administrator. Faro needs an admin account \
                  (manage_options)."
             ),
-            // The route answered as if no one were logged in.
+            // The route answered as if no one were logged in. WordPress gives
+            // the same answer for a wrong password, an unknown user and a
+            // stripped Authorization header, so name both causes.
             "rest_not_logged_in" | "rest_forbidden" | "rest_cannot_view" => anyhow!(
-                "WordPress didn't receive the login. The host may strip the Authorization \
-                 header; on Apache, adding `SetEnvIf Authorization \"(.*)\" \
+                "WordPress didn't accept the login. Check the username and that the password \
+                 is an Application Password (Users → Profile → Application Passwords), not \
+                 your login password. If both are right, the host may strip the \
+                 Authorization header; on Apache, adding `SetEnvIf Authorization \"(.*)\" \
                  HTTP_AUTHORIZATION=$1` to .htaccess usually fixes it."
             ),
             _ => describe_failure("WordPress login check", status, &text),

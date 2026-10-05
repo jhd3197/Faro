@@ -399,6 +399,7 @@ pub fn run() {
             commands::ssh_public_key_for,
             commands::connect,
             commands::disconnect,
+            commands::test_connection,
             commands::discover_agents,
             commands::agent_public_key,
             commands::pair_agent,

@@ -45,6 +45,8 @@ import { monogram } from "@/lib/format";
 import { IconPicker } from "./IconPicker";
 import { generatePassword } from "@/lib/password";
 import { ipc } from "@/lib/ipc";
+import { messageOf } from "@/lib/errors";
+import { CopyTextButton } from "@/components/ui/CopyText";
 import { toast } from "@/stores/toastStore";
 
 interface Props {
@@ -121,6 +123,9 @@ function guessProvider(endpoint?: string): S3Provider {
   // A bare endpoint we don't recognize is some self-hosted / niche S3 server.
   return "generic";
 }
+
+/// localStorage key for the editor's "Connect after saving" checkbox.
+const CONNECT_AFTER_SAVE_KEY = "faro.editor.connectAfterSave";
 
 /// Protocol picker, grouped for the left rail. New backends slot into a group
 /// instead of stretching a flat grid taller — the rail just scrolls.
@@ -512,7 +517,10 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
     };
   };
 
-  const save = async () => {
+  /// Write keychain-held credentials (Shopify/HubSpot/Dynamics/WordPress)
+  /// for this profile id. Shared by Save and Test connection, which needs
+  /// them in place before it can connect.
+  const persistSecrets = async () => {
     // Shopify: persist the credential to the OS keychain first (one-way set —
     // it never lands in profiles.json). Blank fields keep the saved one.
     if (isShopify && shopifySecretEntered) {
@@ -536,8 +544,53 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
     if (isDynamics && dynamicsMode === "delegated") {
       await ipc.setApiKey(`dynamics:${id}`, "");
     }
+  };
+
+  // Test connection: connect with the form as it stands, then disconnect.
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<
+    { ok: true } | { ok: false; title: string; message: string } | null
+  >(null);
+  const testConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      await persistSecrets();
+      await ipc.testConnection(buildProfile());
+      setTestResult({ ok: true });
+    } catch (e) {
+      setTestResult({ ok: false, title: "Couldn't connect", message: messageOf(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // Connect right after saving — on by default; the choice is remembered.
+  const [connectAfterSave, setConnectAfterSave] = useState(() => {
+    try {
+      return localStorage.getItem(CONNECT_AFTER_SAVE_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const toggleConnectAfterSave = (on: boolean) => {
+    setConnectAfterSave(on);
+    try {
+      localStorage.setItem(CONNECT_AFTER_SAVE_KEY, on ? "1" : "0");
+    } catch {
+      // per-viewer convenience only
+    }
+  };
+  const sessions = useConnections((s) => s.sessions);
+
+  const save = async () => {
+    await persistSecrets();
     await saveProfile(buildProfile());
     onClose();
+    // Skip when it's already open; connect errors toast from the store.
+    if (connectAfterSave && !sessions.some((s) => s.profileId === id)) {
+      void connectProfile(id).catch(() => {});
+    }
   };
 
   /// Pair with the daemon at host:port using a 6-digit code. Nothing is
@@ -1091,11 +1144,68 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
         )}
           </div>
 
+          {testResult && (
+            <div
+              role={testResult.ok ? "status" : "alert"}
+              className={cn(
+                "mx-5 mb-0 mt-2 flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs",
+                testResult.ok
+                  ? "border-success/30 bg-success/10"
+                  : "border-danger/30 bg-danger/10"
+              )}
+            >
+              {testResult.ok ? (
+                <Check size={13} className="mt-0.5 shrink-0 text-success" />
+              ) : (
+                <X size={13} className="mt-0.5 shrink-0 text-danger" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">
+                  {testResult.ok ? "Connection works" : testResult.title}
+                </div>
+                {!testResult.ok && (
+                  <div className="mt-0.5 max-h-32 select-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] text-text-muted">
+                    {testResult.message}
+                  </div>
+                )}
+              </div>
+              {!testResult.ok && (
+                <CopyTextButton
+                  text={`${testResult.title}\n${testResult.message}`}
+                  label
+                />
+              )}
+            </div>
+          )}
+
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
-            {!canSave && (
+            {!canSave ? (
               <span className="mr-auto text-[11px] text-text-dim">
                 Needs {missing.join(", ")}
               </span>
+            ) : (
+              !(isAgent && !agentKey) && (
+                <label className="mr-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-text-muted">
+                  <input
+                    type="checkbox"
+                    checked={connectAfterSave}
+                    onChange={(e) => toggleConnectAfterSave(e.target.checked)}
+                    className="accent-[rgb(var(--accent))]"
+                  />
+                  Connect after saving
+                </label>
+              )
+            )}
+            {!(isAgent && !agentKey) && (
+              <button
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-3.5 py-1.5 text-sm hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={testConnection}
+                disabled={!canSave || testing}
+                title={canSave ? "Try connecting without saving" : `Fill in: ${missing.join(", ")}`}
+              >
+                {testing && <Loader2 size={13} className="animate-spin" />}
+                {testing ? "Testing…" : "Test connection"}
+              </button>
             )}
             <button
               className="rounded-md border border-border px-3.5 py-1.5 text-sm hover:bg-bg-hover"
