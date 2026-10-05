@@ -26,8 +26,11 @@ import {
   Command as CommandIcon,
   Keyboard,
   Radio,
+  ZoomIn,
+  ZoomOut,
+  Search,
 } from "lucide-react";
-import { useSettings } from "@/stores/settingsStore";
+import { useSettings, stepUiZoom } from "@/stores/settingsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useTransfers } from "@/stores/transfersStore";
 import { useResolvedCommands } from "@/lib/keybindings";
@@ -45,6 +48,8 @@ const REPO_URL = "https://github.com/jhd3197/faro";
 export function TitleBar() {
   const appTheme = useSettings((s) => s.appTheme);
   const setAppTheme = useSettings((s) => s.setAppTheme);
+  const uiZoom = useSettings((s) => s.uiZoom);
+  const setUiZoom = useSettings((s) => s.setUiZoom);
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
   const openDialog = useLayout((s) => s.openDialog);
   const togglePalette = useLayout((s) => s.togglePalette);
@@ -154,6 +159,25 @@ export function TitleBar() {
           icon: appTheme === "light" ? <Moon size={11} /> : <Sun size={11} />,
           shortcut: comboOf("switch-theme"),
           onClick: switchTheme,
+        },
+        { kind: "sep" },
+        {
+          label: "Zoom in",
+          icon: <ZoomIn size={11} />,
+          shortcut: comboOf("zoom-in"),
+          onClick: () => setUiZoom(stepUiZoom(uiZoom, 1)),
+        },
+        {
+          label: "Zoom out",
+          icon: <ZoomOut size={11} />,
+          shortcut: comboOf("zoom-out"),
+          onClick: () => setUiZoom(stepUiZoom(uiZoom, -1)),
+        },
+        {
+          label: "Actual size",
+          icon: <Search size={11} />,
+          shortcut: comboOf("zoom-reset"),
+          onClick: () => setUiZoom(100),
         },
       ],
     },

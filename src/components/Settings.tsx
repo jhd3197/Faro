@@ -7,6 +7,7 @@ import type { UiLanguage } from "@/lib/i18n";
 import {
   useSettings,
   COLOR_THEMES,
+  UI_ZOOM_STEPS,
   type AppTheme,
   type OverwritePolicy,
   type SortField,
@@ -109,6 +110,22 @@ export function Settings({ onClose }: Props) {
               help="Full presets that also re-tint the surfaces, not just the accent."
             >
               <ThemeGrid value={s.appTheme} onChange={s.setAppTheme} />
+            </Field>
+            <Field
+              label="UI zoom"
+              help="Scales the whole interface — text, icons and layout. Also View → Zoom in / Zoom out, or Ctrl/⌘ + = / − / 0."
+            >
+              <Select<number>
+                value={s.uiZoom}
+                onChange={s.setUiZoom}
+                options={(UI_ZOOM_STEPS.includes(s.uiZoom)
+                  ? UI_ZOOM_STEPS
+                  : [...UI_ZOOM_STEPS, s.uiZoom].sort((a, b) => a - b)
+                ).map((z) => ({
+                  value: z,
+                  label: z === 100 ? "100% (Default)" : `${z}%`,
+                }))}
+              />
             </Field>
             <Field
               label="Language"
