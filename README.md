@@ -100,14 +100,14 @@ Builds are **unsigned** (no Apple Developer / Windows EV certificate yet), so ea
 |                          New connection                          |                             Settings                             |
 | :--------------------------------------------------------------: | :--------------------------------------------------------------: |
 |      ![New connection](docs/screenshots/new-connection.png)      |          ![Settings](docs/screenshots/settings.png)          |
-| _One profile editor for all fourteen backends, protocol picker in a rail_ | _Themes, terminal behavior, transfers, and the default editor_ |
+| _One profile editor for all fifteen backends, protocol picker in a rail_ | _Themes, terminal behavior, transfers, and the default editor_ |
 
 </details>
 <!-- FARO:SHOTS:END -->
 
 ## 🎯 Features
 
-> **One connection list, sixteen backends.** Browse, transfer, sync, and the disk-usage / diff / search tools work the same on every one — all behind a single `RemoteFs` trait.
+> **One connection list, seventeen backends.** Browse, transfer, sync, and the disk-usage / diff / search tools work the same on every one — all behind a single `RemoteFs` trait.
 
 ### 📡 Backends & Storage
 
@@ -117,7 +117,7 @@ Builds are **unsigned** (no Apple Developer / Windows EV certificate yet), so ea
 | **Azure Blob & Google Cloud Storage**<br>First-class object storage alongside your servers. | **WebDAV & HTTP(S)**<br>Nextcloud / ownCloud browsing, plus read-only HTTP autoindex and direct-URL sources. |
 | **Cloud drives**<br>Dropbox, OneDrive, Google Drive, and Box — loopback + PKCE OAuth, only the refresh token in your OS keychain. | **Faro Agent**<br>Faro's own paired agent as a backend — browse, transfer, and exec on a machine with no SSH server. Delta sync re-sends only the changed blocks of large files. |
 | **Shopify themes**<br>Browse and edit store themes like an FTP site — dual-pane, diff, sync, in-place Liquid editing. | **HubSpot CMS**<br>Design Manager files (templates, modules, CSS/JS, HubL) as a filesystem — draft and published environments, edits deploy on save. Plus the File Manager asset library, and HubDB tables as read-only CSV exports. |
-| **Dynamics 365 / Dataverse**<br>Web resources (form scripts, CSS, HTML, images) as a filesystem — browse, diff, sync, in-place edit; saves publish automatically. The XrmToolBox workflow, without XrmToolBox. | |
+| **Dynamics 365 / Dataverse**<br>Web resources (form scripts, CSS, HTML, images) as a filesystem — browse, diff, sync, in-place edit; saves publish automatically. The XrmToolBox workflow, without XrmToolBox. | **WordPress (REST API)**<br>For sites with no SSH: an Application Password reaches the media library and every plugin API (Gravity Forms, WooCommerce…) as JSON files you open, edit and save. `faro-cli wp` and the Agent Bridge (`faro_wp_rest`, writes need your approval) speak it too. |
 
 ### 🔁 Transfers & Sync
 
@@ -249,6 +249,7 @@ affordances they don't support rather than reinventing them.
 | **OneDrive** | ✓ | ✓ | ✓ | — |
 | **Google Drive** | ✓ | ✓ | ✓ | — |
 | **Box** | ✓ | ✓ | ✓ | — |
+| **WordPress** (REST API: media + plugin/core resources as JSON) | ✓ | ✓ | ✓ | REST calls |
 | **Faro Agent** | ✓ | ✓ | ✓ | exec |
 
 **Cloud drives** authorize once through your browser (loopback + PKCE OAuth);
@@ -429,7 +430,7 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 |-------|------------|
 | App shell | Tauri 2 (Rust) |
 | Frontend | React 18, TypeScript, Vite, Zustand, xterm.js, Tailwind CSS |
-| Backend core | Rust — one `RemoteFs` trait over 16 backends |
+| Backend core | Rust — one `RemoteFs` trait over 17 backends |
 | SSH | russh (SFTP + PTY), ssh-agent / Pageant integration |
 | Object storage | S3, Azure Blob, Google Cloud Storage SDKs |
 | Cloud drives | Loopback + PKCE OAuth (Dropbox, OneDrive, Google Drive, Box) |

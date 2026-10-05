@@ -51,11 +51,12 @@ specified in **`docs/grant-links.md`**.
 
 ### `faro://connect` — open a server connection
 
-Prefills the editor for an SFTP/FTP/FTPS/S3/Azure server.
+Prefills the editor for an SFTP/FTP/FTPS/S3/Azure server, or a WordPress
+site's REST API (`protocol=wordpress`, `host` = the site address).
 
 | Param      | Meaning                                              | Example                 |
 |------------|------------------------------------------------------|-------------------------|
-| `protocol` | `sftp` \| `ftp` \| `ftps` \| `s3` \| `azure`         | `sftp`                  |
+| `protocol` | `sftp` \| `ftp` \| `ftps` \| `s3` \| `azure` \| `wordpress` | `sftp`             |
 | `host`     | Server hostname or IP                                | `wp-prod.example.com`   |
 | `port`     | Port (defaults per protocol if omitted)              | `22`                    |
 | `username` | Login user (no password!)                            | `wp_deploy`             |
@@ -65,6 +66,13 @@ Prefills the editor for an SFTP/FTP/FTPS/S3/Azure server.
 | `region`   | S3 region                                            | `us-east-1`             |
 | `endpoint` | S3-compatible endpoint (R2/B2/MinIO)                 | `https://…r2.cloudflarestorage.com` |
 | `account`  | Azure storage account                                | `mystorageacct`         |
+
+**Example — a WordPress site's REST API (no FTP/SSH needed; the admin pastes
+an Application Password in Faro):**
+
+```
+faro://connect?protocol=wordpress&host=https%3A%2F%2Fexample.com&username=admin&name=Example%20(WP)
+```
 
 **Example — a WordPress site's SFTP, straight into the web root:**
 
