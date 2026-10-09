@@ -14,10 +14,8 @@ impl RemoteFs for LocalFs {
             .with_context(|| format!("read_dir {}", p.display()))?;
         let mut out = Vec::new();
         while let Some(entry) = rd.next_entry().await? {
-            let meta = match entry.metadata().await {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+            let meta = entry.metadata().await
+                .with_context(|| format!("stat {}", entry.path().display()))?;
             let kind = if meta.is_dir() {
                 FileKind::Directory
             } else if meta.file_type().is_symlink() {

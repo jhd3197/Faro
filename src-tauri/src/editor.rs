@@ -355,7 +355,7 @@ async fn download_to(
         Session::Object(obj) => {
             use futures::StreamExt;
             let key = remote_path.trim_start_matches('/');
-            let p = object_store::path::Path::from(key);
+            let p = object_store::path::Path::parse(key)?;
             let get = obj
                 .store
                 .get(&p)
@@ -576,7 +576,7 @@ pub(crate) async fn upload_from(
         }
         Session::Object(obj) => {
             let key = remote_path.trim_start_matches('/');
-            let p = object_store::path::Path::from(key);
+            let p = object_store::path::Path::parse(key)?;
             let mut file = tokio::fs::File::open(&local).await?;
             let mut buf = Vec::with_capacity(size as usize);
             file.read_to_end(&mut buf).await?;

@@ -481,7 +481,27 @@ async fn scan_object(
     use object_store::path::Path as ObjPath;
     use object_store::ObjectStore;
 
-    let prefix_raw = root.trim().trim_matches('/');
+    if obj.profile.protocol == "s3" {
+        let prefix = root.trim_matches('/');
+        let prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+        let listing = crate::session::object::s3_namespace::S3Namespace::new(&obj.profile)?.list(&prefix, false).await?;
+        let mut tree = scan::ScanTree::default();
+        for o in listing.objects {
+            if info.cancel.is_cancelled() { anyhow::bail!("scan canceled"); }
+            if o.key.ends_with('/') { continue; }
+            let rel = o.key.strip_prefix(&prefix).context("S3 key outside scan prefix")?.to_string();
+            tree.files.insert(rel, scan::ScanEntry {
+                absolute: format!("/{}", o.key), size: o.size,
+                modified: chrono::DateTime::parse_from_rfc3339(&o.last_modified)?.timestamp(), etag: o.etag,
+            });
+        }
+        info.files.store(tree.files.len(), Ordering::Relaxed);
+        info.bytes.store(tree.files.values().map(|f| f.size).sum(), Ordering::Relaxed);
+        emit_progress(info, app);
+        return Ok(tree);
+    }
+
+    let prefix_raw = root.trim_matches('/');
     let prefix = if prefix_raw.is_empty() || prefix_raw == "." {
         String::new()
     } else {
@@ -490,7 +510,7 @@ async fn scan_object(
     let prefix_path = if prefix.is_empty() {
         None
     } else {
-        Some(ObjPath::from(prefix.as_str()))
+        Some(ObjPath::parse(prefix.as_str())?)
     };
 
     let mut stream = obj.store.list(prefix_path.as_ref());

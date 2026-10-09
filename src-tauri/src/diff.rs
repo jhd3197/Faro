@@ -387,7 +387,7 @@ async fn hash_ssh(ssh: &Arc<SshSession>, path: &str) -> Result<String> {
 async fn hash_object(obj: &Arc<ObjectSession>, path: &str) -> Result<String> {
     use futures::StreamExt;
     let key = path.trim_start_matches('/');
-    let p = object_store::path::Path::from(key);
+    let p = object_store::path::Path::parse(key)?;
     let get = obj
         .store
         .get(&p)

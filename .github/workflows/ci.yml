@@ -6,9 +6,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 jobs:
@@ -51,6 +51,31 @@ jobs:
       - name: cargo check (whole workspace — GUI lib/bin + faro-cli)
         working-directory: src-tauri
         run: cargo check --workspace
+
+      - name: Rust library and CLI tests
+        working-directory: src-tauri
+        run: |
+          cargo test --locked -p faro --lib
+          cargo test --locked -p faro-cli
+
+      - name: Setup Python for S3 regression audit
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: S3 CLI regression audit (local emulator)
+        run: |
+          python -m pip install 'moto[server]==5.1.12'
+          cargo build --locked --manifest-path src-tauri/Cargo.toml -p faro-cli
+          python scripts/audit-s3-cli.py
+
+      - name: Upload S3 audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3-cli-audit
+          path: src-tauri/target/s3-cli-audit.json
+          if-no-files-found: ignore
 
       - name: cargo clippy (warnings allowed for now)
         working-directory: src-tauri

@@ -94,7 +94,8 @@ object_store = { version = "0.11", features = ["aws", "azure", "gcp"] }
 bytes = "1"
 
 # Importers — quick-xml for FileZilla's sitemanager.xml.
-quick-xml = "0.36"
+quick-xml = { version = "0.36", features = ["serialize"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 # Shared connection index (faro.db). The `bundled` feature compiles SQLite from
 # source so there's no system-SQLite dependency. One DB under app_data_dir holds

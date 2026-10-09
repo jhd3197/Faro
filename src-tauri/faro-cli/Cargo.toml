@@ -43,6 +43,7 @@ ureq = { version = "2", default-features = false, features = ["json", "tls", "gz
 
 # Misc
 anyhow = "1"
+tempfile = "3"
 serde_json = "1"
 dirs = "5"
 base64 = "0.22"

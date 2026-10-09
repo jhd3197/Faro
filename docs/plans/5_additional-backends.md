@@ -6,10 +6,11 @@ Faro today speaks SFTP, FTP/FTPS, S3-compatible object storage, **Azure Blob**
 (both via `object_store`), local disk, and the Faro Agent — each a `RemoteFs`
 impl in `src-tauri/src/remotefs/` (`sftp.rs`, `ftp.rs`, `object.rs`,
 `local.rs`, `agent.rs`). Because browse, transfer, directory sync, and the
-continuous folder-sync engine all sit on that one trait, **every new backend
-inherits all of them for free** — proven by the Agent, which slotted in and
-immediately worked with the explorer and transfers. This plan widens the
-connection list, cheapest-first.
+continuous folder-sync engine use common interfaces, a new backend can reuse
+their orchestration. Each operation still needs provider-specific implementation
+and verification; sharing a trait does not establish feature parity. See
+[Plan 26](26_backend-correctness-and-coverage.md) for the safety audit and app/CLI
+coverage requirements. This plan widens the connection list, cheapest-first.
 
 Each backend is the same recipe:
 
