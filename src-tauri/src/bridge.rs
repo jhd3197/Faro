@@ -3947,13 +3947,14 @@ async fn op_sync(
                 "deleteCount": delete_count,
                 "totalBytes": total_bytes,
                 "copies": copies,
+                "directories": plan.directories,
                 "deletes": deletes,
                 "listTruncated": copy_count > SYNC_PLAN_MAX_ENTRIES || delete_count > SYNC_PLAN_MAX_ENTRIES,
             }),
         );
     }
 
-    if copy_count == 0 && delete_count == 0 {
+    if copy_count == 0 && delete_count == 0 && plan.directories.is_empty() {
         // Nothing to do — don't raise an approval prompt for a no-op.
         state
             .log(
@@ -3988,6 +3989,7 @@ async fn op_sync(
         total_bytes,
         delete_count,
     );
+    let summary = format!("{summary}; create {} folders", plan.directories.len());
     if let Err(resp) = gate(
         app,
         state,

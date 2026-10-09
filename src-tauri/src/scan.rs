@@ -13,11 +13,11 @@
 //! fallback for all of them; the strategy hook is the [`ScanOptions`] the caller
 //! passes.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::remotefs::{FileKind, RemoteFs};
@@ -66,10 +66,11 @@ pub struct ScanEntry {
 }
 
 /// A flattened file tree keyed by relative path (POSIX `/`) from the scan root.
-/// Directories are implicit — only files are tracked, exactly as sync needs.
+/// Explicit directories retain empty folders when a sync plan is executed.
 #[derive(Debug, Default, Clone)]
 pub struct ScanTree {
     pub files: BTreeMap<String, ScanEntry>,
+    pub directories: BTreeSet<String>,
 }
 
 /// Knobs for a walk. `Default` is what the sync poller wants: full concurrency,
@@ -91,10 +92,20 @@ pub async fn walk_tree(fs: &dyn RemoteFs, root: &str) -> Result<ScanTree> {
     walk(fs, root, &ScanOptions::default(), |_| {}).await
 }
 
+/// Only a missing destination root may be treated as empty. An unreadable
+/// source or any failed child listing must prevent planning a destructive sync.
+pub async fn destination_tree(fs: &dyn RemoteFs, root: &str) -> Result<ScanTree> {
+    match fs.list_dir(root).await {
+        Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => Ok(ScanTree::default()),
+        Err(e) => Err(e),
+        Ok(_) => walk_tree(fs, root).await,
+    }
+}
+
 /// Recursively list every file under `root`. Bounded-concurrency BFS: up to
 /// `opts.concurrency` `list_dir` calls are in flight at once. Unreadable
-/// directories are tolerated (skipped), symlinks are not followed — both
-/// preserving the behaviour of the walk this replaced. `on_progress` fires once
+/// directories abort the scan; callers must never mistake partial results for
+/// a complete source tree. Symlinks are not followed. `on_progress` fires once
 /// per completed directory listing.
 pub async fn walk<F: FnMut(ScanProgress)>(
     fs: &dyn RemoteFs,
@@ -114,24 +125,26 @@ pub async fn walk<F: FnMut(ScanProgress)>(
 
     loop {
         if opts.cancel.is_cancelled() {
-            break;
+            anyhow::bail!("directory scan canceled");
         }
         // Keep the pipeline full: top up in-flight listings from the queue.
         while inflight.len() < limit {
             match queue.pop_front() {
                 Some(dir) => inflight.push(async move {
-                    let res = fs.list_dir(&dir).await;
-                    res
+                    let res = fs.list_dir(&dir).await.with_context(|| format!("list directory {dir}"));
+                    (dir, res)
                 }),
                 None => break,
             }
         }
         // Empty queue *and* nothing in flight ⇒ the tree is fully walked.
-        let Some(res) = inflight.next().await else {
+        let Some((dir, res)) = inflight.next().await else {
             break;
         };
         dirs_scanned += 1;
-        if let Ok(entries) = res {
+        {
+            let entries = res?;
+            tree.directories.insert(relative_of(&normalized_root, dir.trim_end_matches('/')));
             for entry in entries {
                 match entry.kind {
                     FileKind::Directory => queue.push_back(entry.path.clone()),

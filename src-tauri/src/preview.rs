@@ -241,7 +241,7 @@ pub(crate) async fn read_head(session: Option<&Session>, path: &str, max: u64) -
         }
         Some(Session::Object(obj)) => {
             let key = path.trim_start_matches('/');
-            let p = object_store::path::Path::from(key);
+            let p = object_store::path::Path::parse(key)?;
             let get = obj.store.get(&p).await.with_context(|| format!("get {key}"))?;
             collect_capped(get.into_stream().map(|r| r.map_err(anyhow::Error::from)), max).await
         }

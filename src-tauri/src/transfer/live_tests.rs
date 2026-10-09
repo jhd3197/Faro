@@ -451,6 +451,71 @@ async fn live_s3_parallel_round_trip() {
     object_round_trip("FARO_LIVE_S3").await;
 }
 
+/// Run against scripts/s3-lab.py. Uses the same RemoteFs listing as the
+/// directory queue and the real transfer runner for every discovered file.
+#[tokio::test]
+#[ignore = "requires scripts/s3-lab.py and FARO_LIVE_S3"]
+async fn live_s3_directory_markers() {
+    let session = object_session("FARO_LIVE_S3").await.expect("set FARO_LIVE_S3");
+    let fs = fs_for_session(&session);
+    let expected = std::collections::BTreeMap::from([
+        ("/issue-33/marked/hello.txt", "hello from marked folder\n"),
+        ("/issue-33/marked/nested/data.txt", "nested payload\n"),
+        ("/issue-33/implicit/hello.txt", "hello from implicit folder\n"),
+        ("/issue-33/empty.txt", ""),
+        ("/issue-33/spaces & symbols/hello world.txt", "spaced filename\n"),
+    ]);
+    let dir = scratch("s3-directories");
+    let mgr = Arc::new(TransferManager::new());
+    let mut dirs = vec!["/issue-33".to_string()];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut files = std::collections::BTreeSet::new();
+    while let Some(path) = dirs.pop() {
+        assert!(seen.insert(path.clone()), "directory cycle: {path}");
+        assert!(seen.len() <= 10, "unexpected directory tree");
+        let local_dir = dir.join(path.trim_start_matches('/'));
+        std::fs::create_dir_all(&local_dir).unwrap();
+        for entry in fs.list_dir(&path).await.unwrap() {
+            if entry.kind == crate::remotefs::FileKind::Directory {
+                dirs.push(entry.path);
+            } else {
+                assert!(expected.contains_key(entry.path.as_str()), "unexpected file: {entry:?}");
+                assert!(files.insert(entry.path.clone()), "duplicate file");
+                let (t, _, _) = tokio::time::timeout(
+                    Duration::from_secs(30), download(&mgr, &session, &entry.path, &local_dir),
+                ).await.expect("download timed out");
+                assert_eq!(t.status, TransferStatus::Done, "{}: {:?}", entry.path, t.error);
+                assert_eq!(std::fs::read(local_dir.join(&entry.name)).unwrap(), expected[entry.path.as_str()].as_bytes());
+            }
+        }
+    }
+    assert_eq!(files.len(), expected.len());
+    assert!(dir.join("issue-33/marked/empty").is_dir(), "empty marker folder preserved");
+    // The fix must not turn genuine missing-file errors into successful copies.
+    let error = remote_size(&session, "/issue-33/missing.txt").await.unwrap_err();
+    assert!(error.to_string().contains("object head"));
+    println!("5 files copied with exact bytes; empty folder preserved; missing file still errors");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Regression for exact Unicode keys, through metadata and the real downloader.
+#[tokio::test]
+#[ignore = "requires scripts/s3-lab.py and FARO_LIVE_S3"]
+async fn live_s3_unicode_key() {
+    let session = object_session("FARO_LIVE_S3").await.expect("set FARO_LIVE_S3");
+    let Session::Object(obj) = &*session else { unreachable!() };
+    let key = object_store::path::Path::parse("key-encoding/café.txt").unwrap();
+    let bytes = obj.store.get(&key).await.unwrap().bytes().await.unwrap();
+    assert_eq!(bytes.as_ref(), b"coffee\n", "the original S3 key is readable");
+    assert_eq!(remote_size(&session, "/key-encoding/café.txt").await.unwrap(), 7);
+    let dir = scratch("s3-unicode");
+    let mgr = Arc::new(TransferManager::new());
+    let (t, _, _) = download(&mgr, &session, "/key-encoding/café.txt", &dir).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    assert_eq!(std::fs::read(dir.join("café.txt")).unwrap(), b"coffee\n");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_azure_parallel_round_trip() {

@@ -527,7 +527,7 @@ async fn reconcile_inner(
 
     let warning = apply_safety(&mut plan, pair, source_available);
 
-    if plan.copies.is_empty() && plan.deletes.is_empty() {
+    if plan.copies.is_empty() && plan.deletes.is_empty() && plan.directories.is_empty() {
         // Nothing to transfer — but still snapshot the source so a first run
         // seeds the index (later same-size edits become detectable) and a delete
         // prunes its row.
@@ -700,6 +700,11 @@ fn apply_safety(plan: &mut SyncPlan, pair: &SyncPair, source_available: bool) ->
     if !pair.exclude.is_empty() {
         plan.copies.retain(|c| !is_excluded(&c.relative, &pair.exclude));
         plan.deletes.retain(|d| !is_excluded(&d.relative, &pair.exclude));
+        let destination_root = match pair.direction {
+            SyncDirection::LocalToRemote => &plan.remote_root,
+            SyncDirection::RemoteToLocal => &plan.local_root,
+        };
+        plan.directories.retain(|d| !is_excluded(&crate::scan::relative_of(destination_root, d), &pair.exclude));
         plan.total_bytes = plan.copies.iter().map(|c| c.size).sum();
     }
 

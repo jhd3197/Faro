@@ -65,6 +65,7 @@ enum Cmd {
     /// Copy a file from one location to another.
     Cp {
         source: String,
+        /// Destination filename or directory. End remote directories with `/`.
         destination: String,
     },
 
@@ -994,14 +995,18 @@ async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str) -> Result<()> {
             let profile = find_profile(store, &profile_name).await?;
             let session = open_session(&profile).await?;
             let dest_parent = parent_of(&dest);
-            let local_name = basename(&local_path);
-            upload_file(&session, &local_path, &dest_parent, &local_name).await?;
+            let name = if dest.ends_with('/') { basename(&local_path) } else { basename(&dest) };
+            let parent = if dest.ends_with('/') { dest.trim_end_matches('/').to_string() } else { dest_parent };
+            upload_file(&session, &local_path, &parent, &name).await?;
         }
         // download: remote → local
-        (Target::Remote { profile_name, path: src }, Target::Local(local_dir)) => {
+        (Target::Remote { profile_name, path: src }, Target::Local(destination)) => {
             let profile = find_profile(store, &profile_name).await?;
             let session = open_session(&profile).await?;
-            download_file(&session, &src, &local_dir).await?;
+            let target = if std::path::Path::new(&destination).is_dir() || destination.ends_with(['/', '\\']) {
+                PathBuf::from(&destination).join(basename(&src))
+            } else { PathBuf::from(&destination) };
+            download_file_to(&session, &src, &target).await?;
         }
         // remote → remote: not supported across profiles in v1.1.
         (Target::Remote { .. }, Target::Remote { .. }) => {
@@ -1130,11 +1135,17 @@ async fn cmd_sync(
         return Ok(());
     }
 
-    if plan.copies.is_empty() && plan.deletes.is_empty() {
+    if plan.copies.is_empty() && plan.deletes.is_empty() && plan.directories.is_empty() {
         eprintln!("Already in sync.");
         return Ok(());
     }
 
+    for directory in &plan.directories {
+        match direction {
+            Dir::Push => remote_fs.create_dir(directory).await?,
+            Dir::Pull => tokio::fs::create_dir_all(directory).await?,
+        }
+    }
     let bar = ProgressBar::new(plan.copies.len() as u64);
     bar.set_style(
         ProgressStyle::with_template("{bar:30.cyan/blue} {pos:>3}/{len:3} {msg}")
@@ -1163,9 +1174,7 @@ async fn cmd_sync(
             Dir::Push => remote_fs.as_ref(),
             Dir::Pull => local_fs.as_ref(),
         };
-        if let Err(e) = fs.delete(&d.path, false).await {
-            eprintln!("{} {}: {e}", warn("delete failed"), d.path);
-        }
+        fs.delete(&d.path, false).await.with_context(|| format!("sync deletion failed: {}", d.path))?;
     }
     eprintln!("Sync complete.");
     Ok(())
@@ -1264,6 +1273,9 @@ async fn cmd_diff(
     // Conventional diff exit code: 0 when identical, 1 when the trees differ.
     let s = &result.summary;
     let differ = s.only_in_a + s.only_in_b + s.different;
+    if result.entries.iter().any(|e| e.hash_error.is_some()) {
+        bail!("content comparison incomplete: one or more files could not be hashed");
+    }
     std::process::exit(if differ == 0 { 0 } else { 1 })
 }
 
@@ -1312,7 +1324,11 @@ fn print_diff_human(result: &faro_lib::diff::DiffResult, all: bool) {
     }
 
     if shown == 0 {
-        eprintln!("Trees are identical.");
+        if result.entries.iter().any(|e| e.hash_error.is_some()) {
+            eprintln!("Comparison incomplete: some files could not be hashed.");
+        } else {
+            eprintln!("Trees are identical.");
+        }
     }
 
     let s = &result.summary;
@@ -3254,7 +3270,7 @@ async fn upload_object(
 ) -> Result<()> {
     use tokio::io::AsyncReadExt;
     let key = remote_path.trim_start_matches('/');
-    let p = object_store::path::Path::from(key);
+    let p = object_store::path::Path::parse(key)?;
     let mut file = tokio::fs::File::open(local_path).await?;
     let meta = file.metadata().await?;
     if meta.len() <= 16 * 1024 * 1024 {
@@ -3267,36 +3283,59 @@ async fn upload_object(
         bar.inc(meta.len());
     } else {
         let mut upload = obj.store.put_multipart(&p).await?;
-        let mut buf = vec![0u8; 8 * 1024 * 1024];
-        loop {
-            let mut filled = 0;
-            while filled < buf.len() {
-                let n = file.read(&mut buf[filled..]).await?;
-                if n == 0 {
-                    break;
+        let result: Result<()> = tokio::select! {
+            result = async {
+                let mut buf = vec![0u8; 8 * 1024 * 1024];
+                loop {
+                    let mut filled = 0;
+                    while filled < buf.len() {
+                        let n = file.read(&mut buf[filled..]).await?;
+                        if n == 0 {
+                            break;
+                        }
+                        filled += n;
+                    }
+                    if filled == 0 {
+                        break;
+                    }
+                    let chunk = bytes::Bytes::copy_from_slice(&buf[..filled]);
+                    upload.put_part(chunk.into()).await?;
+                    bar.inc(filled as u64);
+                    if filled < buf.len() {
+                        break;
+                    }
                 }
-                filled += n;
+                upload.complete().await?;
+                Ok(())
+            } => result,
+            _ = tokio::signal::ctrl_c() => Err(anyhow!("upload canceled")),
+        };
+        if let Err(error) = result {
+            if let Err(abort) = upload.abort().await {
+                return Err(error.context(format!("multipart cleanup also failed: {abort}")));
             }
-            if filled == 0 {
-                break;
-            }
-            let chunk = bytes::Bytes::copy_from_slice(&buf[..filled]);
-            upload.put_part(chunk.into()).await?;
-            bar.inc(filled as u64);
-            if filled < buf.len() {
-                break;
-            }
+            return Err(error);
         }
-        upload.complete().await?;
     }
     Ok(())
 }
 
 async fn download_file(session: &Session, remote_path: &str, local_dir: &str) -> Result<()> {
-    let local_dir_path = PathBuf::from(local_dir);
-    tokio::fs::create_dir_all(&local_dir_path).await.ok();
     let name = basename(remote_path);
-    let final_path = local_dir_path.join(&name);
+    download_file_to(session, remote_path, &PathBuf::from(local_dir).join(name)).await
+}
+
+async fn download_file_to(session: &Session, remote_path: &str, final_path: &std::path::Path) -> Result<()> {
+    let name = basename(remote_path);
+    if let Some(parent) = final_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let target = final_path.to_path_buf();
+    let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    // RAII removes the staged copy on errors. Persist replaces the destination
+    // atomically only after the complete download is flushed and synced.
+    let staged = tempfile::Builder::new().prefix(".faro-cli-").suffix(".faro-part").tempfile_in(parent)?;
+    let final_path = staged.path().to_path_buf();
 
     let bar = make_bar(0, &name);
 
@@ -3336,16 +3375,20 @@ async fn download_file(session: &Session, remote_path: &str, local_dir: &str) ->
         Session::Object(obj) => {
             use tokio::io::AsyncWriteExt;
             let key = remote_path.trim_start_matches('/');
-            let p = object_store::path::Path::from(key);
+            let p = object_store::path::Path::parse(key)?;
             let get = obj.store.get(&p).await?;
+            let expected = get.meta.size as u64;
+            let mut received = 0u64;
             let mut file = tokio::fs::File::create(&final_path).await?;
             let mut stream = get.into_stream();
-            while let Some(chunk) = stream.next().await {
+            while let Some(chunk) = tokio::time::timeout(std::time::Duration::from_secs(60), stream.next()).await.context("download stalled")? {
                 let chunk = chunk?;
+                received += chunk.len() as u64;
                 file.write_all(&chunk).await?;
                 bar.inc(chunk.len() as u64);
             }
             file.flush().await?;
+            if received != expected { bail!("incomplete download: received {received} of {expected} bytes"); }
         }
         Session::Webdav(_)
         | Session::Http(_)
@@ -3362,6 +3405,8 @@ async fn download_file(session: &Session, remote_path: &str, local_dir: &str) ->
         Session::Agent(_) => anyhow::bail!("faro-agent connections are not supported in the CLI"),
     }
 
+    staged.as_file().sync_all()?;
+    staged.persist(&target).map_err(|e| e.error).with_context(|| format!("place download {}", target.display()))?;
     bar.finish_with_message(format!("downloaded {name}"));
     Ok(())
 }
