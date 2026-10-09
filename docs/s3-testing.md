@@ -3,7 +3,8 @@
 The confirmed audit defects are fixed in this checkout. The expanded CLI audit
 passes **55/55 checks**, including injected failures. The app transfer runner
 also passes directory, Unicode, and 200 MiB multipart/resume tests. Changes
-are local; this document does not imply a released build contains them.
+are tracked in [PR #34](https://github.com/jhd3197/Faro/pull/34); this document
+does not imply a released build contains them.
 
 Final validation on Windows: 246 library tests passed (24 ignored; the known
 unrelated `ssh_keygen_accepts_generated_key` Windows ACL test was filtered),
