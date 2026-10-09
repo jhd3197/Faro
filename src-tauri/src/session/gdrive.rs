@@ -17,6 +17,9 @@ const DEFAULT_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 #[cfg(test)]
 mod safety_tests;
+mod transfer;
+#[cfg(test)]
+mod transfer_tests;
 
 pub const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 
@@ -239,6 +242,7 @@ pub async fn gdrive_connect(profile: &ConnectionProfile) -> Result<GDriveSession
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("Faro/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("building Google Drive HTTP client")?;

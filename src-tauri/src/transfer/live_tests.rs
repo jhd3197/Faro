@@ -650,3 +650,31 @@ async fn live_ftp_download_and_upload() {
     assert_eq!(sha_file(&down.join("mid-copy.bin")), sha_file(&local));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+#[ignore = "requires scripts/audit-gdrive.py"]
+async fn live_gdrive_app_round_trip() {
+    std::env::var("FARO_GDRIVE_MOCK_URL").expect("run scripts/audit-gdrive.py");
+    let mut p = profile("gdrive", "127.0.0.1", 0, "", "");
+    p.id = format!("drive-app-test-{}", Uuid::new_v4());
+    let service = crate::session::gdrive::GDRIVE_SERVICE;
+    crate::oauth::store_tokens(service,&p.id,&crate::oauth::TokenSet {
+        access_token:"ACCESS1".into(),refresh_token:None,expires_at:i64::MAX,
+    }).unwrap();
+    let gd = crate::session::gdrive::gdrive_connect(&p).await.unwrap();
+    // No refresh is needed; remove the isolated persisted credential immediately.
+    crate::oauth::delete_tokens(service,&p.id);
+    let session = Arc::new(Session::GDrive(Arc::new(gd)));
+    let dir = scratch("gdrive-app");
+    let local = dir.join("app.bin");
+    random_file(&local,20);
+    let mgr = Arc::new(TransferManager::new());
+    let (t,..) = upload(&mgr,&session,&local,"/app.bin").await;
+    assert_eq!(t.status,TransferStatus::Done,"{:?}",t.error);
+    let down = dir.join("down");
+    std::fs::create_dir(&down).unwrap();
+    let (t,..) = download(&mgr,&session,"/app.bin",&down).await;
+    assert_eq!(t.status,TransferStatus::Done,"{:?}",t.error);
+    assert_eq!(sha_file(&local),sha_file(&down.join("app.bin")));
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -3233,74 +3233,18 @@ impl TransferManager {
         local_path: &Path,
         remote_path: &str,
     ) -> Result<u64> {
-        use crate::session::gdrive::{basename, normalize, parent_of};
-
-        self.update(id, |t| t.status = TransferStatus::Transferring)
-            .await;
-
-        let size = tokio::fs::metadata(local_path)
-            .await
-            .with_context(|| format!("stat {}", local_path.display()))?
-            .len();
-        let norm = normalize(remote_path);
-        let name = basename(&norm).to_string();
-        let parent_id = session.folder_id(&parent_of(&norm)).await?;
-        let existing = session.find_child(&parent_id, &name).await?;
-        let bytes = tokio::fs::read(local_path)
-            .await
-            .with_context(|| format!("read {}", local_path.display()))?;
-        let token = session.access_token().await?;
-        self.checkpoint(id, size).await?;
-
-        let resp = if let Some((file_id, _)) = existing {
-            // Update the existing file's content in place.
-            session
-                .client
-                .patch(format!(
-                    "{}/files/{file_id}?uploadType=media",
-                    session.upload_base
-                ))
-                .bearer_auth(&token)
-                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-                .body(bytes)
-                .send()
-                .await
-                .with_context(|| format!("update {remote_path}"))?
-        } else {
-            // Create a new file: multipart/related metadata + media.
-            let boundary = format!("faro{}", Uuid::new_v4().simple());
-            let meta = serde_json::json!({ "name": name, "parents": [parent_id] });
-            let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 256);
-            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-            body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
-            body.extend_from_slice(meta.to_string().as_bytes());
-            body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
-            body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
-            body.extend_from_slice(&bytes);
-            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-            session
-                .client
-                .post(format!(
-                    "{}/files?uploadType=multipart&fields=id",
-                    session.upload_base
-                ))
-                .bearer_auth(&token)
-                .header(
-                    reqwest::header::CONTENT_TYPE,
-                    format!("multipart/related; boundary={boundary}"),
-                )
-                .body(body)
-                .send()
-                .await
-                .with_context(|| format!("create {remote_path}"))?
-        };
-
-        if !resp.status().is_success() {
-            let code = resp.status().as_u16();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("upload {remote_path} failed ({code}): {text}"));
-        }
-        self.update(id, |t| t.transferred = size).await;
+        self.update(id, |t| t.status = TransferStatus::Transferring).await;
+        let mut acknowledged = 0;
+        let size = session.upload_file(local_path, remote_path, |offset| {
+            let bytes = offset.saturating_sub(acknowledged);
+            acknowledged = offset;
+            async move {
+                self.checkpoint(id, bytes).await?;
+                self.progress(id, offset);
+                Ok(())
+            }
+        }).await?;
+        self.progress(id, size);
         Ok(size)
     }
 
