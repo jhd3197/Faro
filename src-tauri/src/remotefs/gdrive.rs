@@ -30,49 +30,34 @@ fn urlenc(s: &str) -> String {
 impl RemoteFs for GDriveFs {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>> {
         let folder_id = self.session.folder_id(path).await?;
-        let q = format!("'{}' in parents and trashed = false", folder_id);
         let mut out = Vec::new();
-        let mut page_token: Option<String> = None;
-        loop {
-            let mut url = format!(
-                "/files?q={}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum)&pageSize=200",
-                urlenc(&q)
-            );
-            if let Some(tok) = &page_token {
-                url.push_str(&format!("&pageToken={}", urlenc(tok)));
+        let mut names = std::collections::HashSet::new();
+        for f in self.session.children(&folder_id).await? {
+            let (entry, _, _) = entry_from_json(&f, path).context("invalid Drive directory entry")?;
+            if entry.name.contains('/') || matches!(entry.name.as_str(), "." | "..") {
+                anyhow::bail!("Drive name {:?} cannot be represented as a path", entry.name);
             }
-            let v = self.session.rpc(Method::GET, &url, None).await?;
-            if let Some(files) = v.get("files").and_then(|f| f.as_array()) {
-                for f in files {
-                    if let Some((entry, id, is_dir)) = entry_from_json(f, path) {
-                        // Warm the resolver cache for subfolders so navigating in
-                        // doesn't re-query.
-                        if is_dir {
-                            self.session.cache_path(&entry.path, &id);
-                        }
-                        out.push(entry);
-                    }
-                }
-            }
-            match v.get("nextPageToken").and_then(|t| t.as_str()) {
-                Some(tok) => page_token = Some(tok.to_string()),
-                None => break,
-            }
+            if !names.insert(entry.name.clone()) { anyhow::bail!("ambiguous Google Drive name {:?}", entry.name); }
+            out.push(entry);
         }
         Ok(out)
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        if normalize(from) == "/" || normalize(to) == "/" { anyhow::bail!("cannot rename the Drive root"); }
         let (id, _) = self
             .session
             .resolve_item(from)
             .await?
             .with_context(|| format!("{from}: not found"))?;
+        if normalize(from) == normalize(to) { return Ok(()); }
+        if self.session.resolve_item(to).await?.is_some() { anyhow::bail!("destination already exists: {to}"); }
+        if normalize(to).starts_with(&format!("{}/", normalize(from))) { anyhow::bail!("cannot move a folder into itself"); }
         let from_parent = self.session.folder_id(&parent_of(&normalize(from))).await?;
         let to_parent = self.session.folder_id(&parent_of(&normalize(to))).await?;
         let new_name = basename(&normalize(to)).to_string();
 
-        let mut url = format!("/files/{id}?fields=id");
+        let mut url = format!("/files/{id}?fields=id&supportsAllDrives=true");
         if from_parent != to_parent {
             url.push_str(&format!(
                 "&addParents={}&removeParents={}",
@@ -85,26 +70,38 @@ impl RemoteFs for GDriveFs {
             .rpc(Method::PATCH, &url, Some(&body))
             .await
             .with_context(|| format!("move {from} -> {to}"))?;
-        self.session.clear_cache();
         Ok(())
     }
 
-    async fn delete(&self, path: &str, _recursive: bool) -> Result<()> {
-        let (id, _) = self
+    async fn delete(&self, path: &str, recursive: bool) -> Result<()> {
+        if normalize(path) == "/" { anyhow::bail!("cannot delete the Drive root"); }
+        let (id, is_folder) = self
             .session
             .resolve_item(path)
             .await?
             .with_context(|| format!("{path}: not found"))?;
+        if is_folder {
+            if recursive {
+                // Complete the traversal before a destructive provider request.
+                crate::scan::walk_tree(self, path).await?;
+            } else if !self.session.children(&id).await?.is_empty() {
+                anyhow::bail!("directory is not empty: {path}; recursive deletion is required");
+            }
+        }
         // DELETE removes a folder and its contents permanently.
         self.session
-            .rpc(Method::DELETE, &format!("/files/{id}"), None)
+            .rpc(Method::DELETE, &format!("/files/{id}?supportsAllDrives=true"), None)
             .await
             .with_context(|| format!("delete {path}"))?;
-        self.session.clear_cache();
         Ok(())
     }
 
     async fn create_dir(&self, path: &str) -> Result<()> {
+        if normalize(path) == "/" { return Ok(()); }
+        if let Some((_, folder)) = self.session.resolve_item(path).await? {
+            if folder { return Ok(()); }
+            anyhow::bail!("a file already exists at {path}");
+        }
         let parent_id = self.session.folder_id(&parent_of(&normalize(path))).await?;
         let body = serde_json::json!({
             "name": basename(&normalize(path)),
@@ -112,10 +109,9 @@ impl RemoteFs for GDriveFs {
             "parents": [parent_id],
         });
         self.session
-            .rpc(Method::POST, "/files?fields=id", Some(&body))
+            .rpc(Method::POST, "/files?fields=id&supportsAllDrives=true", Some(&body))
             .await
             .with_context(|| format!("create dir {path}"))?;
-        self.session.clear_cache();
         Ok(())
     }
 
@@ -322,7 +318,6 @@ mod tests {
             .await
             .expect("upload");
         assert!(put.status().is_success(), "upload {}", put.status());
-        session.clear_cache();
 
         let entries = fs.list_dir("/faro-test/sub").await.expect("list");
         let hello = entries.iter().find(|e| e.name == "hello.txt").expect("hello");

@@ -650,3 +650,72 @@ async fn live_ftp_download_and_upload() {
     assert_eq!(sha_file(&down.join("mid-copy.bin")), sha_file(&local));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+#[ignore = "requires scripts/audit-gdrive.py"]
+async fn live_gdrive_app_round_trip() {
+    std::env::var("FARO_GDRIVE_MOCK_URL").expect("run scripts/audit-gdrive.py");
+    let mut p = profile("gdrive", "127.0.0.1", 0, "", "");
+    p.id = format!("drive-app-test-{}", Uuid::new_v4());
+    let service = crate::session::gdrive::GDRIVE_SERVICE;
+    crate::oauth::store_tokens(service,&p.id,&crate::oauth::TokenSet {
+        access_token:"ACCESS1".into(),refresh_token:None,expires_at:i64::MAX,
+    }).unwrap();
+    let gd = crate::session::gdrive::gdrive_connect(&p).await.unwrap();
+    // No refresh is needed; remove the isolated persisted credential immediately.
+    crate::oauth::delete_tokens(service,&p.id);
+    let session = Arc::new(Session::GDrive(Arc::new(gd)));
+    let dir = scratch("gdrive-app");
+    let local = dir.join("app.bin");
+    random_file(&local,20);
+    let mgr = Arc::new(TransferManager::new());
+    let (t,..) = upload(&mgr,&session,&local,"/app.bin").await;
+    assert_eq!(t.status,TransferStatus::Done,"{:?}",t.error);
+    let down = dir.join("down");
+    std::fs::create_dir(&down).unwrap();
+    let (t,..) = download(&mgr,&session,"/app.bin",&down).await;
+    assert_eq!(t.status,TransferStatus::Done,"{:?}",t.error);
+    assert_eq!(sha_file(&local),sha_file(&down.join("app.bin")));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/audit-ftp-sftp.py --live"]
+async fn live_ftp_sftp_overwrite_safety() {
+    let ftp = ftp_session().await.expect("FTP fixture required");
+    let sftp = sftp_session().await.expect("SFTP fixture required");
+    for session in [&ftp, &sftp] {
+        for policy in [OverwritePolicy::Skip, OverwritePolicy::Rename] {
+            assert!(remote_resolve(session,"/guard/blocked/existing",policy).await.is_err(),
+                "permission failure must not imply missing destination");
+        }
+    }
+    let (_, skip) = remote_resolve(&sftp,"/dangling",OverwritePolicy::Skip).await.unwrap();
+    assert!(skip,"a dangling link is still an existing destination");
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/audit-ftp-sftp.py --live"]
+async fn live_ftps_app_round_trip() {
+    let v = env("FARO_LIVE_FTPS").expect("FTPS fixture required");
+    let p = profile("ftps", &v[0], v[1].parse().unwrap(), &v[2], &v[3]);
+    let ftp = crate::session::ftp::ftp_connect(&p, Arc::new(AcceptAll)).await.unwrap();
+    let session = Arc::new(Session::Ftp(Arc::new(ftp)));
+    let dir = scratch("ftps-app");
+    let local = dir.join("app.bin");
+    random_file(&local, 20);
+    let mgr = Arc::new(TransferManager::new());
+    let (t, ..) = upload(&mgr, &session, &local, "/app.bin").await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    let down = dir.join("down");
+    std::fs::create_dir(&down).unwrap();
+    let (t, ..) = download(&mgr, &session, "/app.bin", &down).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    assert_eq!(sha_file(&local), sha_file(&down.join("app.bin")));
+    let fs = crate::remotefs::ftp::FtpFs::new(match session.as_ref() {
+        Session::Ftp(ftp) => ftp.clone(),
+        _ => unreachable!(),
+    });
+    crate::remotefs::RemoteFs::delete(&fs, "/app.bin", false).await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}

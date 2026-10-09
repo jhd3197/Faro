@@ -29,6 +29,11 @@ Also fixed: in active mode the accepted data socket is switched back to
 blocking. On Windows it inherits the listener's non-blocking mode, so every
 active-mode transfer failed with WouldBlock (surfacing as `BadResponse`).
 
-With no codec set, behaviour matches upstream byte for byte. To move to a
-newer suppaftp, re-apply these changes or drop the patch once upstream
-grows an equivalent.
+Rustls shutdown now flushes `close_notify`, half-closes the TCP writer, and
+drains the peer's TLS shutdown with a two-second limit. On Windows, closing
+with unread TLS session tickets could reset the data connection and truncate
+an upload. `scripts/audit-ftp-sftp.py --live` covers encrypted CLI and app
+transfers against a local FTPS server.
+
+With no codec set, text encoding matches upstream. When updating suppaftp,
+retain these fixes until equivalent behavior is verified upstream.

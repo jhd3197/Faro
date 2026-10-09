@@ -3228,11 +3228,16 @@ async fn upload_file(
         Session::Object(obj) => {
             upload_object(obj.clone(), local_path, &remote_path, &bar).await?
         }
+        Session::GDrive(gd) => {
+            gd.upload_file(std::path::Path::new(local_path), &remote_path, |offset| {
+                bar.set_position(offset);
+                std::future::ready(Ok(()))
+            }).await?;
+        }
         Session::Webdav(_)
         | Session::Http(_)
         | Session::Dropbox(_)
         | Session::OneDrive(_)
-        | Session::GDrive(_)
         | Session::Box(_)
         | Session::Shopify(_)
         | Session::HubSpot(_)
@@ -3390,11 +3395,28 @@ async fn download_file_to(session: &Session, remote_path: &str, final_path: &std
             file.flush().await?;
             if received != expected { bail!("incomplete download: received {received} of {expected} bytes"); }
         }
+        Session::GDrive(gd) => {
+            use tokio::io::AsyncWriteExt;
+            let expected = gd.size(remote_path).await?;
+            let (file_id, _) = gd.resolve_item(remote_path).await?.context("Drive file not found")?;
+            let response = gd.get_stream(&format!("/files/{file_id}?alt=media&supportsAllDrives=true")).await?;
+            let mut stream = response.bytes_stream();
+            let mut file = tokio::fs::File::create(&final_path).await?;
+            let mut received = 0;
+            while let Some(chunk) = tokio::time::timeout(std::time::Duration::from_secs(60), stream.next()).await.context("Drive download stalled")? {
+                let chunk = chunk?;
+                received += chunk.len() as u64;
+                if received > expected { bail!("Drive file changed during download"); }
+                file.write_all(&chunk).await?;
+                bar.inc(chunk.len() as u64);
+            }
+            file.flush().await?;
+            if received != expected { bail!("incomplete Drive download: {received} of {expected} bytes"); }
+        }
         Session::Webdav(_)
         | Session::Http(_)
         | Session::Dropbox(_)
         | Session::OneDrive(_)
-        | Session::GDrive(_)
         | Session::Box(_)
         | Session::Shopify(_)
         | Session::HubSpot(_)

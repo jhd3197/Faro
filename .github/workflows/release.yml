@@ -1,6 +1,6 @@
 name: release
 
-# RustDesk-style "push to main → downloadable release".
+# Push to main → downloadable release.
 #
 # Every push to main cuts the next patch version: we bump the manifests, tag
 # it, and build the Faro desktop app (macOS universal, Windows, Linux) plus the
@@ -38,6 +38,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.ver.outputs.tag }}
+      release_id: ${{ steps.release.outputs.id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,10 +47,12 @@ jobs:
       - name: Compute version
         id: ver
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            version="$REQUESTED_VERSION"
           else
             last="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' \
                     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
@@ -61,6 +64,7 @@ jobs:
               version="${MA}.${MI}.$((PA + 1))"
             fi
           fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid release version'; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version"    >> "$GITHUB_OUTPUT"
           echo "Releasing v$version"
@@ -98,16 +102,20 @@ jobs:
           fi
 
       - name: Open draft release
+        id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ steps.ver.outputs.tag }}"
-          gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
-            gh release create "$tag" --repo "${{ github.repository }}" \
+          node scripts/release-tools.mjs gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            node scripts/release-tools.mjs gh release create "$tag" --repo "${{ github.repository }}" \
               --draft --title "Faro $tag" \
               --notes "⏳ Build in progress — downloads appear here in ~10 minutes."
+          # gh release view also finds drafts, which the REST tag endpoint omits.
+          id=$(node scripts/release-tools.mjs gh release view "$tag" --repo "${{ github.repository }}" --json databaseId --jq .databaseId)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
 
       - name: Attach the headless one-line installer
         env:
@@ -118,7 +126,7 @@ jobs:
           tag="${{ steps.ver.outputs.tag }}"
           # A version-pinned copy so `.../download/<tag>/install-agentd.sh` and
           # `.../releases/latest/download/install-agentd.sh` both resolve.
-          gh release upload "$tag" scripts/install-agentd.sh \
+          node scripts/release-tools.mjs gh release upload "$tag" scripts/install-agentd.sh \
             --repo "${{ github.repository }}" --clobber
 
   # ---- 2. Desktop app (macOS universal, Windows, Linux) -------------------
@@ -154,6 +162,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          cache-on-failure: true
 
       - name: macOS — add universal targets
         if: matrix.platform.runner == 'macos-latest'
@@ -203,6 +212,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          retryAttempts: 3
           tagName: ${{ needs.prepare.outputs.tag }}
           releaseName: 'Faro ${{ needs.prepare.outputs.tag }}'
           releaseDraft: true
@@ -237,13 +248,13 @@ jobs:
           mkdir -p dist-portable/Faro-portable
           cp "$exe" dist-portable/Faro-portable/Faro.exe
           (cd dist-portable && 7z a "Faro_${version}_x64-portable.zip" Faro-portable >/dev/null)
-          gh release upload "$tag" "dist-portable/Faro_${version}_x64-portable.zip" \
+          node scripts/release-tools.mjs gh release upload "$tag" "dist-portable/Faro_${version}_x64-portable.zip" \
             --repo "${{ github.repository }}" --clobber
 
   # ---- 3. Standalone CLI binary (all platforms) ---------------------------
   cli:
-    needs: [prepare, gui]
-    name: cli (${{ matrix.runner }})
+    needs: prepare
+    name: cli (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -275,6 +286,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          cache-on-failure: true
 
       # faro-cli links faro_lib, which pulls in tauri — so the Linux build needs
       # the same webkit/gtk system libs the GUI does, even though the CLI itself
@@ -316,18 +328,19 @@ jobs:
             cp "src-tauri/target/${{ matrix.target }}/release/faro-cli" "dist/${{ matrix.asset }}"
           fi
 
-      - name: Upload to draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          gh release upload "${{ needs.prepare.outputs.tag }}" "dist/${{ matrix.asset }}" \
-            --repo "${{ github.repository }}" --clobber
+      - name: Save binary for publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binary-${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
 
   # ---- 3b. Faro Agent daemon binary (all platforms) -----------------------
   daemon:
-    needs: [prepare, gui]
-    name: daemon (${{ matrix.runner }})
+    needs: prepare
+    name: daemon (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -359,6 +372,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          cache-on-failure: true
 
       # faro-agentd depends ONLY on faro-agent-proto (no faro_lib / tauri), so
       # unlike the cli job it needs no webkit/gtk system libs and no dist stub.
@@ -376,19 +390,54 @@ jobs:
             cp "src-tauri/target/${{ matrix.target }}/release/faro-agentd" "dist/${{ matrix.asset }}"
           fi
 
-      - name: Upload to draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          gh release upload "${{ needs.prepare.outputs.tag }}" "dist/${{ matrix.asset }}" \
-            --repo "${{ github.repository }}" --clobber
+      - name: Save binary for publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binary-${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
 
   # ---- 4. Write the final notes and publish the release -------------------
   publish:
     needs: [prepare, gui, cli, daemon]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Download built CLI and daemon binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-binary-*
+          path: binaries
+          merge-multiple: true
+
+      # A failed upload now requires rerunning only this job, not compiling again.
+      - name: Upload binaries to the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for asset in binaries/*; do
+            test -s "$asset"
+            node scripts/release-tools.mjs gh release upload "${{ needs.prepare.outputs.tag }}" "$asset" \
+              --repo "${{ github.repository }}" --clobber
+          done
+
+      - name: Verify all platform downloads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-tools.mjs gh release view "${{ needs.prepare.outputs.tag }}" \
+            --repo "${{ github.repository }}" --json tagName,assets > release-assets.json
+          node scripts/release-tools.mjs verify-assets release-assets.json "${{ needs.prepare.outputs.version }}"
+
       - name: Generate SHA256 checksums for all assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -397,10 +446,12 @@ jobs:
           set -euo pipefail
           tag="${{ needs.prepare.outputs.tag }}"
           mkdir -p assets
-          gh release download "$tag" --repo "${{ github.repository }}" \
+          node scripts/release-tools.mjs gh release download "$tag" --repo "${{ github.repository }}" \
             --dir assets --clobber
+          # A publication retry must not include the previous checksum file in itself.
+          rm -f assets/SHA256SUMS.txt
           (cd assets && sha256sum -- * > ../SHA256SUMS.txt)
-          gh release upload "$tag" SHA256SUMS.txt \
+          node scripts/release-tools.mjs gh release upload "$tag" SHA256SUMS.txt \
             --repo "${{ github.repository }}" --clobber
 
       - name: Compose download notes & publish
@@ -430,8 +481,7 @@ jobs:
               faro-agentd-*)           daemon="${daemon}${row}" ;;
               faro-cli-*)              cli="${cli}${row}" ;;
             esac
-          done < <(gh release view "$tag" --repo "$REPO" \
-                    --json assets -q '.assets[] | "\(.name)\t\(.size)"')
+          done < <(jq -r '.assets[] | "\(.name)\t\(.size)"' release-assets.json)
 
           {
             echo "## Faro ${tag}"
@@ -504,5 +554,5 @@ jobs:
             echo "See the [README](https://github.com/${REPO}/blob/main/README.md) for the full feature tour and the Agent Bridge setup."
           } > notes.md
 
-          gh release edit "$tag" --repo "$REPO" \
+          node scripts/release-tools.mjs gh release edit "$tag" --repo "$REPO" \
             --notes-file notes.md --draft=false --latest

@@ -660,27 +660,7 @@ pub(crate) async fn upload_from(
             }
         }
         Session::GDrive(gd) => {
-            // Edit-in-place always targets an existing file: update its media.
-            let (file_id, _) = gd
-                .resolve_item(remote_path)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("{remote_path}: not found"))?;
-            let token = gd.access_token().await?;
-            let bytes = tokio::fs::read(&local).await?;
-            let resp = gd
-                .client
-                .patch(format!("{}/files/{file_id}?uploadType=media", gd.upload_base))
-                .bearer_auth(&token)
-                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-                .body(bytes)
-                .send()
-                .await
-                .with_context(|| format!("gdrive update {remote_path}"))?;
-            if !resp.status().is_success() {
-                let code = resp.status().as_u16();
-                let text = resp.text().await.unwrap_or_default();
-                return Err(anyhow::anyhow!("gdrive upload {remote_path} ({code}): {text}"));
-            }
+            gd.upload_existing_file(&local, remote_path, |_| std::future::ready(Ok(()))).await?;
         }
         Session::Box(bx) => {
             // Edit-in-place uploads a new version of the existing file.

@@ -81,9 +81,9 @@ impl RemoteFs for SftpFs {
         let sftp_cell = self.session.ensure_sftp().await?;
         let sftp = sftp_cell.lock().await;
 
-        // Probe what we're dealing with.
+        // Delete the selected link itself, never its target directory.
         let meta = sftp
-            .metadata(path)
+            .symlink_metadata(path)
             .await
             .with_context(|| format!("stat {path}"))?;
 

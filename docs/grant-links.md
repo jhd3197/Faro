@@ -17,8 +17,7 @@ touches the owner's own credentials.
 This document is the **open protocol spec** — `Faro Grant Protocol v1`. It is
 deliberately issuer-agnostic: ServerKit is the reference issuer, but anything
 that can serve two HTTPS endpoints and install an `authorized_keys` line can
-issue grants. See `docs/plans/19_delegated-access-grants.md` for the
-implementation plan.
+issue grants.
 
 ## Security model — same rules as deep links, plus tokens
 
@@ -148,8 +147,7 @@ successful ones and reports the rest. On total failure, a non-200 with
    issue/redeem/revoke events.
 
 The reference issuer is the ServerKit extension
-[`serverkit-faro`](https://github.com/jhd3197/serverkit-faro) — see
-`docs/plans/19_delegated-access-grants.md` for its design.
+[`serverkit-faro`](https://github.com/jhd3197/serverkit-faro).
 
 ## What Faro does with a manifest (client behavior)
 

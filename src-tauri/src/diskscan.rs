@@ -481,10 +481,10 @@ async fn scan_object(
     use object_store::path::Path as ObjPath;
     use object_store::ObjectStore;
 
-    if obj.profile.protocol == "s3" {
+    if crate::session::object::namespace::Namespace::supported(&obj.profile.protocol) {
         let prefix = root.trim_matches('/');
         let prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
-        let listing = crate::session::object::s3_namespace::S3Namespace::new(&obj.profile)?.list(&prefix, false).await?;
+        let listing = crate::session::object::namespace::Namespace::new(&obj.profile)?.list(&prefix, false).await?;
         let mut tree = scan::ScanTree::default();
         for o in listing.objects {
             if info.cancel.is_cancelled() { anyhow::bail!("scan canceled"); }

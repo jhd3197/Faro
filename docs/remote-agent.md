@@ -301,6 +301,4 @@ The desktop installer currently ships the GUI; `faro-agentd` and `faro-cli` are
 separate release downloads. Because the **embedded agent** (path 1) already
 removes the download for the common GUI-to-GUI case, and the **one-liner** (path
 2) covers headless servers, bundling the binaries as Tauri sidecars — with an
-in-app "install the CLI / run the agent as a service" opt-in — is a follow-up,
-tracked in `docs/plans/1_faro-agent-pairing-and-distribution.md` (Phase 3). It's
-staged separately so it can't destabilise the push-to-main release build.
+in-app "install the CLI / run the agent as a service" opt-in — is not yet included.

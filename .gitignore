@@ -37,8 +37,11 @@ Thumbs.db
 *.png
 /.claude/skills
 
-# Local one-shot execution runbook (not shipped; the plans beside it are)
-docs/plans/prompt.md
+# Local planning and PR drafts
+docs/plans/
+**/plans/
+*-pr-body.md
+pr-body.md
 
 # PR description drafts from the create-pr skill (local scratch, not shipped)
 .pr/

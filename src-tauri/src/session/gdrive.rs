@@ -3,8 +3,7 @@ use crate::profiles::ConnectionProfile;
 use anyhow::{anyhow, Context, Result};
 use reqwest::{Client, Method};
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::Mutex as StdMutex;
+use std::collections::HashSet;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -15,6 +14,12 @@ const DEFAULT_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const DEFAULT_UPLOAD_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
 const DEFAULT_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const DEFAULT_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+
+#[cfg(test)]
+mod safety_tests;
+mod transfer;
+#[cfg(test)]
+mod transfer_tests;
 
 pub const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 
@@ -47,9 +52,8 @@ pub fn gdrive_config() -> OAuthConfig {
     }
 }
 
-/// A live Google Drive connection. Drive is **ID-addressed**, so this session
-/// carries a path→file-id resolver cache; every RemoteFs op resolves the path to
-/// an id first. The cache is cleared on any structural mutation to avoid stale ids.
+/// Resolve paths afresh: Drive permits duplicate names and external moves,
+/// so a cached path alone cannot safely identify a mutation target.
 pub struct GDriveSession {
     pub id: String,
     pub profile: ConnectionProfile,
@@ -57,8 +61,6 @@ pub struct GDriveSession {
     pub api_base: String,
     pub upload_base: String,
     token: RefreshingToken,
-    /// Faro path → Drive file id. `/` maps to the special id `root`.
-    cache: StdMutex<HashMap<String, String>>,
 }
 
 impl GDriveSession {
@@ -68,18 +70,6 @@ impl GDriveSession {
 
     pub async fn force_refresh(&self) -> Result<()> {
         self.token.force_refresh().await
-    }
-
-    pub fn clear_cache(&self) {
-        self.cache.lock().unwrap().clear();
-    }
-
-    /// Warm the resolver cache with a known path→id (used while listing).
-    pub fn cache_path(&self, faro_path: &str, id: &str) {
-        self.cache
-            .lock()
-            .unwrap()
-            .insert(normalize(faro_path), id.to_string());
     }
 
     /// Send a Drive request (bearer + one 401→refresh retry). `path` may be a
@@ -115,7 +105,7 @@ impl GDriveSession {
     pub async fn rpc(&self, method: Method, url: &str, body: Option<&Value>) -> Result<Value> {
         let resp = self.send(method, url, body).await?;
         let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.context("read Drive response")?;
         if !status.is_success() {
             return Err(anyhow!("drive {url} failed ({}): {text}", status.as_u16()));
         }
@@ -150,35 +140,57 @@ impl GDriveSession {
         Ok("Google Drive".to_string())
     }
 
-    /// Find a direct child of `parent_id` by name, returning `(id, is_folder)`.
+    /// Fetch every page or fail; a partial listing is unsafe for sync or delete.
+    pub async fn list_files(&self, query: &str) -> Result<Vec<Value>> {
+        let mut files = Vec::new();
+        let mut token: Option<String> = None;
+        let mut seen = HashSet::new();
+        loop {
+            let mut url = format!("/files?q={}&fields=nextPageToken,incompleteSearch,files(id,name,mimeType,size,modifiedTime,md5Checksum)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true", urlencode(query));
+            if let Some(t) = &token { url.push_str(&format!("&pageToken={}", urlencode(t))); }
+            let page = self.rpc(Method::GET, &url, None).await?;
+            if page.get("incompleteSearch").is_some_and(|v| v != &Value::Bool(false)) {
+                anyhow::bail!("Google Drive returned an incomplete search");
+            }
+            let entries = page.get("files").and_then(Value::as_array).context("Drive listing is missing files")?;
+            for entry in entries {
+                for field in ["id", "name", "mimeType"] {
+                    entry.get(field).and_then(Value::as_str).filter(|s| !s.is_empty())
+                        .with_context(|| format!("Drive listing has an invalid {field}"))?;
+                }
+            }
+            files.extend(entries.iter().cloned());
+            match page.get("nextPageToken") {
+                None => break,
+                Some(value) => {
+                    let next = value.as_str().filter(|s| !s.is_empty()).context("invalid Drive page token")?;
+                    if !seen.insert(next.to_string()) { anyhow::bail!("Google Drive repeated a page token"); }
+                    token = Some(next.to_string());
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    pub async fn children(&self, id: &str) -> Result<Vec<Value>> {
+        self.list_files(&format!("'{}' in parents and trashed = false", escape_q(id))).await
+    }
+
+    /// Find one unambiguous child; never choose an arbitrary duplicate.
     pub async fn find_child(&self, parent_id: &str, name: &str) -> Result<Option<(String, bool)>> {
         let q = format!(
             "'{}' in parents and name = '{}' and trashed = false",
-            parent_id,
+            escape_q(parent_id),
             escape_q(name)
         );
-        let url = format!(
-            "/files?q={}&fields=files(id,mimeType)&pageSize=2",
-            urlencode(&q)
-        );
-        let v = self.rpc(Method::GET, &url, None).await?;
-        let first = v
-            .get("files")
-            .and_then(|f| f.as_array())
-            .and_then(|a| a.first());
-        Ok(first.map(|f| {
-            let id = f.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-            let is_folder = f.get("mimeType").and_then(|m| m.as_str()) == Some(FOLDER_MIME);
-            (id, is_folder)
-        }))
+        let files = self.list_files(&q).await?;
+        if files.len() > 1 { anyhow::bail!("ambiguous Google Drive name {name:?}: rename duplicate items in Drive first"); }
+        Ok(files.first().map(|f| (f["id"].as_str().unwrap().to_string(), f["mimeType"] == FOLDER_MIME)))
     }
 
     /// Resolve a Faro directory path to a Drive folder id (`root` for `/`).
     pub async fn folder_id(&self, faro_path: &str) -> Result<String> {
         let norm = normalize(faro_path);
-        if let Some(id) = self.cache.lock().unwrap().get(&norm).cloned() {
-            return Ok(id);
-        }
         if norm == "/" {
             return Ok("root".to_string());
         }
@@ -186,21 +198,10 @@ impl GDriveSession {
         let mut acc = String::new();
         for seg in norm.trim_matches('/').split('/') {
             acc = format!("{acc}/{seg}");
-            let cached = self.cache.lock().unwrap().get(&acc).cloned();
-            id = match cached {
-                Some(c) => c,
-                None => {
-                    let (child_id, is_folder) = self
-                        .find_child(&id, seg)
-                        .await?
-                        .ok_or_else(|| anyhow!("{faro_path}: no such folder"))?;
-                    if !is_folder {
-                        return Err(anyhow!("{acc} is a file, not a folder"));
-                    }
-                    self.cache.lock().unwrap().insert(acc.clone(), child_id.clone());
-                    child_id
-                }
-            };
+            let (child_id, is_folder) = self.find_child(&id, seg).await?
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, format!("{faro_path}: no such folder")))?;
+            if !is_folder { return Err(anyhow!("{acc} is a file, not a folder")); }
+            id = child_id;
         }
         Ok(id)
     }
@@ -217,24 +218,16 @@ impl GDriveSession {
         self.find_child(&parent_id, name).await
     }
 
-    pub async fn size(&self, faro_path: &str) -> u64 {
-        if let Ok(Some((id, _))) = self.resolve_item(faro_path).await {
-            if let Ok(v) = self
-                .rpc(Method::GET, &format!("/files/{id}?fields=size"), None)
-                .await
-            {
-                return v
-                    .get("size")
-                    .and_then(|s| s.as_str())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-            }
-        }
-        0
+    pub async fn size(&self, faro_path: &str) -> Result<u64> {
+        let (id, is_folder) = self.resolve_item(faro_path).await?.context("Drive file not found")?;
+        if is_folder { anyhow::bail!("cannot read a Drive folder as a file"); }
+        let v = self.rpc(Method::GET, &format!("/files/{id}?fields=size&supportsAllDrives=true"), None).await?;
+        v.get("size").and_then(Value::as_str).context("Drive item has no binary size; export is required")?
+            .parse().context("invalid Drive file size")
     }
 
-    pub async fn exists(&self, faro_path: &str) -> bool {
-        matches!(self.resolve_item(faro_path).await, Ok(Some(_)))
+    pub async fn exists(&self, faro_path: &str) -> Result<bool> {
+        Ok(self.resolve_item(faro_path).await?.is_some())
     }
 }
 
@@ -249,6 +242,7 @@ pub async fn gdrive_connect(profile: &ConnectionProfile) -> Result<GDriveSession
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("Faro/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("building Google Drive HTTP client")?;
@@ -260,14 +254,13 @@ pub async fn gdrive_connect(profile: &ConnectionProfile) -> Result<GDriveSession
         api_base: env_or("FARO_GDRIVE_API_BASE", DEFAULT_API_BASE),
         upload_base: env_or("FARO_GDRIVE_UPLOAD_BASE", DEFAULT_UPLOAD_BASE),
         token: RefreshingToken::new(GDRIVE_SERVICE, &profile.id, gdrive_config(), tokens),
-        cache: StdMutex::new(HashMap::new()),
     })
 }
 
 // ---- path helpers ----
 
 pub fn normalize(faro: &str) -> String {
-    let t = faro.trim().trim_matches('/');
+    let t = faro.trim_matches('/');
     if t.is_empty() || t == "." {
         "/".to_string()
     } else {
