@@ -750,10 +750,10 @@ async fn name_object(
     cancel: &CancelToken,
 ) -> Result<Vec<SearchHit>> {
     let matcher = compiled.name.as_ref().expect("name search compiles a name matcher");
-    if obj.profile.protocol == "s3" {
+    if crate::session::object::namespace::Namespace::supported(&obj.profile.protocol) {
         let prefix = root.trim_matches('/');
         let prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
-        let listing = crate::session::object::s3_namespace::S3Namespace::new(&obj.profile)?.list(&prefix, false).await?;
+        let listing = crate::session::object::namespace::Namespace::new(&obj.profile)?.list(&prefix, false).await?;
         let mut entries = std::collections::BTreeMap::new();
         for o in listing.objects {
             let rel = o.key.strip_prefix(&prefix).context("S3 key outside search prefix")?;

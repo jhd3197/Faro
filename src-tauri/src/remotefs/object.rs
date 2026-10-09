@@ -8,8 +8,8 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 
 /// RemoteFs implementation for any object_store-backed session (S3, R2, B2,
-/// Azure Blob, …). S3 directories use exact trailing-slash marker keys;
-/// rename is copy then delete. Other stores retain their implicit prefixes.
+/// Azure Blob, …). S3 and Azure directories retain exact marker keys;
+/// rename completes every copy before deleting source keys.
 pub struct ObjectFs {
     session: Arc<ObjectSession>,
 }
@@ -68,12 +68,12 @@ fn entry_for_prefix(prefix: &str) -> DirEntry {
 impl RemoteFs for ObjectFs {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>> {
         let prefix = normalize_prefix(path);
-        if self.session.profile.protocol == "s3" {
-            let api = crate::session::object::s3_namespace::S3Namespace::new(&self.session.profile)?;
+        if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
+            let api = crate::session::object::namespace::Namespace::new(&self.session.profile)?;
             let prefix = if prefix.is_empty() { prefix } else { format!("{prefix}/") };
             let listing = api.list(&prefix, true).await?;
             if !prefix.is_empty() && listing.objects.is_empty() && listing.prefixes.is_empty() {
-                return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("S3 prefix {prefix} does not exist")).into());
+                return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Object prefix {prefix} does not exist")).into());
             }
             let mut entries = Vec::new();
             for p in listing.prefixes {
@@ -133,8 +133,8 @@ impl RemoteFs for ObjectFs {
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
-        if self.session.profile.protocol == "s3" {
-            let api = crate::session::object::s3_namespace::S3Namespace::new(&self.session.profile)?;
+        if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
+            let api = crate::session::object::namespace::Namespace::new(&self.session.profile)?;
             let src = normalize_prefix(from);
             let dst = normalize_prefix(to);
             if src.is_empty() || dst.is_empty() { anyhow::bail!("cannot rename the bucket root"); }
@@ -152,7 +152,7 @@ impl RemoteFs for ObjectFs {
             // Finish all copies before deleting any source key. A failed copy
             // leaves the originals available for recovery.
             for o in &listing.objects {
-                let relative = o.key.strip_prefix(&src).context("S3 returned a key outside the requested prefix")?;
+                let relative = o.key.strip_prefix(&src).context("Object listing returned a key outside the requested prefix")?;
                 api.copy(&o.key, &format!("{dst}{relative}")).await?;
             }
             for o in listing.objects { api.delete(&o.key).await?; }
@@ -170,8 +170,8 @@ impl RemoteFs for ObjectFs {
 
     async fn delete(&self, path: &str, recursive: bool) -> Result<()> {
         let key = normalize_prefix(path);
-        if self.session.profile.protocol == "s3" {
-            let api = crate::session::object::s3_namespace::S3Namespace::new(&self.session.profile)?;
+        if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
+            let api = crate::session::object::namespace::Namespace::new(&self.session.profile)?;
             if !key.is_empty() && !path.ends_with('/') && api.exists(&key).await? {
                 return api.delete(&key).await;
             }
@@ -181,7 +181,7 @@ impl RemoteFs for ObjectFs {
             // Complete the listing before deleting: list errors cannot silently
             // produce an incomplete successful deletion.
             for o in listing.objects {
-                if !o.key.starts_with(&prefix) { anyhow::bail!("S3 returned a key outside the requested prefix"); }
+                if !o.key.starts_with(&prefix) { anyhow::bail!("Object listing returned a key outside the requested prefix"); }
                 api.delete(&o.key).await?;
             }
             return Ok(());
@@ -219,10 +219,10 @@ impl RemoteFs for ObjectFs {
     }
 
     async fn create_dir(&self, path: &str) -> Result<()> {
-        if self.session.profile.protocol == "s3" {
+        if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
             let key = normalize_prefix(path);
             if !key.is_empty() {
-                return crate::session::object::s3_namespace::S3Namespace::new(&self.session.profile)?
+                return crate::session::object::namespace::Namespace::new(&self.session.profile)?
                     .mkdir(&format!("{key}/")).await;
             }
         }
@@ -241,7 +241,7 @@ impl RemoteFs for ObjectFs {
             can_chmod: false,
             can_symlink: false,
             can_rename: true,
-            has_directories: self.session.profile.protocol == "s3",
+            has_directories: crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol),
             has_shell: false,
             has_commands: false,
             // Object stores expose an ETag per object — an opaque change token
