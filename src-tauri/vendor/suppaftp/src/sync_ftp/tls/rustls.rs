@@ -2,9 +2,10 @@
 //!
 //! Rustls implementation of tls types
 
-use std::io::Write;
-use std::net::TcpStream;
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpStream};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
@@ -89,8 +90,25 @@ impl Drop for RustlsStream {
                 error!("error in flushing rustls stream on drop: {err}");
             }
             self.stream.conn.send_close_notify();
-            if let Err(err) = self.stream.conn.write_tls(&mut self.stream.sock) {
+            if let Err(err) = self.stream.flush() {
                 error!("error in terminating rustls stream: {err}");
+                return;
+            }
+            // Closing a Windows socket with unread TLS session tickets can
+            // send RST and discard upload bytes still queued in TCP. Half-close
+            // the writer, then consume the peer's TLS shutdown before dropping
+            // the socket. Bound the wait for peers that never acknowledge it.
+            let _ = self.stream.sock.shutdown(Shutdown::Write);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut buf = [0u8; 1024];
+            while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                if remaining.is_zero() || self.stream.sock.set_read_timeout(Some(remaining)).is_err() {
+                    break;
+                }
+                match self.stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
             }
         }
     }

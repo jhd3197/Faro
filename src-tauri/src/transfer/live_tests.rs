@@ -693,3 +693,29 @@ async fn live_ftp_sftp_overwrite_safety() {
     let (_, skip) = remote_resolve(&sftp,"/dangling",OverwritePolicy::Skip).await.unwrap();
     assert!(skip,"a dangling link is still an existing destination");
 }
+
+#[tokio::test]
+#[ignore = "requires scripts/audit-ftp-sftp.py --live"]
+async fn live_ftps_app_round_trip() {
+    let v = env("FARO_LIVE_FTPS").expect("FTPS fixture required");
+    let p = profile("ftps", &v[0], v[1].parse().unwrap(), &v[2], &v[3]);
+    let ftp = crate::session::ftp::ftp_connect(&p, Arc::new(AcceptAll)).await.unwrap();
+    let session = Arc::new(Session::Ftp(Arc::new(ftp)));
+    let dir = scratch("ftps-app");
+    let local = dir.join("app.bin");
+    random_file(&local, 20);
+    let mgr = Arc::new(TransferManager::new());
+    let (t, ..) = upload(&mgr, &session, &local, "/app.bin").await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    let down = dir.join("down");
+    std::fs::create_dir(&down).unwrap();
+    let (t, ..) = download(&mgr, &session, "/app.bin", &down).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    assert_eq!(sha_file(&local), sha_file(&down.join("app.bin")));
+    let fs = crate::remotefs::ftp::FtpFs::new(match session.as_ref() {
+        Session::Ftp(ftp) => ftp.clone(),
+        _ => unreachable!(),
+    });
+    crate::remotefs::RemoteFs::delete(&fs, "/app.bin", false).await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
