@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+pub mod s3_namespace;
+
 /// A blob/object-store session. The same struct backs every cloud object
 /// store (S3, R2, B2, Azure Blob) — only the builder differs, and the
 /// resulting Arc<dyn ObjectStore> hides the implementation from everything

@@ -57,6 +57,8 @@ pub struct SyncPlan {
     pub local_root: String,
     pub remote_root: String,
     pub copies: Vec<SyncFile>,
+    #[serde(default)]
+    pub directories: Vec<String>,
     pub deletes: Vec<SyncDelete>,
     pub total_bytes: u64,
 }
@@ -117,12 +119,20 @@ pub(crate) async fn plan_indexed(
     index: Option<&std::collections::HashMap<String, crate::db::SyncStateRow>>,
     source_signal: crate::remotefs::ChangeSignal,
 ) -> Result<(SyncPlan, crate::scan::ScanTree)> {
-    let local_tree = crate::scan::walk_tree(local_fs, local_root).await?;
-    let remote_tree = crate::scan::walk_tree(remote_fs, remote_root).await?;
+    let (local_tree, remote_tree) = match direction {
+        SyncDirection::LocalToRemote => (
+            crate::scan::walk_tree(local_fs, local_root).await?,
+            crate::scan::destination_tree(remote_fs, remote_root).await?,
+        ),
+        SyncDirection::RemoteToLocal => (
+            crate::scan::destination_tree(local_fs, local_root).await?,
+            crate::scan::walk_tree(remote_fs, remote_root).await?,
+        ),
+    };
 
     // Borrow both trees only for the diff, then move the source tree out to hand
     // back to the caller (moving while `source`/`dest` still borrow would fail).
-    let (copies, deletes, total_bytes) = {
+    let (copies, deletes, directories, total_bytes) = {
         let (source, dest, dest_root) = match direction {
             SyncDirection::LocalToRemote => (&local_tree, &remote_tree, remote_root),
             SyncDirection::RemoteToLocal => (&remote_tree, &local_tree, local_root),
@@ -169,7 +179,14 @@ pub(crate) async fn plan_indexed(
                 }
             }
         }
-        (copies, deletes, total_bytes)
+        // A real filesystem cannot hold both file "a" and directory "a/".
+        // Refuse before copying or deleting when an object tree has a collision.
+        if source.directories.iter().any(|d| source.files.contains_key(d)) {
+            anyhow::bail!("source contains a file and directory with the same name");
+        }
+        let directories = source.directories.difference(&dest.directories)
+            .map(|rel| if rel.is_empty() { dest_root.to_string() } else { join(dest_root, rel) }).collect();
+        (copies, deletes, directories, total_bytes)
     };
 
     let source_tree = match direction {
@@ -184,6 +201,7 @@ pub(crate) async fn plan_indexed(
             local_root: local_root.to_string(),
             remote_root: remote_root.to_string(),
             copies,
+            directories,
             deletes,
             total_bytes,
         },
@@ -251,6 +269,30 @@ mod index_tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn missing_source_never_becomes_a_mirror_delete_plan() {
+        let dst = scratch("missing-source");
+        std::fs::write(dst.join("keep.txt"), b"keep").unwrap();
+        let absent = dst.join("not-present");
+        let result = plan(&LocalFs, &LocalFs, absent.to_str().unwrap(), dst.to_str().unwrap(),
+            SyncDirection::LocalToRemote, SyncStrategy::Mirror).await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(dst.join("keep.txt")).unwrap(), b"keep");
+        std::fs::remove_dir_all(dst).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_destination_and_empty_directories_are_planned() {
+        let src = scratch("empty-directories");
+        std::fs::create_dir_all(src.join("empty/nested")).unwrap();
+        let dst = src.with_extension("destination");
+        let planned = plan_stateless(&src, &dst).await;
+        assert_eq!(planned.directories.len(), 3, "root plus both empty folders");
+        assert!(planned.copies.is_empty());
+        assert!(!dst.exists(), "planning must not create the destination");
+        std::fs::remove_dir_all(src).unwrap();
     }
 
     async fn plan_with(

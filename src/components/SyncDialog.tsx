@@ -90,7 +90,7 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
   };
 
   const totalOps =
-    (plan?.copies.length ?? 0) + (plan?.deletes.length ?? 0);
+    (plan?.copies.length ?? 0) + (plan?.deletes.length ?? 0) + (plan?.directories?.length ?? 0);
 
   return (
     <div className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -312,12 +312,19 @@ function PlanSummary({ plan }: { plan: SyncPlan }) {
   const both = plan.copies.length > 0 && plan.deletes.length > 0;
   return (
     <div className="mx-4 mb-3 flex-1 overflow-hidden rounded-md border border-border bg-bg-subtle">
-      {plan.copies.length === 0 && plan.deletes.length === 0 ? (
+      {plan.copies.length === 0 && plan.deletes.length === 0 && !plan.directories?.length ? (
         <div className="px-4 py-10 text-center text-[12px] text-text-dim">
           Everything is already in sync.
         </div>
       ) : (
         <div className="max-h-[36vh] overflow-y-auto">
+          {!!plan.directories?.length && (
+            <PlanSection title={`Create folders (${plan.directories.length})`} icon={<ArrowRightLeft size={11} />}>
+              {plan.directories.slice(0, 200).map((directory) => (
+                <Row key={directory}><span className="min-w-0 flex-1 truncate font-mono">{directory}</span></Row>
+              ))}
+            </PlanSection>
+          )}
           {plan.copies.length > 0 && (
             <PlanSection
               title={`Copy (${plan.copies.length})`}

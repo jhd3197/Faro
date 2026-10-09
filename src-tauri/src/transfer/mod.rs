@@ -511,7 +511,7 @@ fn join_remote(dir: &str, name: &str) -> String {
 }
 
 fn basename(path: &str) -> String {
-    path.rsplit(|c| c == '/' || c == '\\')
+    path.trim_end_matches(['/', '\\']).rsplit(|c| c == '/' || c == '\\')
         .next()
         .unwrap_or(path)
         .to_string()
@@ -1069,7 +1069,7 @@ impl TransferManager {
         v
     }
 
-    async fn get(&self, id: &str) -> Option<Transfer> {
+    pub(crate) async fn get(&self, id: &str) -> Option<Transfer> {
         self.transfers.lock().await.get(id).cloned()
     }
 
@@ -2401,7 +2401,7 @@ impl TransferManager {
         self.update(id, |t| t.status = TransferStatus::Transferring)
             .await;
         let key = remote_path.trim_start_matches('/').to_string();
-        let p = object_store::path::Path::from(key.as_str());
+        let p = object_store::path::Path::parse(key.as_str())?;
         let local = local_identity(local_path).await?;
         let size = local.size;
         let mut file = tokio::fs::File::open(local_path)
@@ -3512,7 +3512,7 @@ pub(crate) async fn remote_size(session: &Arc<Session>, path: &str) -> Result<u6
         }
         Session::Object(obj) => {
             let key = path.trim_start_matches('/').to_string();
-            let p = object_store::path::Path::from(key.as_str());
+            let p = object_store::path::Path::parse(key.as_str())?;
             let meta = obj
                 .store
                 .head(&p)
@@ -3585,24 +3585,32 @@ async fn remote_resolve(
         }
         Session::Object(obj) => {
             let key = initial_remote.trim_start_matches('/').to_string();
-            let probe = object_store::path::Path::from(key.as_str());
-            let exists = obj.store.head(&probe).await.is_ok();
+            let probe = object_store::path::Path::parse(key.as_str())?;
+            if matches!(policy, OverwritePolicy::Overwrite) {
+                return Ok((initial_remote.to_string(), false));
+            }
+            let exists = match obj.store.head(&probe).await {
+                Ok(_) => true,
+                Err(object_store::Error::NotFound { .. }) => false,
+                Err(e) => return Err(e.into()),
+            };
             Ok(match policy {
                 OverwritePolicy::Overwrite => (initial_remote.to_string(), false),
                 OverwritePolicy::Skip => (initial_remote.to_string(), exists),
                 OverwritePolicy::Rename if !exists => (initial_remote.to_string(), false),
                 OverwritePolicy::Rename => {
-                    let mut candidate = initial_remote.to_string();
                     for i in 1..=999 {
                         let (stem, ext) = split_ext(initial_remote);
-                        candidate = format!("{stem}_{i}{ext}");
+                        let candidate = format!("{stem}_{i}{ext}");
                         let key = candidate.trim_start_matches('/');
-                        let p = object_store::path::Path::from(key);
-                        if obj.store.head(&p).await.is_err() {
-                            break;
+                        let p = object_store::path::Path::parse(key)?;
+                        match obj.store.head(&p).await {
+                            Err(object_store::Error::NotFound { .. }) => return Ok((candidate, false)),
+                            Err(e) => return Err(e.into()),
+                            Ok(_) => {},
                         }
                     }
-                    (candidate, false)
+                    anyhow::bail!("no unused object name found after 999 attempts")
                 }
             })
         }
@@ -4716,7 +4724,7 @@ mod tests {
     async fn put_object(store: &object_store::memory::InMemory, key: &str, data: &[u8]) {
         use object_store::ObjectStore;
         store
-            .put(&object_store::path::Path::from(key), bytes::Bytes::copy_from_slice(data).into())
+            .put(&object_store::path::Path::parse(key).unwrap(), bytes::Bytes::copy_from_slice(data).into())
             .await
             .unwrap();
     }

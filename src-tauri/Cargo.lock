@@ -1552,6 +1552,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "cloud-filter",
  "dirs 5.0.1",
  "encoding_rs",
@@ -1655,6 +1656,7 @@ dependencies = [
  "reqwest 0.12.28",
  "russh",
  "serde_json",
+ "tempfile",
  "tokio",
  "ureq",
 ]
@@ -4354,6 +4356,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
 dependencies = [
  "memchr",
+ "serde",
 ]
 
 [[package]]

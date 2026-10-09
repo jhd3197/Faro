@@ -1483,6 +1483,13 @@ pub(crate) async fn execute_sync_plan(
     let mut ids = Vec::new();
     let policy = crate::transfer::OverwritePolicy::Overwrite;
 
+    for directory in &plan.directories {
+        match plan.direction {
+            SyncDirection::LocalToRemote => remote_fs.create_dir(directory).await?,
+            SyncDirection::RemoteToLocal => tokio::fs::create_dir_all(directory).await?,
+        }
+    }
+
     for copy in plan.copies {
         let dest_parent = parent_of(&copy.destination_path);
         let id = match plan.direction {
@@ -1512,16 +1519,27 @@ pub(crate) async fn execute_sync_plan(
         ids.push(id);
     }
 
-    // Apply Mirror deletes after queueing transfers. We don't gate on
-    // transfer completion — the user already confirmed the plan — but we
-    // do execute deletes serially in this call so the function only
-    // returns once the destination is in its final shape.
+    // Do not remove destination files if a replacement copy failed.
+    if !plan.deletes.is_empty() {
+        for id in &ids {
+            loop {
+                let transfer = transfers.get(id).await.ok_or_else(|| anyhow::anyhow!("sync transfer disappeared"))?;
+                match transfer.status {
+                    crate::transfer::TransferStatus::Done | crate::transfer::TransferStatus::Skipped => break,
+                    crate::transfer::TransferStatus::Error | crate::transfer::TransferStatus::Canceled => {
+                        anyhow::bail!("sync copy failed; mirror deletions were not applied");
+                    }
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+                }
+            }
+        }
+    }
     for d in plan.deletes {
         let fs: &dyn RemoteFs = match plan.direction {
             SyncDirection::LocalToRemote => remote_fs.as_ref(),
             SyncDirection::RemoteToLocal => local_fs.as_ref(),
         };
-        let _ = fs.delete(&d.path, false).await; // best-effort
+        fs.delete(&d.path, false).await?;
     }
 
     Ok(ids)

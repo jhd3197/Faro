@@ -90,7 +90,7 @@ pub async fn remote_identity(session: &Arc<Session>, path: &str) -> Result<Remot
             let key = path.trim_start_matches('/');
             let meta = obj
                 .store
-                .head(&object_store::path::Path::from(key))
+                .head(&object_store::path::Path::parse(key)?)
                 .await
                 .with_context(|| format!("object head {key}"))?;
             RemoteIdentity {
@@ -159,7 +159,7 @@ pub async fn source_for(
         Session::Ssh(ssh) => Arc::new(SftpSource::new(ssh.clone(), path_s, ident.size)),
         Session::Object(obj) => Arc::new(ObjectSource {
             session: obj.clone(),
-            key: object_store::path::Path::from(path.trim_start_matches('/')),
+            key: object_store::path::Path::parse(path.trim_start_matches('/'))?,
             etag: ident.etag.clone(),
         }),
         Session::Webdav(dav) => {

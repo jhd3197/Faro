@@ -559,6 +559,7 @@ async fn name_walk(
     sink: &mut HitSink<'_>,
 ) -> usize {
     let matcher = compiled.name.as_ref().expect("name search compiles a name matcher");
+
     let normalized_root = root.trim_end_matches('/').to_string();
     let limit = scan::DEFAULT_CONCURRENCY;
 
@@ -749,13 +750,39 @@ async fn name_object(
     cancel: &CancelToken,
 ) -> Result<Vec<SearchHit>> {
     let matcher = compiled.name.as_ref().expect("name search compiles a name matcher");
-    let prefix_raw = root.trim().trim_matches('/');
+    if obj.profile.protocol == "s3" {
+        let prefix = root.trim_matches('/');
+        let prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+        let listing = crate::session::object::s3_namespace::S3Namespace::new(&obj.profile)?.list(&prefix, false).await?;
+        let mut entries = std::collections::BTreeMap::new();
+        for o in listing.objects {
+            let rel = o.key.strip_prefix(&prefix).context("S3 key outside search prefix")?;
+            if rel.is_empty() { continue; }
+            let dir = rel.ends_with('/');
+            let rel = rel.trim_end_matches('/');
+            entries.insert((rel.to_string(), dir), o.size);
+            for (i, _) in rel.match_indices('/') {
+                entries.entry((rel[..i].to_string(), true)).or_insert(0);
+            }
+        }
+        let mut hits = Vec::new();
+        for ((rel, dir), size) in entries {
+            if cancel.is_cancelled() || hits.len() >= query.max_results { break; }
+            let name = basename(&rel);
+            if matcher.matches(name) && (dir || compiled.filters.passes(name)) {
+                let suffix = if dir { "/" } else { "" };
+                hits.push(SearchHit::name(format!("/{prefix}{rel}{suffix}"), rel, dir, size));
+            }
+        }
+        return Ok(hits);
+    }
+    let prefix_raw = root.trim_matches('/');
     let prefix = if prefix_raw.is_empty() || prefix_raw == "." {
         String::new()
     } else {
         prefix_raw.to_string()
     };
-    let prefix_path = (!prefix.is_empty()).then(|| object_store::path::Path::from(prefix.as_str()));
+    let prefix_path = if prefix.is_empty() { None } else { Some(object_store::path::Path::parse(prefix.as_str())?) };
 
     let mut stream = obj.store.list(prefix_path.as_ref());
     let mut hits = Vec::new();
@@ -1072,7 +1099,7 @@ async fn read_ssh(ssh: &SshSession, path: &str, max: u64) -> Result<Vec<u8>> {
 
 async fn read_object(obj: &ObjectSession, path: &str, max: u64) -> Result<Vec<u8>> {
     let key = path.trim_start_matches('/');
-    let p = object_store::path::Path::from(key);
+    let p = object_store::path::Path::parse(key)?;
     let get = obj.store.get(&p).await.with_context(|| format!("get {key}"))?;
     let mut stream = get.into_stream();
     let mut buf = Vec::new();

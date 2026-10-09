@@ -362,6 +362,7 @@ export interface SyncPlan {
   localRoot: string;
   remoteRoot: string;
   copies: SyncFile[];
+  directories?: string[];
   deletes: SyncDelete[];
   totalBytes: number;
 }
