@@ -3300,7 +3300,6 @@ impl TransferManager {
             let text = resp.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!("upload {remote_path} failed ({code}): {text}"));
         }
-        session.clear_cache();
         self.update(id, |t| t.transferred = size).await;
         Ok(size)
     }
@@ -3526,7 +3525,7 @@ pub(crate) async fn remote_size(session: &Arc<Session>, path: &str) -> Result<u6
             Ok(dbx.size(&crate::remotefs::dropbox::dropbox_api_path(path)).await)
         }
         Session::OneDrive(od) => Ok(od.size(&crate::remotefs::onedrive::item_ref(path)).await),
-        Session::GDrive(gd) => Ok(gd.size(path).await),
+        Session::GDrive(gd) => gd.size(path).await,
         Session::Box(bx) => Ok(bx.size(path).await),
         Session::Shopify(sh) => Ok(crate::remotefs::shopify::asset_size(sh, path).await),
         Session::HubSpot(hs) => Ok(crate::remotefs::hubspot::file_size(hs, path).await),
@@ -3682,21 +3681,20 @@ async fn remote_resolve(
             })
         }
         Session::GDrive(gd) => {
-            let exists = gd.exists(initial_remote).await;
+            let exists = gd.exists(initial_remote).await?;
             Ok(match policy {
                 OverwritePolicy::Overwrite => (initial_remote.to_string(), false),
                 OverwritePolicy::Skip => (initial_remote.to_string(), exists),
                 OverwritePolicy::Rename if !exists => (initial_remote.to_string(), false),
                 OverwritePolicy::Rename => {
-                    let mut candidate = initial_remote.to_string();
                     for i in 1..=999 {
                         let (stem, ext) = split_ext(initial_remote);
-                        candidate = format!("{stem}_{i}{ext}");
-                        if !gd.exists(&candidate).await {
-                            break;
+                        let candidate = format!("{stem}_{i}{ext}");
+                        if !gd.exists(&candidate).await? {
+                            return Ok((candidate, false));
                         }
                     }
-                    (candidate, false)
+                    anyhow::bail!("no unused destination name available")
                 }
             })
         }
