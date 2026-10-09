@@ -1112,10 +1112,11 @@ mod tests {
 
         let fs = HubSpotFs::new(session);
         let roots = fs.list_dir("/").await.expect("roots");
-        assert_eq!(roots.len(), 3);
+        assert_eq!(roots.len(), 2);
         assert!(!roots.iter().any(|e| e.name == DRAFT_DIR));
         assert!(!roots.iter().any(|e| e.name == PUBLISHED_DIR));
         assert!(roots.iter().any(|e| e.name == FILES_DIR));
+        assert!(roots.iter().any(|e| e.name == HUBDB_DIR));
 
         let err = fs
             .list_dir("/design (draft)")
