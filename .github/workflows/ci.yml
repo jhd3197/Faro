@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate GitHub workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/ci.yml .github/workflows/release.yml
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -44,6 +47,9 @@ jobs:
 
       - name: Install npm deps
         run: npm ci
+
+      - name: Release upload retry and completeness tests
+        run: node --test scripts/release-tools.test.mjs
 
       - name: TypeScript + Vite build
         run: npm run build
