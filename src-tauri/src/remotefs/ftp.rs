@@ -173,13 +173,37 @@ fn list_entries(
     let target = if dir.is_empty() { "." } else { dir };
     if use_mlsd {
         if let Ok(lines) = stream.mlsd(target) {
-            return Ok(lines.iter().filter_map(|l| entry_from_mlsd(dir, l)).collect());
+            return parse_entries(dir, &lines, true);
         }
     }
-    Ok(list_lines(stream, target)?
-        .iter()
-        .filter_map(|l| entry_from_listing(dir, l))
-        .collect())
+    parse_entries(dir, &list_lines(stream, target)?, false)
+}
+
+fn parse_entries(dir: &str, lines: &[String], mlsd: bool) -> Result<Vec<DirEntry>> {
+    let mut entries = Vec::new();
+    for line in lines {
+        if line.is_empty() { continue; }
+        let entry = if mlsd { entry_from_mlsd(dir, line) } else { entry_from_listing(dir, line) };
+        if let Some(entry) = entry {
+            if entry.name.contains('/') || entry.name.contains('\\') {
+                anyhow::bail!("FTP listing contains an unsafe child name");
+            }
+            entries.push(entry);
+            continue;
+        }
+        let special = if mlsd {
+            line.split_once(' ').is_some_and(|(facts,name)| {
+                matches!(name,"." | "..") || facts.split(';').any(|fact| {
+                    fact.eq_ignore_ascii_case("type=cdir") || fact.eq_ignore_ascii_case("type=pdir")
+                })
+            })
+        } else {
+            line.rsplit_once(' ').is_some_and(|(_,name)| matches!(name,"." | ".."))
+                || line.strip_prefix("total ").is_some_and(|n| n.trim().parse::<u64>().is_ok())
+        };
+        if !special { anyhow::bail!("unrecognized FTP listing entry; refusing an incomplete listing"); }
+    }
+    Ok(entries)
 }
 
 /// Issue a directory listing that includes dotfiles.
@@ -307,7 +331,7 @@ async fn delete_recursive(session: Arc<FtpSession>, root: String) -> Result<()> 
                 while let Some(d) = stack.pop() {
                     // MLSD / `LIST -a`, so a directory holding only dotfiles
                     // isn't reported as empty and left behind by the RMD pass.
-                    let listing = list_entries(stream, &d, use_mlsd).unwrap_or_default();
+                    let listing = list_entries(stream, &d, use_mlsd)?;
                     for entry in listing {
                         match entry.kind {
                             FileKind::Directory => {
@@ -347,6 +371,14 @@ fn unsupported(action: &str) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_listing_cannot_hide_files() {
+        assert!(parse_entries("/", &["not a listing".into()], false).is_err());
+        assert!(parse_entries("/", &["broken".into()], true).is_err());
+        assert!(parse_entries("/", &["type=file;size=1; ../outside".into()], true).is_err());
+        assert!(parse_entries("/", &["type=cdir; .".into(), "type=pdir; ..".into()], true).unwrap().is_empty());
+    }
 
     #[test]
     fn parses_mlsd_lines() {

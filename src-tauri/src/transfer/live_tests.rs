@@ -678,3 +678,18 @@ async fn live_gdrive_app_round_trip() {
     assert_eq!(sha_file(&local),sha_file(&down.join("app.bin")));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires scripts/audit-ftp-sftp.py --live"]
+async fn live_ftp_sftp_overwrite_safety() {
+    let ftp = ftp_session().await.expect("FTP fixture required");
+    let sftp = sftp_session().await.expect("SFTP fixture required");
+    for session in [&ftp, &sftp] {
+        for policy in [OverwritePolicy::Skip, OverwritePolicy::Rename] {
+            assert!(remote_resolve(session,"/guard/blocked/existing",policy).await.is_err(),
+                "permission failure must not imply missing destination");
+        }
+    }
+    let (_, skip) = remote_resolve(&sftp,"/dangling",OverwritePolicy::Skip).await.unwrap();
+    assert!(skip,"a dangling link is still an existing destination");
+}

@@ -540,13 +540,32 @@ fn resolve_local_rename(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Same idea for a remote path. Uses sftp.metadata to probe existence.
+async fn sftp_exists(sftp: &russh_sftp::client::SftpSession, path: &str) -> Result<bool> {
+    use russh_sftp::{client::error::Error, protocol::StatusCode};
+    match sftp.symlink_metadata(path).await {
+        Ok(_) => Ok(true),
+        Err(Error::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn ftp_exists(ftp: &Arc<crate::session::FtpSession>, path: &str) -> Result<bool> {
+    use crate::remotefs::RemoteFs;
+    // FTP 550 can mean either missing or denied. A complete parent listing is
+    // required to prove absence; SIZE failure alone cannot justify an overwrite.
+    let (parent, name) = path.rsplit_once('/').unwrap_or((".", path));
+    let parent = if parent.is_empty() { "/" } else { parent };
+    Ok(crate::remotefs::ftp::FtpFs::new(ftp.clone()).list_dir(parent).await?
+        .iter().any(|entry| entry.name == name))
+}
+
+/// Resolve a new name only after successful, unambiguous existence checks.
 async fn resolve_remote_rename(
     sftp: &russh_sftp::client::SftpSession,
     path: &str,
-) -> String {
-    if sftp.metadata(path).await.is_err() {
-        return path.to_string();
+) -> Result<String> {
+    if !sftp_exists(sftp, path).await? {
+        return Ok(path.to_string());
     }
     let (stem, ext) = match path.rfind('.') {
         Some(dot) if dot > path.rfind('/').unwrap_or(0) => {
@@ -556,11 +575,11 @@ async fn resolve_remote_rename(
     };
     for i in 1..=999 {
         let candidate = format!("{stem}_{i}{ext}");
-        if sftp.metadata(&candidate).await.is_err() {
-            return candidate;
+        if !sftp_exists(sftp, &candidate).await? {
+            return Ok(candidate);
         }
     }
-    path.to_string()
+    anyhow::bail!("no unused destination name available")
 }
 
 impl TransferManager {
@@ -3492,37 +3511,31 @@ async fn remote_resolve(
             Ok(match policy {
                 OverwritePolicy::Overwrite => (initial_remote.to_string(), false),
                 OverwritePolicy::Skip => {
-                    let exists = sftp.metadata(initial_remote).await.is_ok();
+                    let exists = sftp_exists(&sftp, initial_remote).await?;
                     (initial_remote.to_string(), exists)
                 }
                 OverwritePolicy::Rename => {
-                    let renamed = resolve_remote_rename(&sftp, initial_remote).await;
+                    let renamed = resolve_remote_rename(&sftp, initial_remote).await?;
                     (renamed, false)
                 }
             })
         }
         Session::Ftp(ftp) => {
-            let probe = initial_remote.to_string();
-            let exists = ftp.with_stream(move |s| Ok(s.size(&probe).is_ok())).await?;
+            if policy == OverwritePolicy::Overwrite { return Ok((initial_remote.to_string(), false)); }
+            let exists = ftp_exists(ftp, initial_remote).await?;
             Ok(match policy {
                 OverwritePolicy::Overwrite => (initial_remote.to_string(), false),
                 OverwritePolicy::Skip => (initial_remote.to_string(), exists),
                 OverwritePolicy::Rename if !exists => (initial_remote.to_string(), false),
                 OverwritePolicy::Rename => {
-                    let mut candidate = initial_remote.to_string();
-                    let session = ftp.clone();
                     for i in 1..=999 {
                         let (stem, ext) = split_ext(initial_remote);
-                        candidate = format!("{stem}_{i}{ext}");
-                        let probe = candidate.clone();
-                        let found = session
-                            .with_stream(move |s| Ok(s.size(&probe).is_ok()))
-                            .await?;
-                        if !found {
-                            break;
+                        let candidate = format!("{stem}_{i}{ext}");
+                        if !ftp_exists(ftp, &candidate).await? {
+                            return Ok((candidate, false));
                         }
                     }
-                    (candidate, false)
+                    anyhow::bail!("no unused destination name available")
                 }
             })
         }
