@@ -1517,12 +1517,9 @@ pub async fn save_imported_profiles(
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
     let n = previews.len();
-    for preview in previews {
-        state
-            .profiles
-            .upsert(preview.into_profile())
-            .await
-            .map_err(err)?;
+    let existing = state.profiles.list().await.map_err(err)?;
+    for profile in crate::importers::into_profiles(previews, &existing) {
+        state.profiles.upsert(profile).await.map_err(err)?;
     }
     Ok(n)
 }

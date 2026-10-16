@@ -333,6 +333,9 @@ export interface ProfilePreview {
   note?: string;
   ftpEncoding?: string;
   ftpActiveMode?: boolean;
+  proxy?: ProxyConfig;
+  jumpPreviewId?: string;
+  jumpName?: string;
 }
 
 export type ImporterKind = "openssh" | "filezilla" | "putty";
