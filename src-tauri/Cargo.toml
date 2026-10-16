@@ -118,7 +118,7 @@ md-5 = "0.10"
 base64 = "0.22"
 # `stream` powers ranged/streamed WebDAV GET+PUT bodies; `multipart` powers Box's
 # multipart/form-data uploads and Google Drive multipart create.
-reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart", "socks"] }
 # Wraps a tokio File as a Stream for streaming WebDAV PUT uploads.
 tokio-util = { version = "0.7", features = ["io"] }
 # Decode percent-encoded WebDAV PROPFIND href paths back into file names.

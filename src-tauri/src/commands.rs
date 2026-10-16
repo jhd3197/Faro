@@ -110,7 +110,10 @@ pub async fn delete_profile(
                 .forget_keychain(crate::credentials::SERVICE, key_ref);
         }
         // Keychain-held saved password or key passphrase (no-op when none stored).
-        for purpose in crate::profiles::all_secret_purposes(&p.id) {
+        for purpose in crate::profiles::all_secret_purposes(&p.id)
+            .into_iter()
+            .chain([crate::credentials::profile_proxy_password_purpose(&p.id)])
+        {
             crate::credentials::delete_secret(&purpose);
             let _ = state
                 .db
@@ -340,6 +343,7 @@ pub async fn dropbox_authorize(profile_id: String) -> Result<DropboxAuthResult, 
         ftp_active_mode: None,
         ftp_max_connections: None,
         ftp_segments: None,
+        proxy: None,
     };
     let account_label = match crate::session::dropbox_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -387,6 +391,7 @@ pub async fn onedrive_authorize(profile_id: String) -> Result<DropboxAuthResult,
         ftp_active_mode: None,
         ftp_max_connections: None,
         ftp_segments: None,
+        proxy: None,
     };
     let account_label = match crate::session::onedrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -445,6 +450,7 @@ pub async fn dynamics_authorize(
         ftp_active_mode: None,
         ftp_max_connections: None,
         ftp_segments: None,
+        proxy: None,
     };
     let account_label = match crate::session::dynamics_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -487,6 +493,7 @@ pub async fn gdrive_authorize(profile_id: String) -> Result<DropboxAuthResult, S
         ftp_active_mode: None,
         ftp_max_connections: None,
         ftp_segments: None,
+        proxy: None,
     };
     let account_label = match crate::session::gdrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -529,6 +536,7 @@ pub async fn box_authorize(profile_id: String) -> Result<DropboxAuthResult, Stri
         ftp_active_mode: None,
         ftp_max_connections: None,
         ftp_segments: None,
+        proxy: None,
     };
     let account_label = match crate::session::box_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),

@@ -31,6 +31,7 @@ mod path_integration;
 mod preview;
 mod proc;
 pub mod profiles;
+pub mod proxy;
 pub mod remotefs;
 pub mod scan;
 pub mod scp;

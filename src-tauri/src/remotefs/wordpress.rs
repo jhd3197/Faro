@@ -577,6 +577,7 @@ mod tests {
             ftp_active_mode: None,
             ftp_max_connections: None,
             ftp_segments: None,
+            proxy: None,
         };
         let key = credential_key(&profile.id);
         crate::credentials::set_secret(&key, &pw).expect("seed secret");

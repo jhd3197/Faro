@@ -111,6 +111,18 @@ export interface ConnectionProfile {
   ftpMaxConnections?: number;
   /** FTP/FTPS: parallel connections one download may use. Absent = 1. */
   ftpSegments?: number;
+  // SOCKS5 / HTTP CONNECT proxy for the connection's first TCP hop.
+  proxy?: ProxyConfig;
+}
+
+export type ProxyKind = "socks5" | "http";
+
+export interface ProxyConfig {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
 }
 
 export const PROTOCOL_DEFAULT_PORT: Record<Protocol, number> = {

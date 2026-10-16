@@ -316,6 +316,7 @@ mod tests {
             ftp_active_mode: None,
             ftp_max_connections: None,
             ftp_segments: None,
+            proxy: None,
         };
         let session = Arc::new(dropbox_connect(&profile).await.expect("connect"));
 

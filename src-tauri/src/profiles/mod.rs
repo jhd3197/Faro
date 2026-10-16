@@ -56,6 +56,27 @@ pub enum AuthMethod {
     KeyRef { key_ref: String },
 }
 
+/// Client-side proxy a connection's first TCP hop goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyKind {
+    Socks5,
+    Http,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyConfig {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    // Kept in the keychain (and blanked from profiles.json) in keychain mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -131,6 +152,9 @@ pub struct ConnectionProfile {
     // = 1, since many servers cap logins per user.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_segments: Option<u8>,
+    // SOCKS5 / HTTP CONNECT proxy for backends that dial TCP. Absent = direct.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
 }
 
 // Plain JSON file in the app data dir. With the keychain setting on, saved
@@ -172,6 +196,16 @@ impl ProfileStore {
         let mut unresolved = Vec::new();
         if keychain {
             for p in profiles.iter_mut() {
+                if let Some(proxy) = p.proxy.as_mut().filter(|x| x.password.is_none()) {
+                    let purpose = credentials::profile_proxy_password_purpose(&p.id);
+                    match credentials::get_secret(&purpose) {
+                        Ok(v) => proxy.password = v,
+                        Err(e) => {
+                            eprintln!("keychain read failed for profile {} proxy: {e:#}", p.name);
+                            unresolved.push((p.id.clone(), p.name.clone()));
+                        }
+                    }
+                }
                 let purpose = match secret_purpose(p) {
                     Some(purpose) if secret_is_empty(&p.auth) => purpose,
                     _ => continue,
@@ -185,6 +219,8 @@ impl ProfileStore {
                     }
                 }
             }
+            // A profile whose proxy and auth secrets both failed is listed once.
+            unresolved.dedup();
         }
         Ok(Self {
             path: path.clone(),
@@ -237,7 +273,10 @@ impl ProfileStore {
                 return Err(e);
             }
             for p in g.iter() {
-                for purpose in all_secret_purposes(&p.id) {
+                for purpose in all_secret_purposes(&p.id)
+                    .into_iter()
+                    .chain([credentials::profile_proxy_password_purpose(&p.id)])
+                {
                     credentials::delete_secret(&purpose);
                     let _ = db.forget_keychain(credentials::SERVICE, &purpose);
                 }
@@ -334,6 +373,7 @@ fn set_secret_value(auth: &mut AuthMethod, value: String) {
 /// or clear both when it is empty. An empty value on an unresolved profile
 /// (`keep_unresolved`) is skipped so a failed read can't delete its entry.
 pub fn sync_profile_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved: bool) -> Result<()> {
+    sync_proxy_secret(profile, db, keep_unresolved)?;
     // An entry left under the other auth kind (e.g. password -> key) is stale.
     let current = secret_purpose(profile);
     for stale in all_secret_purposes(&profile.id) {
@@ -361,6 +401,22 @@ pub fn sync_profile_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved
     db.record_keychain(credentials::SERVICE, &purpose)
 }
 
+/// Keychain side of a profile's proxy password, like `sync_profile_secret`.
+fn sync_proxy_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved: bool) -> Result<()> {
+    let purpose = credentials::profile_proxy_password_purpose(&profile.id);
+    match profile.proxy.as_ref().and_then(|p| p.password.as_deref()).filter(|v| !v.is_empty()) {
+        Some(value) => {
+            credentials::set_secret(&purpose, value)?;
+            db.record_keychain(credentials::SERVICE, &purpose)
+        }
+        None if keep_unresolved => Ok(()),
+        None => {
+            credentials::delete_secret(&purpose);
+            db.forget_keychain(credentials::SERVICE, &purpose)
+        }
+    }
+}
+
 /// What lands in `profiles.json`: with the keychain on, secrets are blanked so
 /// they never reach the file.
 fn for_disk(profiles: &[ConnectionProfile], keychain: bool) -> Vec<ConnectionProfile> {
@@ -373,6 +429,9 @@ fn for_disk(profiles: &[ConnectionProfile], keychain: bool) -> Vec<ConnectionPro
                     AuthMethod::Password { password } => password.clear(),
                     AuthMethod::Key { passphrase, .. } => *passphrase = None,
                     _ => {}
+                }
+                if let Some(proxy) = p.proxy.as_mut() {
+                    proxy.password = None;
                 }
             }
             p
@@ -418,6 +477,22 @@ mod tests {
         assert!(on.contains("id_ed25519"));
         let off = serde_json::to_string(&for_disk(&profiles, false)).unwrap();
         assert!(off.contains("s3cret"));
+    }
+
+    #[test]
+    fn keychain_mode_keeps_proxy_password_out_of_file() {
+        let mut p = profile(serde_json::json!({ "kind": "agent" }));
+        p.proxy = Some(ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "proxy.test".into(),
+            port: 1080,
+            username: Some("u".into()),
+            password: Some("proxy-pw".into()),
+        });
+        let on = serde_json::to_string(&for_disk(&[p.clone()], true)).unwrap();
+        assert!(!on.contains("proxy-pw") && on.contains("proxy.test"));
+        let off = serde_json::to_string(&for_disk(&[p], false)).unwrap();
+        assert!(off.contains("proxy-pw") && off.contains(r#""kind":"socks5""#));
     }
 
     #[test]
