@@ -113,6 +113,9 @@ export interface ConnectionProfile {
   ftpSegments?: number;
   // SOCKS5 / HTTP CONNECT proxy for the connection's first TCP hop.
   proxy?: ProxyConfig;
+  // Id of another SFTP profile to connect through (ProxyJump), with its own
+  // login. Distinct from the grant-only inline jumpHost above.
+  jumpProfile?: string;
 }
 
 export type ProxyKind = "socks5" | "http";

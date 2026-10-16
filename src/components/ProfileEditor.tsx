@@ -17,6 +17,8 @@ import {
   type DiscoveredAgent,
   type GeneratedKey,
   type SshKeyType,
+  type ProxyConfig,
+  type ProxyKind,
 } from "@/lib/types";
 import {
   ShieldOff,
@@ -36,6 +38,7 @@ import {
   Sparkles,
   FolderOpen,
   X,
+  ChevronRight,
 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
@@ -214,6 +217,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   // FTP-only: transfer connections (pool) and connections per download.
   const [ftpMaxConnections, setFtpMaxConnections] = useState(seed?.ftpMaxConnections ?? 2);
   const [ftpSegments, setFtpSegments] = useState(seed?.ftpSegments ?? 1);
+  const [proxyKind, setProxyKind] = useState<ProxyKind | "">(seed?.proxy?.kind ?? "");
+  const [proxyHost, setProxyHost] = useState(seed?.proxy?.host ?? "");
+  const [proxyPort, setProxyPort] = useState(seed?.proxy?.port ?? 1080);
+  const [proxyUser, setProxyUser] = useState(seed?.proxy?.username ?? "");
+  const [proxyPass, setProxyPass] = useState(seed?.proxy?.password ?? "");
+  const [jumpProfile, setJumpProfile] = useState(seed?.jumpProfile ?? "");
   const [group, setGroup] = useState(seed?.group ?? "");
   // Custom rail bubble glyph: emoji/short string, or a bundled Iconify key
   // (picked via the IconPicker grid; custom keys still possible via search).
@@ -514,8 +523,23 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       ftpActiveMode: isFtp && ftpActiveMode ? true : undefined,
       ftpMaxConnections: isFtp && ftpMaxConnections !== 2 ? ftpMaxConnections : undefined,
       ftpSegments: isFtp && ftpSegments !== 1 ? ftpSegments : undefined,
+      // A jump host brings its own proxy settings.
+      proxy: protocol === "sftp" && jumpProfile ? undefined : buildProxy(),
+      jumpProfile: protocol === "sftp" && jumpProfile ? jumpProfile : undefined,
     };
   };
+
+  function buildProxy(): ProxyConfig | undefined {
+    if (!proxyKind || !proxyHost.trim()) return undefined;
+    const user = proxyUser.trim();
+    return {
+      kind: proxyKind,
+      host: proxyHost.trim(),
+      port: proxyPort,
+      username: user || undefined,
+      password: user && proxyPass ? proxyPass : undefined,
+    };
+  }
 
   /// Write keychain-held credentials (Shopify/HubSpot/Dynamics/WordPress)
   /// for this profile id. Shared by Save and Test connection, which needs
@@ -599,7 +623,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   /// away (pairing IS the consent step — demanding another Save was a dead
   /// end), the editor closes, and the connection opens.
   const pair = async (code: string): Promise<void> => {
-    const res = await ipc.pairAgent(host.trim(), port, code);
+    const res = await ipc.pairAgent(host.trim(), port, code, buildProxy());
     // buildProfile() reads state that React hasn't committed yet — pass the
     // fresh values through explicitly.
     const finalName = name || res.hostname || `Agent @ ${host}`;
@@ -1114,6 +1138,25 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             </Field>
           </div>
         )}
+
+        <NetworkSection
+          profileId={id}
+          protocol={protocol}
+          profiles={profiles}
+          proxyKind={proxyKind}
+          setProxyKind={setProxyKind}
+          proxyHost={proxyHost}
+          setProxyHost={setProxyHost}
+          proxyPort={proxyPort}
+          setProxyPort={setProxyPort}
+          proxyUser={proxyUser}
+          setProxyUser={setProxyUser}
+          proxyPass={proxyPass}
+          setProxyPass={setProxyPass}
+          jumpProfile={jumpProfile}
+          setJumpProfile={setJumpProfile}
+          ftpActiveMode={isFtp && ftpActiveMode}
+        />
 
         <label className="mb-3 flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-bg-subtle px-2.5 py-2">
           <input
@@ -2814,6 +2857,183 @@ function ProtocolButton({
       </span>
       <span className="truncate">{label}</span>
     </button>
+  );
+}
+
+const PROXY_DEFAULT_PORT: Record<ProxyKind, number> = { socks5: 1080, http: 3128 };
+
+/// Collapsible "Proxy & jump host" block: a SOCKS5 / HTTP CONNECT proxy for
+/// any connection, and (SFTP only) another SSH connection to jump through.
+function NetworkSection({
+  profileId,
+  protocol,
+  profiles,
+  proxyKind,
+  setProxyKind,
+  proxyHost,
+  setProxyHost,
+  proxyPort,
+  setProxyPort,
+  proxyUser,
+  setProxyUser,
+  proxyPass,
+  setProxyPass,
+  jumpProfile,
+  setJumpProfile,
+  ftpActiveMode,
+}: {
+  profileId: string;
+  protocol: Protocol;
+  profiles: ConnectionProfile[];
+  proxyKind: ProxyKind | "";
+  setProxyKind: (v: ProxyKind | "") => void;
+  proxyHost: string;
+  setProxyHost: (v: string) => void;
+  proxyPort: number;
+  setProxyPort: (v: number) => void;
+  proxyUser: string;
+  setProxyUser: (v: string) => void;
+  proxyPass: string;
+  setProxyPass: (v: string) => void;
+  jumpProfile: string;
+  setJumpProfile: (v: string) => void;
+  ftpActiveMode: boolean;
+}) {
+  const isSsh = protocol === "sftp";
+  const [open, setOpen] = useState(!!proxyKind || (isSsh && !!jumpProfile));
+  const byId = new Map(profiles.map((p) => [p.id, p]));
+  // A profile that already jumps through this one would make a loop.
+  const jumpsThrough = (p: ConnectionProfile | undefined) => {
+    for (let i = 0; p && i < 10; i++) {
+      if (p.id === profileId) return true;
+      p = p.jumpProfile ? byId.get(p.jumpProfile) : undefined;
+    }
+    return false;
+  };
+  const candidates = profiles.filter(
+    (p) => p.protocol === "sftp" && p.id !== profileId && !jumpsThrough(p)
+  );
+  const missingJump = isSsh && !!jumpProfile && !byId.has(jumpProfile);
+  const viaJump = isSsh && !!jumpProfile;
+  const summary = [
+    !viaJump && proxyKind && proxyHost.trim() ? `${proxyKind === "socks5" ? "SOCKS5" : "HTTP"} proxy` : "",
+    isSsh && jumpProfile ? `via ${byId.get(jumpProfile)?.name ?? "a deleted connection"}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const changeKind = (kind: ProxyKind | "") => {
+    // Follow the new kind's usual port unless the user typed their own.
+    if (kind && (!proxyKind || proxyPort === PROXY_DEFAULT_PORT[proxyKind])) {
+      setProxyPort(PROXY_DEFAULT_PORT[kind]);
+    }
+    setProxyKind(kind);
+  };
+
+  return (
+    <div className="mb-3 rounded-md border border-border">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 px-2.5 py-2 text-left text-xs font-medium text-text hover:bg-bg-hover"
+      >
+        <ChevronRight
+          size={12}
+          className={cn("shrink-0 text-text-dim transition-transform", open && "rotate-90")}
+        />
+        {isSsh ? "Proxy & jump host" : "Proxy"}
+        <span className="ml-auto truncate font-normal text-text-dim">
+          {summary || "Direct connection"}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-border px-2.5 pt-3">
+          {isSsh && (
+            <Field label="Jump host">
+              <select
+                value={jumpProfile}
+                onChange={(e) => setJumpProfile(e.target.value)}
+                className={inputCls}
+              >
+                <option value="">None — connect directly</option>
+                {missingJump && <option value={jumpProfile}>(deleted connection)</option>}
+                {candidates.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.username ? `${p.username}@` : ""}
+                    {p.host})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          {viaJump && (
+            <Hint>
+              Faro signs in to the jump host with its own login, then opens this
+              server through it. A proxy, if needed, goes on the jump host's
+              connection.
+            </Hint>
+          )}
+          {!viaJump && (
+            <div className="flex gap-3">
+              <Field label="Proxy" className="w-32 shrink-0">
+                <select
+                  value={proxyKind}
+                  onChange={(e) => changeKind(e.target.value as ProxyKind | "")}
+                  className={inputCls}
+                >
+                  <option value="">None</option>
+                  <option value="socks5">SOCKS5</option>
+                  <option value="http">HTTP</option>
+                </select>
+              </Field>
+              {proxyKind && (
+                <>
+                  <Field label="Proxy host" className="min-w-0 flex-1">
+                    <input
+                      value={proxyHost}
+                      onChange={(e) => setProxyHost(e.target.value)}
+                      placeholder="proxy.example.com"
+                      className={inputCls}
+                    />
+                  </Field>
+                  <Field label="Port" className="w-24 shrink-0">
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={proxyPort}
+                      onChange={(e) => setProxyPort(Number(e.target.value) || 0)}
+                      className={inputCls}
+                    />
+                  </Field>
+                </>
+              )}
+            </div>
+          )}
+          {!viaJump && proxyKind && (
+            <div className="flex gap-3">
+              <Field label="Proxy username (optional)" className="min-w-0 flex-1">
+                <input
+                  value={proxyUser}
+                  onChange={(e) => setProxyUser(e.target.value)}
+                  autoComplete="off"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Proxy password" className="min-w-0 flex-1">
+                <PasswordInput value={proxyPass} onChange={setProxyPass} generate={false} />
+              </Field>
+            </div>
+          )}
+          {!viaJump && proxyKind && ftpActiveMode && (
+            <Hint tone="warn">
+              Active mode can't work through a proxy. Switch the transfer mode to passive.
+            </Hint>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
