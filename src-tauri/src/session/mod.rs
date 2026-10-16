@@ -1481,7 +1481,10 @@ pub async fn ssh_connect(
             port: jump_port,
             verifier: verifier.clone(),
         };
-        let mut jump = client::connect(config.clone(), (jump_host.as_str(), jump_port), jump_handler)
+        let stream = crate::proxy::dial_async(profile.proxy.as_ref(), &jump_host, jump_port)
+            .await
+            .with_context(|| format!("connect to jump host {jump_host}:{jump_port}"))?;
+        let mut jump = client::connect_stream(config.clone(), stream, jump_handler)
             .await
             .with_context(|| format!("connect to jump host {jump_host}:{jump_port}"))?;
         authenticate(&mut jump, profile, &jump_username, &prompter)
@@ -1522,13 +1525,15 @@ pub async fn ssh_connect(
         });
     }
 
-    let addr = (profile.host.as_str(), profile.port);
     let handler = ClientHandler {
         host: profile.host.clone(),
         port: profile.port,
         verifier,
     };
-    let mut session = client::connect(config, addr, handler)
+    // Through the profile's SOCKS5 / HTTP proxy when it has one.
+    let stream = crate::proxy::dial_async(profile.proxy.as_ref(), &profile.host, profile.port)
+        .await?;
+    let mut session = client::connect_stream(config, stream, handler)
         .await
         .with_context(|| format!("connect to {}:{}", profile.host, profile.port))?;
     authenticate(&mut session, profile, &profile.username, &prompter).await?;
