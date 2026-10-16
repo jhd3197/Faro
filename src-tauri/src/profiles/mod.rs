@@ -155,6 +155,60 @@ pub struct ConnectionProfile {
     // SOCKS5 / HTTP CONNECT proxy for backends that dial TCP. Absent = direct.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    // Id of another SSH profile to connect through (ProxyJump), with that
+    // profile's own auth, proxy and jump host. Distinct from the inline
+    // `jump_host` above, which access grants use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jump_profile: Option<String>,
+    // `jump_profile` resolved against the store when the profile is read.
+    #[serde(skip)]
+    pub jump_via: Option<JumpVia>,
+}
+
+/// Longest bastion chain a profile may connect through.
+pub const MAX_JUMP_HOPS: usize = 8;
+
+/// A profile's resolved jump host: the bastion profile (itself resolved), or
+/// why the chain can't be built. Connecting fails on `Broken` rather than
+/// silently going direct.
+#[derive(Debug, Clone)]
+pub enum JumpVia {
+    Profile(Box<ConnectionProfile>),
+    Broken(String),
+}
+
+/// Resolve `profile.jump_profile` (recursively) against `all`.
+fn resolve_jump(all: &[ConnectionProfile], mut profile: ConnectionProfile) -> ConnectionProfile {
+    profile.jump_via = jump_chain(all, &profile, &mut vec![profile.id.clone()]);
+    profile
+}
+
+fn jump_chain(
+    all: &[ConnectionProfile],
+    profile: &ConnectionProfile,
+    seen: &mut Vec<String>,
+) -> Option<JumpVia> {
+    let id = profile.jump_profile.as_deref().filter(|id| !id.is_empty())?;
+    let broken = |msg: String| Some(JumpVia::Broken(msg));
+    if seen.iter().any(|s| s == id) {
+        return broken(format!("the jump host chain of '{}' loops back on itself", profile.name));
+    }
+    if seen.len() > MAX_JUMP_HOPS {
+        return broken(format!("the jump host chain is longer than {MAX_JUMP_HOPS} hops"));
+    }
+    let Some(bastion) = all.iter().find(|p| p.id == id) else {
+        return broken(format!(
+            "the jump host of '{}' was deleted; pick another in the connection editor",
+            profile.name
+        ));
+    };
+    if !matches!(bastion.protocol.as_str(), "sftp" | "ssh" | "") {
+        return broken(format!("jump host '{}' is not an SSH connection", bastion.name));
+    }
+    seen.push(id.to_string());
+    let mut bastion = bastion.clone();
+    bastion.jump_via = jump_chain(all, &bastion, seen);
+    Some(JumpVia::Profile(Box::new(bastion)))
 }
 
 // Plain JSON file in the app data dir. With the keychain setting on, saved
@@ -286,11 +340,13 @@ impl ProfileStore {
     }
 
     pub async fn list(&self) -> Result<Vec<ConnectionProfile>> {
-        Ok(self.inner.lock().await.clone())
+        let g = self.inner.lock().await;
+        Ok(g.iter().cloned().map(|p| resolve_jump(&g, p)).collect())
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<ConnectionProfile>> {
-        Ok(self.inner.lock().await.iter().find(|p| p.id == id).cloned())
+        let g = self.inner.lock().await;
+        Ok(g.iter().find(|p| p.id == id).cloned().map(|p| resolve_jump(&g, p)))
     }
 
     pub async fn upsert(&self, profile: ConnectionProfile) -> Result<()> {
@@ -493,6 +549,60 @@ mod tests {
         assert!(!on.contains("proxy-pw") && on.contains("proxy.test"));
         let off = serde_json::to_string(&for_disk(&[p], false)).unwrap();
         assert!(off.contains("proxy-pw") && off.contains(r#""kind":"socks5""#));
+    }
+
+    fn ssh(id: &str, jump: Option<&str>) -> ConnectionProfile {
+        let mut p = profile(serde_json::json!({ "kind": "agent" }));
+        p.id = id.into();
+        p.name = id.into();
+        p.jump_profile = jump.map(Into::into);
+        p
+    }
+
+    fn hops(p: &ConnectionProfile) -> Result<Vec<String>, String> {
+        let mut out = Vec::new();
+        let mut cur = p;
+        loop {
+            match &cur.jump_via {
+                None => return Ok(out),
+                Some(JumpVia::Broken(msg)) => return Err(msg.clone()),
+                Some(JumpVia::Profile(b)) => {
+                    out.push(b.id.clone());
+                    cur = b;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jump_chain_resolves_recursively() {
+        let all = vec![ssh("a", Some("b")), ssh("b", Some("c")), ssh("c", None)];
+        assert_eq!(hops(&resolve_jump(&all, all[0].clone())), Ok(vec!["b".into(), "c".into()]));
+        assert_eq!(hops(&resolve_jump(&all, all[2].clone())), Ok(vec![]));
+    }
+
+    #[test]
+    fn jump_chain_rejects_cycles_missing_and_non_ssh() {
+        let all = vec![ssh("a", Some("b")), ssh("b", Some("a"))];
+        assert!(hops(&resolve_jump(&all, all[0].clone())).unwrap_err().contains("loops back"));
+        let self_loop = vec![ssh("a", Some("a"))];
+        assert!(hops(&resolve_jump(&self_loop, self_loop[0].clone())).is_err());
+
+        let missing = vec![ssh("a", Some("gone"))];
+        assert!(hops(&resolve_jump(&missing, missing[0].clone())).unwrap_err().contains("deleted"));
+
+        let mut s3 = ssh("b", None);
+        s3.protocol = "s3".into();
+        let all = vec![ssh("a", Some("b")), s3];
+        assert!(hops(&resolve_jump(&all, all[0].clone())).unwrap_err().contains("not an SSH"));
+    }
+
+    #[test]
+    fn jump_chain_depth_is_capped() {
+        let mut all: Vec<_> = (0..12).map(|i| ssh(&format!("p{i}"), Some(&format!("p{}", i + 1)))).collect();
+        all.push(ssh("p12", None));
+        assert!(hops(&resolve_jump(&all, all[0].clone())).unwrap_err().contains("longer than"));
+        assert_eq!(hops(&resolve_jump(&all, all[5].clone())).unwrap().len(), 7);
     }
 
     #[test]

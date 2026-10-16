@@ -65,6 +65,8 @@ fn profile(protocol: &str, host: &str, port: u16, user: &str, pass: &str) -> Con
         ftp_max_connections: None,
         ftp_segments: None,
         proxy: None,
+        jump_profile: None,
+        jump_via: None,
     }
 }
 

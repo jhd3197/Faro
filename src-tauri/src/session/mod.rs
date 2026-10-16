@@ -27,8 +27,8 @@ pub use webdav::{webdav_connect, WebdavSession};
 pub use wordpress::{wordpress_connect, WordPressSession};
 
 use crate::known_hosts;
-use crate::profiles::{AuthMethod, ConnectionProfile};
-use anyhow::{anyhow, Context, Result};
+use crate::profiles::{AuthMethod, ConnectionProfile, JumpVia};
+use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use russh::{client, Channel, ChannelMsg};
 use russh_keys::key;
@@ -478,11 +478,11 @@ pub struct SshSession {
     pub id: String,
     pub profile: ConnectionProfile,
     pub handle: Mutex<client::Handle<ClientHandler>>,
-    /// Bastion connection this session is tunneled through, when the profile
-    /// has a `jump_host`. Held purely to keep the jump hop alive — dropping
-    /// the handle would tear down the direct-tcpip channel the target
-    /// session rides on. Replaced on every reconnect.
-    jump_handle: Mutex<Option<client::Handle<ClientHandler>>>,
+    /// Bastion connections this session is tunneled through (outermost
+    /// first), when the profile has a jump host. Held purely to keep the hops
+    /// alive — dropping one would tear down the direct-tcpip channel the next
+    /// hop rides on. Replaced together on every reconnect.
+    jump_handles: Mutex<Vec<client::Handle<ClientHandler>>>,
     /// Lazily-opened SFTP subsystem. Behind an `Option` so a reconnect can drop
     /// the stale channel and force the next caller to reopen it; handed out as
     /// an `Arc` so callers never borrow the session across an `.await`.
@@ -526,7 +526,7 @@ impl SshSession {
             id: Uuid::new_v4().to_string(),
             profile,
             handle: Mutex::new(handle),
-            jump_handle: Mutex::new(None),
+            jump_handles: Mutex::new(Vec::new()),
             sftp: Mutex::new(None),
             reconnect_lock: Mutex::new(()),
             generation: AtomicU64::new(0),
@@ -659,9 +659,9 @@ impl SshSession {
             .await
             .context("reconnecting SSH session")?;
         *self.handle.lock().await = conn.handle;
-        // Swap in the new bastion hop (if any); dropping the old handle tears
-        // down the stale jump connection.
-        *self.jump_handle.lock().await = conn.jump_handle;
+        // Swap in the rebuilt bastion chain (if any); dropping the old
+        // handles tears down the stale jump connections.
+        *self.jump_handles.lock().await = conn.jump_handles;
         *self.sftp.lock().await = None; // stale channel — force reopen
         self.generation.fetch_add(1, Ordering::Release);
         tracing::info!(session = %self.id, "SSH reconnected");
@@ -1294,7 +1294,7 @@ pub async fn open_session(
             let prompter: Arc<dyn AuthPrompter> = Arc::new(RejectAuthPrompter);
             let conn = ssh_connect(profile, verifier, prompter).await?;
             let ssh = Arc::new(SshSession::new(profile.clone(), conn.handle));
-            *ssh.jump_handle.lock().await = conn.jump_handle;
+            *ssh.jump_handles.lock().await = conn.jump_handles;
             Ok(Session::Ssh(ssh))
         }
         "ftp" | "ftps" => {
@@ -1438,12 +1438,12 @@ async fn authenticate_with_agent(
 }
 
 /// An established SSH connection to a profile's target host. When the profile
-/// has a bastion (`jump_host`), the target session is tunneled through it and
-/// `jump_handle` keeps that hop alive — dropping it would kill the
-/// direct-tcpip channel the target session rides on.
+/// has a bastion (`jump_profile` or `jump_host`), the target session is
+/// tunneled through it and `jump_handles` (outermost first) keep the hops
+/// alive — dropping one would kill the direct-tcpip channel the next rides on.
 pub struct SshConnection {
     pub handle: client::Handle<ClientHandler>,
-    pub jump_handle: Option<client::Handle<ClientHandler>>,
+    pub jump_handles: Vec<client::Handle<ClientHandler>>,
 }
 
 pub async fn ssh_connect(
@@ -1465,6 +1465,50 @@ pub async fn ssh_connect(
         inactivity_timeout: None,
         ..Default::default()
     });
+
+    // ProxyJump through another profile: connect to it (recursively, with its
+    // own auth, proxy and jump host), then run the target's handshake over a
+    // direct-tcpip channel from it.
+    match &profile.jump_via {
+        Some(JumpVia::Broken(msg)) => bail!("{msg}"),
+        Some(JumpVia::Profile(bastion)) => {
+            let hop = Box::pin(ssh_connect(bastion, verifier.clone(), prompter.clone()))
+                .await
+                .with_context(|| format!("jump host '{}'", bastion.name))?;
+            let channel = hop
+                .handle
+                .channel_open_direct_tcpip(profile.host.clone(), profile.port as u32, "127.0.0.1", 0)
+                .await
+                .with_context(|| {
+                    format!(
+                        "jump host '{}' could not open a tunnel to {}:{}",
+                        bastion.name, profile.host, profile.port
+                    )
+                })?;
+            let handler = ClientHandler {
+                host: profile.host.clone(),
+                port: profile.port,
+                verifier,
+            };
+            let mut session = client::connect_stream(config, channel.into_stream(), handler)
+                .await
+                .with_context(|| {
+                    format!(
+                        "connect to {}:{} via jump host '{}'",
+                        profile.host, profile.port, bastion.name
+                    )
+                })?;
+            authenticate(&mut session, profile, &profile.username, &prompter).await?;
+            let mut jump_handles = hop.jump_handles;
+            jump_handles.push(hop.handle);
+            return Ok(SshConnection { handle: session, jump_handles });
+        }
+        // Never fall back to a direct connection the user didn't ask for.
+        None if profile.jump_profile.as_deref().is_some_and(|id| !id.is_empty()) => {
+            bail!("the jump host of '{}' could not be resolved", profile.name)
+        }
+        None => {}
+    }
 
     // Single-hop ProxyJump: connect to the bastion with the SAME auth material
     // (grant spec: the issuer installs the uploaded public key on both hops),
@@ -1521,7 +1565,7 @@ pub async fn ssh_connect(
         authenticate(&mut session, profile, &profile.username, &prompter).await?;
         return Ok(SshConnection {
             handle: session,
-            jump_handle: Some(jump),
+            jump_handles: vec![jump],
         });
     }
 
@@ -1539,7 +1583,7 @@ pub async fn ssh_connect(
     authenticate(&mut session, profile, &profile.username, &prompter).await?;
     Ok(SshConnection {
         handle: session,
-        jump_handle: None,
+        jump_handles: Vec::new(),
     })
 }
 
@@ -1804,7 +1848,7 @@ impl SessionManager {
                     id: id.clone(),
                     profile,
                     handle: Mutex::new(conn.handle),
-                    jump_handle: Mutex::new(conn.jump_handle),
+                    jump_handles: Mutex::new(conn.jump_handles),
                     sftp: Mutex::new(None),
                     reconnect_lock: Mutex::new(()),
                     generation: AtomicU64::new(0),
@@ -1964,8 +2008,9 @@ impl SessionManager {
                         .disconnect(russh::Disconnect::ByApplication, "bye", "en")
                         .await;
                     drop(h);
-                    // Close the bastion hop too, if this session was tunneled.
-                    if let Some(jump) = ssh.jump_handle.lock().await.take() {
+                    // Close the bastion hops too, innermost first.
+                    let hops = std::mem::take(&mut *ssh.jump_handles.lock().await);
+                    for jump in hops.into_iter().rev() {
                         let _ = jump
                             .disconnect(russh::Disconnect::ByApplication, "bye", "en")
                             .await;

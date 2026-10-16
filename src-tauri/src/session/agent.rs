@@ -235,6 +235,8 @@ impl AgentSession {
                 ftp_max_connections: None,
                 ftp_segments: None,
                 proxy: None,
+                jump_profile: None,
+                jump_via: None,
             },
             server_key: String::new(),
             channel: Mutex::new(Some(channel)),

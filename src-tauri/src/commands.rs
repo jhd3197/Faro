@@ -349,6 +349,8 @@ pub async fn dropbox_authorize(profile_id: String) -> Result<DropboxAuthResult, 
         ftp_max_connections: None,
         ftp_segments: None,
         proxy: None,
+        jump_profile: None,
+        jump_via: None,
     };
     let account_label = match crate::session::dropbox_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -397,6 +399,8 @@ pub async fn onedrive_authorize(profile_id: String) -> Result<DropboxAuthResult,
         ftp_max_connections: None,
         ftp_segments: None,
         proxy: None,
+        jump_profile: None,
+        jump_via: None,
     };
     let account_label = match crate::session::onedrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -456,6 +460,8 @@ pub async fn dynamics_authorize(
         ftp_max_connections: None,
         ftp_segments: None,
         proxy: None,
+        jump_profile: None,
+        jump_via: None,
     };
     let account_label = match crate::session::dynamics_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -499,6 +505,8 @@ pub async fn gdrive_authorize(profile_id: String) -> Result<DropboxAuthResult, S
         ftp_max_connections: None,
         ftp_segments: None,
         proxy: None,
+        jump_profile: None,
+        jump_via: None,
     };
     let account_label = match crate::session::gdrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -542,6 +550,8 @@ pub async fn box_authorize(profile_id: String) -> Result<DropboxAuthResult, Stri
         ftp_max_connections: None,
         ftp_segments: None,
         proxy: None,
+        jump_profile: None,
+        jump_via: None,
     };
     let account_label = match crate::session::box_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
