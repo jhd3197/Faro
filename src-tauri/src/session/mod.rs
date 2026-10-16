@@ -638,6 +638,11 @@ impl SshSession {
         .await
     }
 
+    #[cfg(test)]
+    pub(crate) async fn jump_handle_count(&self) -> usize {
+        self.jump_handles.lock().await.len()
+    }
+
     /// Re-establish the SSH connection in place. Single-flight: callers
     /// serialize on `reconnect_lock`, and the `seen_generation` check means only
     /// the first one through actually reconnects — a task that lost the race
