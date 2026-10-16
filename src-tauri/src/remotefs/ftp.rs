@@ -185,8 +185,11 @@ fn parse_entries(dir: &str, lines: &[String], mlsd: bool) -> Result<Vec<DirEntry
         if line.is_empty() { continue; }
         let entry = if mlsd { entry_from_mlsd(dir, line) } else { entry_from_listing(dir, line) };
         if let Some(entry) = entry {
+            // A name with a separator could point outside the listed folder. Skip
+            // that one entry; failing the whole listing would hide every other file.
             if entry.name.contains('/') || entry.name.contains('\\') {
-                anyhow::bail!("FTP listing contains an unsafe child name");
+                eprintln!("ftp: skipped unsafe name in {dir:?}: {:?}", entry.name);
+                continue;
             }
             entries.push(entry);
             continue;
@@ -376,8 +379,19 @@ mod tests {
     fn malformed_listing_cannot_hide_files() {
         assert!(parse_entries("/", &["not a listing".into()], false).is_err());
         assert!(parse_entries("/", &["broken".into()], true).is_err());
-        assert!(parse_entries("/", &["type=file;size=1; ../outside".into()], true).is_err());
         assert!(parse_entries("/", &["type=cdir; .".into(), "type=pdir; ..".into()], true).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unsafe_name_skips_only_that_entry() {
+        let lines = vec![
+            "type=file;size=1; ../outside".to_string(),
+            "type=file;size=2; keep.txt".to_string(),
+        ];
+        let entries = parse_entries("/www", &lines, true).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "keep.txt");
+        assert_eq!(entries[0].path, "/www/keep.txt");
     }
 
     #[test]
