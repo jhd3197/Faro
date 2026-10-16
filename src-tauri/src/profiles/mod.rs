@@ -349,6 +349,12 @@ impl ProfileStore {
         Ok(g.iter().find(|p| p.id == id).cloned().map(|p| resolve_jump(&g, p)))
     }
 
+    /// `profile` (e.g. an unsaved one from the editor) with its jump host
+    /// resolved against the saved profiles.
+    pub async fn with_jump_resolved(&self, profile: ConnectionProfile) -> ConnectionProfile {
+        resolve_jump(&self.inner.lock().await, profile)
+    }
+
     pub async fn upsert(&self, profile: ConnectionProfile) -> Result<()> {
         let mut g = self.inner.lock().await;
         if let Some(existing) = g.iter_mut().find(|p| p.id == profile.id) {

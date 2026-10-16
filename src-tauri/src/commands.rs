@@ -202,6 +202,7 @@ pub async fn test_connection(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), FaroError> {
+    let profile = state.profiles.with_jump_resolved(profile).await;
     let session_id = state
         .sessions
         .connect(profile, app)
