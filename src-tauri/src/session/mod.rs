@@ -1479,15 +1479,22 @@ pub async fn ssh_connect(
         Some(JumpVia::Profile(bastion)) => {
             let hop = Box::pin(ssh_connect(bastion, verifier.clone(), prompter.clone()))
                 .await
-                .with_context(|| format!("jump host '{}'", bastion.name))?;
+                .map_err(|e| {
+                    // Name the failing hop, cause included (the UI shows only
+                    // the top line of an error).
+                    let msg = format!("jump host '{}': {e}", bastion.name);
+                    e.context(msg)
+                })?;
             let channel = hop
                 .handle
                 .channel_open_direct_tcpip(profile.host.clone(), profile.port as u32, "127.0.0.1", 0)
                 .await
-                .with_context(|| {
-                    format!(
-                        "jump host '{}' could not open a tunnel to {}:{}",
-                        bastion.name, profile.host, profile.port
+                .map_err(|e| {
+                    anyhow!(
+                        "jump host '{}' could not open a tunnel to {}:{}: {e}",
+                        bastion.name,
+                        profile.host,
+                        profile.port
                     )
                 })?;
             let handler = ClientHandler {

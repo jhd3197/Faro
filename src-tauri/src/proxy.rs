@@ -36,21 +36,25 @@ pub fn dial(proxy: Option<&ProxyConfig>, host: &str, port: u16) -> Result<TcpStr
     let Some(p) = proxy else {
         return connect_direct(host, port).with_context(|| format!("connect to {host}:{port}"));
     };
-    let mut s = connect_direct(&p.host, p.port)
-        .with_context(|| format!("connect to {} proxy {}:{}", p.kind.label(), p.host, p.port))?;
+    // Causes go into the message itself: the UI shows only the top line.
+    let mut s = connect_direct(&p.host, p.port).map_err(|e| {
+        let msg = format!("can't reach the {} proxy {}:{}: {e}", p.kind.label(), p.host, p.port);
+        anyhow::Error::from(e).context(msg)
+    })?;
     s.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     s.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
     match p.kind {
         ProxyKind::Socks5 => socks5_connect(&mut s, p, host, port),
         ProxyKind::Http => http_connect(&mut s, p, host, port),
     }
-    .with_context(|| {
-        format!(
-            "{} proxy {}:{} could not open {host}:{port}",
+    .map_err(|e| {
+        let msg = format!(
+            "{} proxy {}:{} could not open {host}:{port}: {e}",
             p.kind.label(),
             p.host,
             p.port
-        )
+        );
+        e.context(msg)
     })?;
     s.set_read_timeout(None)?;
     s.set_write_timeout(None)?;
