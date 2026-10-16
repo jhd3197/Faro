@@ -791,9 +791,14 @@ pub async fn start_upload(
     local_path: String,
     remote_dir: String,
     overwrite_policy: Option<OverwritePolicy>,
+    expected_fingerprint: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    if let Some(expected) = expected_fingerprint {
+        let manifest = crate::transfer::manifest::inventory(std::path::Path::new(&local_path)).await.map_err(err)?;
+        if manifest.fingerprint != expected { return Err(format!("Upload selection changed since inventory: {local_path}")); }
+    }
     let session = state
         .sessions
         .get(&session_id)
@@ -1014,11 +1019,53 @@ pub async fn start_directory_download(
 }
 
 #[tauri::command]
+pub async fn inspect_upload_paths(paths: Vec<String>) -> Result<Vec<serde_json::Value>, String> {
+    let mut items = Vec::new();
+    let mut names = std::collections::HashSet::new();
+    for path in paths {
+        let local = std::path::PathBuf::from(&path);
+        let name = local.file_name().and_then(|n| n.to_str())
+            .ok_or_else(|| format!("Invalid upload name: {path}"))?;
+        if !names.insert(name.to_lowercase()) {
+            return Err(format!("Selection contains conflicting destination names: {name}"));
+        }
+        let manifest = crate::transfer::manifest::inventory(&local).await.map_err(err)?;
+        let directory = !manifest.directories.is_empty();
+        let directories: Vec<String> = manifest.directories.iter().map(|p| {
+            p.strip_prefix(local.parent().unwrap_or_else(|| std::path::Path::new("")))
+                .unwrap_or(p).to_string_lossy().replace('\\', "/")
+        }).collect();
+        items.push(serde_json::json!({ "path": path,
+            "kind": if directory { "directory" } else { "file" },
+            "files": manifest.files.len(), "directories": manifest.directories.len(),
+            "size": manifest.bytes, "fingerprint": manifest.fingerprint, "directoryPaths": directories }));
+    }
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn verify_upload_directories(
+    session_id: String,
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let fs = fs_for(&session_id, &state).await?;
+    if !fs.capabilities().has_directories && !paths.is_empty() {
+        return Err("This backend cannot verify physical directories, including empty folders".into());
+    }
+    for path in paths {
+        fs.list_dir(&path).await.map_err(|e| format!("Directory verification failed: {path}: {e:#}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn start_directory_upload(
     session_id: String,
     local_dir: String,
     remote_dir: String,
     overwrite_policy: Option<OverwritePolicy>,
+    expected_fingerprint: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
@@ -1029,12 +1076,13 @@ pub async fn start_directory_upload(
         .ok_or_else(|| format!("session {session_id} not found"))?;
     state
         .transfers
-        .start_directory_upload(
+        .start_directory_upload_checked(
             session,
             local_dir,
             remote_dir,
             overwrite_policy.unwrap_or_default(),
             app,
+            expected_fingerprint.as_deref(),
         )
         .await
         .map_err(err)
@@ -2050,4 +2098,45 @@ pub async fn bridge_register_mcp(url: String, token: String) -> Result<String, S
     Err(format!(
         "Couldn't register the MCP server automatically. Make sure Claude Code is installed and on your PATH. {last_err}"
     ))
+}
+
+#[cfg(test)]
+mod upload_inventory_tests {
+    use super::inspect_upload_paths;
+
+    #[tokio::test]
+    async fn multiple_folders_and_mixed_selection_are_fully_counted() {
+        let root = std::env::temp_dir().join(format!("faro-selection-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("dist/assets")).unwrap();
+        std::fs::create_dir_all(root.join("second/vide")).unwrap();
+        std::fs::write(root.join("dist/assets/main.js"), "asset").unwrap();
+        std::fs::write(root.join("index.html"), "html").unwrap();
+        let paths = ["dist", "second", "index.html"].map(|p| root.join(p).to_string_lossy().into_owned()).to_vec();
+        let items = inspect_upload_paths(paths).await.unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0]["files"], 1);
+        assert_eq!(items[0]["directories"], 2);
+        assert_eq!(items[1]["files"], 0);
+        assert_eq!(items[1]["directories"], 2);
+        assert_eq!(items[2]["kind"], "file");
+        assert!(items[0]["directoryPaths"].as_array().unwrap().iter().any(|p| p == "dist/assets"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn multiple_files_and_colliding_names() {
+        let root = std::env::temp_dir().join(format!("faro-collisions-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        std::fs::write(root.join("a"), "a").unwrap();
+        std::fs::write(root.join("b"), "bb").unwrap();
+        std::fs::write(root.join("other/a"), "different").unwrap();
+        let paths = ["a", "b"].map(|p| root.join(p).to_string_lossy().into_owned()).to_vec();
+        let items = inspect_upload_paths(paths).await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["size"], 1);
+        assert_eq!(items[1]["size"], 2);
+        let collision = ["a", "other/a"].map(|p| root.join(p).to_string_lossy().into_owned()).to_vec();
+        assert!(inspect_upload_paths(collision).await.unwrap_err().contains("conflicting"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

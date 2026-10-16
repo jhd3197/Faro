@@ -1,5 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+export const onNativeFileDrop = (cb: (event: DragDropEvent) => void) =>
+  getCurrentWebview().onDragDropEvent((event) => cb(event.payload));
+
+export const inspectUploadPaths = (paths: string[]) =>
+  invoke<Array<{ path: string; kind: "file" | "directory"; files: number; directories: number; directoryPaths: string[]; fingerprint: string; size: number }>>(
+    "inspect_upload_paths", { paths });
+
+export const verifyUploadDirectories = (sessionId: string, paths: string[]) =>
+  invoke<void>("verify_upload_directories", { sessionId, paths });
 import type {
   ConnectionProfile,
   GenerateKeyRequest,
@@ -245,13 +256,15 @@ export const ipc = {
     sessionId: SessionId,
     localPath: string,
     remoteDir: string,
-    overwritePolicy?: OverwritePolicy
+    overwritePolicy?: OverwritePolicy,
+    expectedFingerprint?: string
   ) =>
     invoke<string>("start_upload", {
       sessionId,
       localPath,
       remoteDir,
       overwritePolicy,
+      expectedFingerprint,
     }),
 
   cancelTransfer: (transferId: string) =>
@@ -310,13 +323,15 @@ export const ipc = {
     sessionId: SessionId,
     localDir: string,
     remoteDir: string,
-    overwritePolicy?: OverwritePolicy
+    overwritePolicy?: OverwritePolicy,
+    expectedFingerprint?: string
   ) =>
     invoke<string[]>("start_directory_upload", {
       sessionId,
       localDir,
       remoteDir,
       overwritePolicy,
+      expectedFingerprint,
     }),
 
   renamePath: (sessionId: SessionId, from: string, to: string) =>

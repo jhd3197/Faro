@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import {
   ipc,
+  inspectUploadPaths,
+  verifyUploadDirectories,
   onTransferEvent,
   onTransferProgressBatch,
   onTransferQueue,
@@ -40,7 +42,30 @@ export function toTransferItem(e: {
   };
 }
 
+export interface UploadReport {
+  id: string;
+  sessionId: string;
+  retryItems: TransferItem[];
+  publication?: { stagedPath: string; finalPath: string };
+  directoryPaths: string[];
+  validation: "waiting" | "checking" | "done" | "error";
+  destination: string;
+  files: number;
+  directories: number;
+  verifiedDirectories: number;
+  bytes: number;
+  transferIds: string[];
+  errors: string[];
+  skipped: number;
+  canceled: boolean;
+  preparing: boolean;
+}
+
 interface TransfersState {
+  uploadReports: UploadReport[];
+  uploadReportsOpen: boolean;
+  setUploadReportsOpen: (open: boolean) => void;
+  validateUploads: () => Promise<void>;
   byId: Record<string, Transfer>;
   panelOpen: boolean;
   /** Waiting (queued) transfer ids in FIFO order — position = index + 1. */
@@ -91,7 +116,8 @@ interface TransfersState {
   enqueueUploads: (
     sessionId: SessionId,
     items: TransferItem[],
-    remoteDir: string
+    remoteDir: string,
+    staged?: boolean
   ) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   pause: (id: string) => Promise<void>;
@@ -122,15 +148,24 @@ async function runBatch(
   side: "local" | "remote",
   items: TransferItem[],
   start: (item: TransferItem, policy: OverwritePolicy) => Promise<unknown>
-): Promise<void> {
+): Promise<{ errors: string[]; skipped: number; canceled: boolean }> {
+  const outcome = { errors: [] as string[], skipped: 0, canceled: false };
+  const launch = async (item: TransferItem, policy: OverwritePolicy) => {
+    try { await start(item, policy); }
+    catch (error) {
+      const message = `${item.path}: ${String(error)}`;
+      outcome.errors.push(message);
+      toast.error("Transfer could not start", message);
+    }
+  };
   const settings = useSettings.getState();
   const defaultPolicy = settings.overwritePolicy;
 
   // "Don't ask" mode (the user ticked "remember" before, or turned prompts off
   // in Settings): apply the saved default silently — the original behaviour.
   if (!settings.promptOnOverwrite) {
-    for (const item of items) await start(item, defaultPolicy).catch(() => {});
-    return;
+    for (const item of items) await launch(item, defaultPolicy);
+    return outcome;
   }
 
   // Snapshot the destination's names so we can spot collisions. If it can't be
@@ -176,13 +211,14 @@ async function runBatch(
         );
         settings.setPromptOnOverwrite(false);
       }
-      if (decision.action === "cancel") break;
-      if (decision.action === "skip") continue;
+      if (decision.action === "cancel") { outcome.canceled = true; break; }
+      if (decision.action === "skip") { outcome.skipped++; continue; }
       policy = actionToPolicy(decision.action);
     }
 
-    await start(item, policy).catch(() => {});
+    await launch(item, policy);
   }
+  return outcome;
 }
 
 function indexBy(transfers: Transfer[]): Record<string, Transfer> {
@@ -193,6 +229,39 @@ function indexBy(transfers: Transfer[]): Record<string, Transfer> {
 }
 
 export const useTransfers = create<TransfersState>((set, get) => ({
+  uploadReports: [],
+  uploadReportsOpen: true,
+  setUploadReportsOpen: (open) => set({ uploadReportsOpen: open }),
+  validateUploads: async () => {
+    for (const report of get().uploadReports) {
+      if (report.preparing || report.validation !== "waiting" || report.errors.length || report.canceled || report.skipped) continue;
+      const rows = report.transferIds.map((id) => get().byId[id]);
+      if (rows.length !== report.files || rows.some((t) => t?.status !== "done")) continue;
+      const update = (patch: Partial<UploadReport>) => set((s) => ({ uploadReports:
+        s.uploadReports.map((r) => r.id === report.id ? { ...r, ...patch } : r) }));
+      update({ validation: "checking" });
+      try {
+        if (rows.reduce((total, row) => total + (row?.transferred ?? 0), 0) !== report.bytes) {
+          throw new Error("Transferred bytes differ from the original upload inventory");
+        }
+        await verifyUploadDirectories(report.sessionId, report.directoryPaths);
+        let destination = report.destination;
+        if (report.publication) {
+          const { stagedPath, finalPath } = report.publication;
+          const parent = finalPath.slice(0, finalPath.lastIndexOf("/")) || "/";
+          const name = finalPath.slice(finalPath.lastIndexOf("/") + 1);
+          const existing = await ipc.listDirectory(report.sessionId, parent);
+          if (existing.some((entry) => entry.name === name)) throw new Error(`Publication destination already exists: ${finalPath}`);
+          await ipc.renamePath(report.sessionId, stagedPath, finalPath);
+          destination = finalPath;
+        }
+        update({ validation: "done", verifiedDirectories: report.directories, destination });
+      } catch (error) {
+        update({ validation: "error", errors: [...report.errors, String(error)], verifiedDirectories: 0 });
+        toast.error("Upload verification failed", String(error));
+      }
+    }
+  },
   byId: {},
   panelOpen: false,
   queue: [],
@@ -200,8 +269,8 @@ export const useTransfers = create<TransfersState>((set, get) => ({
   concurrency: 3,
   throttleKbps: 0,
 
-  togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen })),
-  setPanelOpen: (open) => set({ panelOpen: open }),
+  togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen, uploadReportsOpen: !s.panelOpen })),
+  setPanelOpen: (open) => set({ panelOpen: open, uploadReportsOpen: open }),
 
   initListeners: async () => {
     const unlistenEvents = await onTransferEvent((kind, t) => {
@@ -214,13 +283,14 @@ export const useTransfers = create<TransfersState>((set, get) => ({
           set({ panelOpen: true });
         }
       }
+      void get().validateUploads();
       // Surface terminal outcomes as toasts so background transfers aren't silent.
       if (kind === "done") {
         const verb = t.kind === "upload" ? "Uploaded" : "Downloaded";
         if (t.status === "skipped") {
           toast.info("Transfer skipped", baseName(t.source));
         } else {
-          toast.success("Transfer complete", `${verb} ${baseName(t.source)}`);
+          toast.success("File transfer complete", `${verb} ${baseName(t.source)}`);
         }
       } else if (kind === "error") {
         toast.error("Transfer failed", t.error || baseName(t.source));
@@ -291,12 +361,65 @@ export const useTransfers = create<TransfersState>((set, get) => ({
     );
   },
 
-  enqueueUploads: async (sessionId, items, remoteDir) => {
-    await runBatch(sessionId, remoteDir, "remote", items, (item, policy) =>
-      item.kind === "directory"
-        ? get().uploadDir(sessionId, item.path, remoteDir, policy)
-        : get().upload(sessionId, item.path, remoteDir, policy)
-    );
+  enqueueUploads: async (sessionId, items, remoteDir, staged = false) => {
+    const report: UploadReport = {
+      id: crypto.randomUUID(), sessionId, retryItems: [], directoryPaths: [], validation: "waiting",
+      destination: remoteDir, files: 0, directories: 0,
+      verifiedDirectories: 0, bytes: 0, transferIds: [], errors: [], skipped: 0,
+      canceled: false, preparing: true,
+    };
+    const publish = () => set((s) => ({ uploadReports:
+      [...s.uploadReports.filter((r) => r.id !== report.id), { ...report,
+        transferIds: [...report.transferIds], errors: [...report.errors] }] }));
+    publish();
+    set({ panelOpen: true, uploadReportsOpen: true });
+    try {
+      const inventory = await inspectUploadPaths(items.map((item) => item.path));
+      if (staged) {
+        const caps = await ipc.capabilities(sessionId);
+        if (!caps.hasDirectories || !caps.canRename) throw new Error("This server cannot publish a staged directory");
+        const parent = remoteDir.replace(/\/$/, "");
+        const stagedPath = `${parent}/.faro-staging-${report.id}`;
+        const finalPath = `${parent}/release-${report.id}`;
+        await ipc.createDirectory(sessionId, stagedPath);
+        report.publication = { stagedPath, finalPath };
+        remoteDir = stagedPath;
+        report.destination = `${stagedPath} → ${finalPath}`;
+      }
+      report.files = inventory.reduce((n, i) => n + i.files, 0);
+      report.directories = inventory.reduce((n, i) => n + i.directories, 0);
+      report.directoryPaths = inventory.flatMap((i) => i.directoryPaths.map((relative) =>
+        `${remoteDir.replace(/\/$/, "")}/${relative}`));
+      report.bytes = inventory.reduce((n, i) => n + i.size, 0);
+      publish();
+      const result = await runBatch(sessionId, remoteDir, "remote", inventory, async (item, policy) => {
+        try {
+          const fingerprint = inventory.find((entry) => entry.path === item.path)!.fingerprint;
+          if (item.kind === "directory") {
+            const ids = await ipc.startDirectoryUpload(sessionId, item.path, remoteDir, policy, fingerprint);
+            report.transferIds.push(...ids);
+            // Final directory counts are validated after every file is done.
+          } else {
+            report.transferIds.push(await ipc.startUpload(sessionId, item.path, remoteDir, policy, fingerprint));
+          }
+          publish();
+        } catch (error) {
+          report.retryItems.push(item);
+          throw error;
+        }
+      });
+      report.errors.push(...result.errors);
+      report.skipped = result.skipped;
+      report.canceled = result.canceled;
+    } catch (error) {
+      if (!report.transferIds.length) report.retryItems = items;
+      report.errors.push(String(error));
+      toast.error("Upload incomplete", String(error));
+    } finally {
+      report.preparing = false;
+      publish();
+      void get().validateUploads();
+    }
   },
 
   cancel: async (id) => {
@@ -348,7 +471,8 @@ export const useTransfers = create<TransfersState>((set, get) => ({
         if (
           t.status === "transferring" ||
           t.status === "queued" ||
-          t.status === "paused"
+          t.status === "paused" || t.status === "error" ||
+          s.uploadReports.some((r) => r.transferIds.includes(t.id))
         ) {
           next[t.id] = t;
         }

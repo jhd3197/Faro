@@ -392,6 +392,34 @@ async function main() {
     );
     await shot("9-restored");
 
+    // ---- 10. Upload results are dismissible, with retained failure history ----
+    await drive(() => window.__demo.useTransfers.setState({
+      panelOpen: false, uploadReportsOpen: true,
+      uploadReports: [{
+        id: "report-close", sessionId: "test", destination: "/site", files: 1,
+        directories: 1, verifiedDirectories: 0, bytes: 100, transferIds: [],
+        errors: ["assets: permission denied"], retryItems: [], skipped: 0,
+        canceled: false, preparing: false, validation: "error", directoryPaths: [],
+      }],
+    }));
+    await page.waitForSelector('[aria-label="Hide upload results"]');
+    check("upload preparation failure is visible", await drive(() =>
+      document.querySelector('[aria-label="Upload results"]')?.textContent.includes("assets: permission denied")));
+    await page.click('[aria-label="Hide upload results"]');
+    await page.waitForFunction(() => !document.querySelector('[aria-label="Upload results"]'));
+    check("close button removes the upload panel", await drive(() =>
+      !document.querySelector('[aria-label="Upload results"]')));
+    check("closing preserves upload errors", await drive(() =>
+      window.__demo.useTransfers.getState().uploadReports[0].errors[0] === "assets: permission denied"));
+    await page.click('button[title="Transfer queue"]');
+    await page.waitForSelector('[aria-label="Upload results"]');
+    check("Transfers reopens retained upload results", await drive(() =>
+      document.querySelector('[aria-label="Upload results"]')?.textContent.includes("assets: permission denied")));
+    await page.click('button[title="Transfer queue"]');
+    await page.waitForFunction(() => !document.querySelector('[aria-label="Upload results"]'));
+    check("Transfers toggle hides upload results with the queue", await drive(() =>
+      !document.querySelector('[aria-label="Upload results"]')));
+
     if (failures === 0) console.log("\n✅ all transfer-queue checks passed");
     else console.log(`\n❌ ${failures} check(s) failed`);
   } finally {

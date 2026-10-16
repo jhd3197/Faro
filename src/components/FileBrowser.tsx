@@ -99,7 +99,7 @@ export function FileBrowser() {
   const [uploadMenu, setUploadMenu] = useState<{ x: number; y: number } | null>(
     null
   );
-  const pickAndUpload = async (kind: "files" | "folder") => {
+  const pickAndUpload = async (kind: "files" | "folder", staged = false) => {
     if (!serverSid) return;
     const picked = await open({
       multiple: kind === "files",
@@ -112,7 +112,7 @@ export function FileBrowser() {
       path: p,
       kind: (kind === "folder" ? "directory" : "file") as "directory" | "file",
     }));
-    enqueueUploads(serverSid, items, serverRemotePath).catch(() => {});
+    enqueueUploads(serverSid, items, serverRemotePath, staged).catch(() => {});
   };
   const onUpload = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -128,6 +128,11 @@ export function FileBrowser() {
       label: "Upload folder…",
       icon: <FolderUp size={14} />,
       onClick: () => pickAndUpload("folder"),
+    },
+    {
+      label: "Stage folder as a new release…",
+      icon: <FolderUp size={14} />,
+      onClick: () => pickAndUpload("folder", true),
     },
   ];
 

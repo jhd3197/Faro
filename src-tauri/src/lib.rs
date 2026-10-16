@@ -523,6 +523,8 @@ pub fn run() {
             commands::start_upload,
             commands::start_directory_download,
             commands::start_directory_upload,
+            commands::inspect_upload_paths,
+            commands::verify_upload_directories,
             commands::cancel_transfer,
             commands::list_transfers,
             commands::transfer_move,

@@ -1,3 +1,5 @@
+import { UploadReports } from "./components/UploadReports";
+import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ServerRail } from "./components/ServerRail";
@@ -193,6 +195,8 @@ export default function App() {
               visible={terminalVisible}
             />
           </div>
+          <NativeFileDrop />
+          <UploadReports />
           <TransferQueue />
           <UpdatePrompt />
           <CliUpdatePrompt />

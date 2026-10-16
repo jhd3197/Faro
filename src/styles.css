@@ -692,3 +692,5 @@ textarea:focus-visible:not(.xterm-helper-textarea),
     opacity: 0.55;
   }
 }
+
+[data-native-hover="true"] { outline: 2px solid var(--color-accent, #6d8cff); outline-offset: -2px; background-color: rgb(109 140 255 / 12%); }

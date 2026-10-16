@@ -651,6 +651,61 @@ async fn live_ftp_download_and_upload() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// End-to-end regression for the omitted Vite assets tree. The preparation
+/// function is the exact one used by start_directory_upload; the real runner
+/// uploads each manifest file, checks remote sizes, then downloads every file
+/// for an independent byte comparison.
+#[tokio::test]
+#[ignore = "requires scripts/upload-ftp-lab.py and FARO_LIVE_FTP"]
+async fn live_ftp_manifest_assets_regression() {
+    let session = ftp_session().await.expect("set FARO_LIVE_FTP");
+    let dir = scratch("manifest-assets");
+    let source = dir.join("dist");
+    std::fs::create_dir_all(source.join("assets/images/vide été")).unwrap();
+    for i in 0..350 {
+        std::fs::write(source.join(format!("assets/asset-{i}.js")), format!("export default {i};")).unwrap();
+    }
+    std::fs::write(source.join("index.html"), "<script src='assets/asset-0.js'></script>").unwrap();
+    std::fs::write(source.join(".hidden"), "").unwrap();
+    let remote = format!("/faro-regression-{}", Uuid::new_v4());
+    let fs = fs_for_session(&session);
+    let files = super::manifest::prepare_destination(&source, &remote, &*fs).await.unwrap();
+    assert_eq!(files.len(), 352);
+    let mgr = Arc::new(TransferManager::new());
+    use futures::{stream, StreamExt};
+    stream::iter(files.iter()).for_each_concurrent(3, |(local, remote)| {
+        let mgr = mgr.clone(); let session = session.clone();
+        async move {
+            let (t, ..) = upload(&mgr, &session, local, remote).await;
+            assert_eq!(t.status, TransferStatus::Done, "{remote}: {:?}", t.error);
+            assert!(t.notice.as_deref().unwrap_or("").contains("size verified"));
+        }
+    }).await;
+    fs.list_dir(&format!("{remote}/assets/images/vide été")).await.unwrap();
+    // Independent round trip, beyond the production size comparison.
+    for (i, (local, remote)) in files.iter().enumerate() {
+        let down = dir.join(format!("download-{i}"));
+        std::fs::create_dir(&down).unwrap();
+        let (t, ..) = download(&mgr, &session, remote, &down).await;
+        assert_eq!(t.status, TransferStatus::Done, "{remote}: {:?}", t.error);
+        assert_eq!(std::fs::read(local).unwrap(), std::fs::read(down.join(local.file_name().unwrap())).unwrap());
+    }
+    println!("352 uploads and 352 downloads verified; assets and empty Unicode directory present");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires readonly account on scripts/upload-ftp-lab.py; set FARO_LIVE_FTP"]
+async fn live_ftp_manifest_permission_denied() {
+    let session = ftp_session().await.expect("set FARO_LIVE_FTP to readonly account");
+    let dir = scratch("manifest-denied");
+    std::fs::write(dir.join("index.html"), "html").unwrap();
+    let fs = fs_for_session(&session);
+    let result = super::manifest::prepare_destination(&dir, &format!("/denied-{}", Uuid::new_v4()), &*fs).await;
+    assert!(result.is_err(), "permission failure must prevent queueing any file");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[tokio::test]
 #[ignore = "requires scripts/audit-gdrive.py"]
 async fn live_gdrive_app_round_trip() {

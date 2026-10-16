@@ -24,6 +24,7 @@ mod retry;
 mod sources;
 mod speed;
 mod verify;
+pub mod manifest;
 
 pub use partfile::is_part_file;
 use speed::Live;
@@ -1352,6 +1353,19 @@ impl TransferManager {
     /// Re-enqueue a failed or canceled transfer with its original (already
     /// policy-resolved) source/destination. Same id — the panel row resets
     /// in place (Plan 17 Phase 3 manual retry).
+    async fn claim_retry(&self, id: &str) -> Result<()> {
+        let mut transfers = self.transfers.lock().await;
+        let t = transfers.get_mut(id).ok_or_else(|| anyhow::anyhow!("unknown transfer {id}"))?;
+        if !matches!(t.status, TransferStatus::Error | TransferStatus::Canceled) {
+            anyhow::bail!("only failed or canceled transfers can be retried");
+        }
+        t.status = TransferStatus::Queued;
+        t.error = None;
+        t.retry_attempt = None;
+        t.notice = None;
+        Ok(())
+    }
+
     pub async fn retry(self: &Arc<Self>, id: &str, app: &AppHandle) -> Result<()> {
         match self.get(id).await.map(|t| t.status) {
             Some(TransferStatus::Error) | Some(TransferStatus::Canceled) => {}
@@ -1364,6 +1378,9 @@ impl TransferManager {
             .get(id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("transfer {id} cannot be retried"))?;
+        // Claim the terminal row once under the map lock. Two simultaneous
+        // retry requests must not admit two writers for the same destination.
+        self.claim_retry(id).await?;
         if let Some(h) = self.tasks.lock().await.remove(id) {
             h.abort();
         }
@@ -1371,13 +1388,6 @@ impl TransferManager {
         if let Some(g) = self.pauses.lock().await.get(id) {
             g.set(false);
         }
-        self.update(id, |t| {
-            t.status = TransferStatus::Queued;
-            t.error = None;
-            t.retry_attempt = None;
-            t.notice = None;
-        })
-        .await;
         if let Some(t) = self.get(id).await {
             let _ = app.emit("transfer://updated", &t);
         }
@@ -2692,6 +2702,18 @@ impl TransferManager {
         policy: OverwritePolicy,
         app: AppHandle,
     ) -> Result<Vec<String>> {
+        self.start_directory_upload_checked(session, local_root, remote_dir, policy, app, None).await
+    }
+
+    pub async fn start_directory_upload_checked(
+        self: &Arc<Self>,
+        session: Arc<Session>,
+        local_root: String,
+        remote_dir: String,
+        policy: OverwritePolicy,
+        app: AppHandle,
+        expected_fingerprint: Option<&str>,
+    ) -> Result<Vec<String>> {
         let local_root_path = PathBuf::from(&local_root);
         let root_name = local_root_path
             .file_name()
@@ -2701,66 +2723,9 @@ impl TransferManager {
 
         let fs = fs_for_session(&session);
 
-        // Best-effort: create the remote root.
-        let _ = fs.create_dir(&remote_root).await;
+        let files = manifest::prepare_destination_checked(&local_root_path, &remote_root, &*fs, expected_fingerprint).await?;
 
-        let mut dirs_to_visit: Vec<PathBuf> = vec![local_root_path.clone()];
-        let mut files: Vec<(PathBuf, String)> = Vec::new();
-        let mut subdirs: Vec<String> = Vec::new();
-        let mut unreadable: Vec<(PathBuf, anyhow::Error)> = Vec::new();
-        while let Some(d) = dirs_to_visit.pop() {
-            let mut rd = match tokio::fs::read_dir(&d).await {
-                Ok(rd) => rd,
-                Err(e) if d != local_root_path => {
-                    let err = anyhow::Error::new(e).context(format!("read_dir {}", d.display()));
-                    unreadable.push((d, err));
-                    continue;
-                }
-                Err(e) => {
-                    return Err(anyhow::Error::new(e).context(format!("read_dir {}", d.display())))
-                }
-            };
-            while let Some(entry) = rd.next_entry().await? {
-                let p = entry.path();
-                let meta = match entry.metadata().await {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                let rel = p
-                    .strip_prefix(&local_root_path)
-                    .unwrap_or(&p)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                let remote_child = format!("{remote_root}/{rel}");
-                if meta.is_dir() {
-                    subdirs.push(remote_child);
-                    dirs_to_visit.push(p);
-                } else if meta.is_file() {
-                    files.push((p, remote_child));
-                }
-            }
-        }
-
-        let mut failed = Vec::new();
-        for (d, err) in unreadable {
-            let rel = d
-                .strip_prefix(&local_root_path)
-                .unwrap_or(&d)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let remote = format!("{remote_root}/{rel}");
-            failed.push(
-                self.failed_row(TransferKind::Upload, &d.to_string_lossy(), &remote, &err, &app)
-                    .await,
-            );
-        }
-
-        subdirs.sort_by_key(|s| s.matches('/').count());
-        for sd in subdirs {
-            let _ = fs.create_dir(&sd).await;
-        }
-
-        let mut ids = failed;
+        let mut ids = Vec::new();
         for (local_path, remote_path) in files {
             let parent = remote_path
                 .rsplit_once('/')
@@ -3864,7 +3829,46 @@ async fn dispatch_upload(
     local: &Path,
     final_remote: &str,
 ) -> Result<u64> {
+    let expected = tokio::fs::metadata(local).await?.len();
     let n = upload_by_backend(mgr, id, session, local, final_remote).await?;
+    if n != expected {
+        anyhow::bail!("Incomplete upload {final_remote}: sent {n}, expected {expected} bytes");
+    }
+    // Remote metadata is independent of the byte-copy progress counter.
+    // Listing failures are terminal: an unverified partial file cannot be done.
+    // Only path-addressed filesystems are checked: SaaS backends (WordPress,
+    // Shopify, Drive, …) may rename or convert what they store, so a name or
+    // size mismatch there is not a failed upload — and a false failure would
+    // feed the retry loop and duplicate the upload.
+    let direct_size = match &**session {
+        Session::Ssh(ssh) => {
+            let cell = ssh.ensure_sftp().await?;
+            let sftp = cell.lock().await;
+            Some(sftp.metadata(final_remote).await?.size
+                .context("SFTP server did not return a file size")?)
+        }
+        Session::Ftp(_) | Session::Object(_) => remote_size(session, final_remote).await.ok(),
+        Session::Webdav(_) | Session::Agent(_) => None,
+        _ => {
+            mgr.verify_upload(id, session, local, final_remote).await?;
+            return Ok(n);
+        }
+    };
+    let actual_size = if let Some(size) = direct_size { size } else {
+        let (parent, name) = final_remote.rsplit_once('/').unwrap_or((".", final_remote));
+        let entries = fs_for_session(session).list_dir(if parent.is_empty() { "/" } else { parent }).await
+            .with_context(|| format!("verify uploaded file {final_remote}"))?;
+        let entry = entries.iter().find(|e| e.name == name)
+            .ok_or_else(|| anyhow::anyhow!("Uploaded file missing from destination: {final_remote}"))?;
+        if entry.kind != crate::remotefs::FileKind::File {
+            anyhow::bail!("Destination is not a regular file: {final_remote}");
+        }
+        entry.size
+    };
+    if actual_size != expected {
+        anyhow::bail!("Remote size mismatch for {final_remote}: expected {expected}, got {actual_size}");
+    }
+    mgr.update(id, |t| t.notice = Some("Remote size verified; size equality does not guarantee binary integrity.".into())).await;
     mgr.verify_upload(id, session, local, final_remote).await?;
     Ok(n)
 }
@@ -4159,6 +4163,15 @@ mod tests {
                 .unwrap_or(false)
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_retries_claim_the_failed_row_only_once() {
+        let mgr = delta_test_manager("retry-once", TransferKind::Upload, "src", "dst", 0).await;
+        mgr.update("retry-once", |t| t.status = TransferStatus::Error).await;
+        let (first, second) = tokio::join!(mgr.claim_retry("retry-once"), mgr.claim_retry("retry-once"));
+        assert_ne!(first.is_ok(), second.is_ok());
+        assert_eq!(mgr.get("retry-once").await.unwrap().status, TransferStatus::Queued);
     }
 
     #[tokio::test]

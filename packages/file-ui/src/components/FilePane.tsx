@@ -913,6 +913,9 @@ export function FilePane({
 
   return (
     <div
+      data-file-pane={paneId}
+      data-file-session={sessionId ?? undefined}
+      data-file-path={path}
       ref={containerRef}
       tabIndex={0}
       role="listbox"
@@ -1526,6 +1529,7 @@ function Row({
     return (
       <div
         data-idx={index}
+        data-upload-directory={entry.kind === "directory" ? entry.path : undefined}
         role="option"
         id={`${paneId}-row-${index}`}
         aria-selected={selected}
@@ -1565,6 +1569,7 @@ function Row({
     return (
       <div
         data-idx={index}
+        data-upload-directory={entry.kind === "directory" ? entry.path : undefined}
         role="option"
         id={`${paneId}-row-${index}`}
         aria-selected={selected}
@@ -1593,6 +1598,7 @@ function Row({
   return (
     <div
       data-idx={index}
+        data-upload-directory={entry.kind === "directory" ? entry.path : undefined}
       role="option"
       id={`${paneId}-row-${index}`}
       aria-selected={selected}
