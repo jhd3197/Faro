@@ -126,7 +126,7 @@ pub async fn http_connect(profile: &ConnectionProfile) -> Result<HttpSession> {
         HttpAuth::None
     };
 
-    let client = Client::builder()
+    let client = crate::proxy::http_client_builder(profile)?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(120))
         .user_agent(concat!("Faro/", env!("CARGO_PKG_VERSION")))

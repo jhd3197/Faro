@@ -280,8 +280,13 @@ pub struct AgentPairResult {
 /// profile once pairing has succeeded, so a failed attempt leaves no
 /// half-configured connection behind.
 #[tauri::command]
-pub async fn pair_agent(host: String, port: u16, code: String) -> Result<AgentPairResult, String> {
-    let outcome = crate::session::agent_pair(host.trim(), port, &code)
+pub async fn pair_agent(
+    host: String,
+    port: u16,
+    code: String,
+    proxy: Option<crate::profiles::ProxyConfig>,
+) -> Result<AgentPairResult, String> {
+    let outcome = crate::session::agent_pair(host.trim(), port, &code, proxy.as_ref())
         .await
         .map_err(err)?;
     Ok(AgentPairResult {

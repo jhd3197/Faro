@@ -107,7 +107,7 @@ impl AzureNamespace {
             bail!("Azure requires an account key");
         };
         Ok(Self {
-            client: Client::builder()
+            client: crate::proxy::http_client_builder(profile)?
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(60))
                 .redirect(reqwest::redirect::Policy::none())

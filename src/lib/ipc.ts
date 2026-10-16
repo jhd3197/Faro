@@ -71,6 +71,7 @@ import type {
   SearchProgress,
   SearchHitBatch,
   BackupSummary,
+  ProxyConfig,
 } from "./types";
 
 // Typed wrappers around the Tauri command surface. The string names must match
@@ -124,8 +125,8 @@ export const ipc = {
   /** Pair with a faro-agentd at host:port using a one-time 6-digit code.
    *  Returns the daemon's key to pin into the profile; persists nothing itself,
    *  so a failed pairing leaves no half-configured connection behind. */
-  pairAgent: (host: string, port: number, code: string) =>
-    invoke<AgentPairResult>("pair_agent", { host, port, code }),
+  pairAgent: (host: string, port: number, code: string, proxy?: ProxyConfig) =>
+    invoke<AgentPairResult>("pair_agent", { host, port, code, proxy: proxy ?? null }),
 
   /** Run the interactive Dropbox OAuth flow for a profile (opens the browser,
    *  catches the loopback redirect, stores tokens in the OS keychain). Resolves
