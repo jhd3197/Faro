@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="210" viewBox="0 0 400 210" role="img" aria-labelledby="title">
+<title id="title">17 tipos de conexión. Servidores, nube, unidades y CMS.</title>
+<rect width="400" height="210" rx="16" fill="#10141c"/>
+<g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<text x="28" y="87" font-size="66" fill="#e9bd69" font-weight="600" letter-spacing="-2">17</text>
+<text x="28" y="130" font-size="25" fill="#f4f1ea" font-weight="600" >tipos de conexión</text>
+<path d="M28 153L372 153" stroke="#343b47"/>
+<text x="28" y="184" font-size="18" fill="#b2bac7" font-weight="400" >Servidores, nube, unidades y CMS</text></g>
+</svg>

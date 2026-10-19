@@ -2,7 +2,7 @@
 
 The PNGs in this folder are **auto-generated** from a mock-data demo build, so
 every hostname, IP, username, path, and metric is fictional. They render in the
-README's **📸 Screenshots** section (between the `<!-- FARO:SHOTS:START -->` and
+README's **Screenshots** section (between the `<!-- FARO:SHOTS:START -->` and
 `<!-- FARO:SHOTS:END -->` markers).
 
 ## Regenerate them

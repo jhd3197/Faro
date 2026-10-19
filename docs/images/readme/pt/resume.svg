@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="290" viewBox="0 0 600 290" role="img" aria-labelledby="title">
+<title id="title">Downloads retomáveis. Mantenha os intervalos concluídos e retome os bytes restantes nas origens compatíveis.</title>
+<rect width="600" height="290" rx="16" fill="#10141c"/>
+<g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<text x="32" y="43" font-size="16" fill="#e9bd69" font-weight="600" letter-spacing="2">DOWNLOADS POR INTERVALOS</text>
+<text x="30" y="124" font-size="43" fill="#f4f1ea" font-weight="600" >Continue de onde</text>
+<text x="30" y="173" font-size="43" fill="#f4f1ea" font-weight="600" >parou.</text>
+<rect x="32" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="77" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="122" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="167" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="212" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="257" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="302" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="347" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="392" y="199" width="38" height="10" rx="2" fill="#343b47"/><rect x="437" y="199" width="38" height="10" rx="2" fill="#343b47"/><rect x="482" y="199" width="38" height="10" rx="2" fill="#343b47"/><rect x="527" y="199" width="38" height="10" rx="2" fill="#343b47"/>
+<text x="32" y="250" font-size="20" fill="#b2bac7" font-weight="400" >Mantenha os intervalos prontos. Retome o restante.</text>
+<text x="32" y="277" font-size="18" fill="#b2bac7" font-weight="400" >A retomada depende da origem.</text>
+</g>
+</svg>
