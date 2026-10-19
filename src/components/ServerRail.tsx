@@ -45,6 +45,9 @@ import {
 import { cn } from "@/lib/cn";
 import { BrandIcon, protocolIcon } from "@/lib/brandIcons";
 import { BRAND_ICONS } from "@/lib/brandIconData";
+import { ServerSites, leaveSiteNavigation } from "./ServerSites";
+import { useSites } from "@/stores/sitesStore";
+import { toastError } from "@/lib/errors";
 
 type RowState = "focused" | "connected" | "connecting" | "error" | "idle";
 
@@ -145,6 +148,7 @@ export function ServerRail() {
     items: MenuItem[];
   } | null>(null);
   const [hovering, setHovering] = useState(false);
+  const [siteMenuOpen, setSiteMenuOpen] = useState(false);
   const hoverTimer = useRef<number | null>(null);
 
   // Drag-and-drop reorder state: the profile being dragged and where it would
@@ -172,7 +176,7 @@ export function ServerRail() {
   // Effective expanded state. Open when pinned, while hovering the collapsed
   // rail, while a rail menu / search popover is up (so the flyout doesn't
   // collapse out from under what you're clicking), or mid-drag.
-  const expanded = pinned || hovering || !!menu || searchOpen || !!dragId;
+  const expanded = pinned || hovering || !!menu || siteMenuOpen || searchOpen || !!dragId;
 
   const onRailEnter = () => {
     if (pinned) return;
@@ -194,6 +198,9 @@ export function ServerRail() {
   // host-key prompts queue through the always-mounted HostKeyModal rather than
   // racing. Runs a single time per launch.
   const autoRan = useRef(false);
+  useEffect(() => {
+    void useSites.getState().load().catch(e => toastError(e, "Couldn't load saved sites"));
+  }, []);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -435,8 +442,13 @@ export function ServerRail() {
       {
         label: connected ? "Switch to" : "Connect",
         icon: <Plug size={14} />,
-        onClick: () =>
-          connected && sid ? setActiveSession(sid) : doConnect(p.id),
+        onClick: () => {
+          leaveSiteNavigation();
+          useSites.getState().select(p.id);
+          setBrowseLocal(false);
+          if (connected && sid) setActiveSession(sid);
+          else doConnect(p.id);
+        },
       },
     ];
     if (p.protocol === "sftp") {
@@ -539,6 +551,8 @@ export function ServerRail() {
   // The reconciled click rule: connected → switch; auto-connect → connect;
   // otherwise open the bubble menu (Connect is the first item).
   const onBubbleClick = (e: React.MouseEvent, p: ConnectionProfile) => {
+    leaveSiteNavigation();
+    useSites.getState().select(p.id);
     setBrowseLocal(false);
     const sid = sidFor(p.id);
     if (sid) {
@@ -600,6 +614,9 @@ export function ServerRail() {
   };
 
   const pickFromSearch = (p: ConnectionProfile) => {
+    leaveSiteNavigation();
+    useSites.getState().select(p.id);
+    setBrowseLocal(false);
     const sid = sidFor(p.id);
     if (sid) setActiveSession(sid);
     else doConnect(p.id);
@@ -658,6 +675,7 @@ export function ServerRail() {
   };
 
   const renderBubble = (p: ConnectionProfile) => (
+    <div key={p.id} className="w-full">
     <RailBubble
       key={p.id}
       profile={p}
@@ -682,6 +700,8 @@ export function ServerRail() {
       onDrop={commitDrop}
       onDragEnd={endDrag}
     />
+    <ServerSites profileId={p.id} serverName={p.name} expanded={expanded} onMenuChange={setSiteMenuOpen} />
+    </div>
   );
 
   return (
@@ -719,7 +739,7 @@ export function ServerRail() {
               <RailRow
                 expanded={expanded}
                 tooltip="Local files"
-                onClick={() => setBrowseLocal(true)}
+                onClick={() => { leaveSiteNavigation(); setBrowseLocal(true); }}
                 ariaLabel="Local files"
                 bubble={
                   <span

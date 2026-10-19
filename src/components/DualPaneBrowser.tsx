@@ -7,6 +7,7 @@ import { useLayout } from "@/stores/layoutStore";
 import { LOCAL_SESSION } from "@/lib/types";
 import type { DirEntry } from "@/lib/types";
 import { ArrowRightLeft } from "lucide-react";
+import { useSiteBrowser } from "@/hooks/useSiteBrowser";
 
 export function DualPaneBrowser() {
   const activeSessionId = useConnections((s) => s.activeSessionId);
@@ -19,19 +20,11 @@ export function DualPaneBrowser() {
   const [localPath, setLocalPath] = useState(
     navigator.userAgent.includes("Windows") ? "C:\\" : "/"
   );
-  // Each live session keeps its own remote location, so switching connection
-  // tabs returns you to where you left off on that server.
-  const [remotePaths, setRemotePaths] = useState<Record<string, string>>({});
+  const siteBrowser = useSiteBrowser(profile);
   const [syncOpen, setSyncOpen] = useState(false);
 
-  const remotePath =
-    (activeSessionId && remotePaths[activeSessionId]) ||
-    profile?.defaultRemotePath ||
-    ".";
-  const setRemotePath = (path: string) => {
-    if (!activeSessionId) return;
-    setRemotePaths((m) => ({ ...m, [activeSessionId]: path }));
-  };
+  const remotePath = siteBrowser.path;
+  const setRemotePath = siteBrowser.setPath;
 
   // "Reveal in browser" from the Disk Usage explorer. Local targets go to the
   // local pane; a matching server target updates that session's remote pane.
@@ -43,10 +36,10 @@ export function DualPaneBrowser() {
       setLocalPath(revealTarget.path);
       clearReveal();
     } else if (revealTarget.sessionId === activeSessionId) {
-      setRemotePaths((m) => ({ ...m, [activeSessionId]: revealTarget.path }));
+      setRemotePath(revealTarget.path);
       clearReveal();
     }
-  }, [revealTarget, activeSessionId, clearReveal]);
+  }, [revealTarget, activeSessionId, clearReveal, setRemotePath]);
 
   const uploadAll = (entries: DirEntry[]) => {
     if (!activeSessionId) return;
@@ -93,14 +86,18 @@ export function DualPaneBrowser() {
       </div>
       <FilePane
         paneId="remote"
-        title={profile ? `Remote — ${profile.name}` : "Remote"}
+        key={`${activeSessionId}:${siteBrowser.site?.id ?? "server"}`}
+        title={siteBrowser.site?.name ?? (profile ? `Remote — ${profile.name}` : "Remote")}
         sessionId={activeSessionId}
         path={remotePath}
         onPathChange={setRemotePath}
         onTransfer={downloadAll}
         onDrop={uploadAll}
         transferLabel="Download"
+        onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
+        toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
       />
+      {siteBrowser.dialog}
 
       {syncOpen && activeSessionId && (
         <SyncDialog

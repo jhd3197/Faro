@@ -4,6 +4,10 @@ import { toast } from "./toastStore";
 import { toastError, messageOf } from "@/lib/errors";
 import type { ConnectionProfile, SessionId } from "@/lib/types";
 import { useTerminals } from "./terminalsStore";
+import { useSites } from "./sitesStore";
+
+// Site shortcuts share their parent's in-flight connection as well as its session.
+const pendingConnections = new Map<string, Promise<void>>();
 
 // One live connection. The backend keeps every session alive in a map, so the
 // app can hold several at once; this is the frontend's view of them.
@@ -35,7 +39,7 @@ interface ConnectionsState {
   ) => Promise<void>;
   deleteProfile: (id: string) => Promise<void>;
   /** Connect to a profile, or focus its existing session if already open. */
-  connect: (profileId: string) => Promise<void>;
+  connect: (profileId: string, options?: { focus?: boolean }) => Promise<void>;
   /** Disconnect one session (defaults to the active one). */
   disconnect: (sessionId?: SessionId) => Promise<void>;
   /** Drop a session (defaults to the active one) and open a fresh one to the
@@ -80,40 +84,45 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
   deleteProfile: async (id) => {
     await ipc.deleteProfile(id);
     await get().loadProfiles();
+    try {
+      await useSites.getState().removeForProfile(id);
+    } catch (e) {
+      toastError(e, "Couldn't remove this server's saved sites");
+    }
   },
 
-  connect: async (profileId) => {
+  connect: async (profileId, options) => {
     // Already connected to this profile? Just focus its tab.
     const existing = get().sessions.find((s) => s.profileId === profileId);
     if (existing) {
-      get().setActiveSession(existing.sessionId);
+      if (options?.focus !== false) get().setActiveSession(existing.sessionId);
       return;
     }
 
-    set({ connecting: true, error: null });
-    const profile = get().profiles.find((p) => p.id === profileId);
-    try {
-      const sessionId = await ipc.connect(profileId);
-      set((s) => ({
-        sessions: [...s.sessions, { sessionId, profileId }],
-        activeSessionId: sessionId,
-        activeProfileId: profileId,
-        connecting: false,
-      }));
-      void ipc.bridgeSetActiveSession(sessionId);
-      toast.success(
-        "Connected",
-        profile
-          ? `${profile.name} — ${profile.username}@${profile.host}`
-          : undefined
-      );
-    } catch (e) {
-      // `connect` returns a structured {kind, message} error (Plan 12 Phase 3),
-      // so the toast is keyed off the kind (auth → reconnect, network → check
-      // connection, …) instead of regexing the message.
-      set({ connecting: false, error: messageOf(e) });
-      toastError(e, profile ? `Couldn't connect to ${profile.name}` : "Connection failed");
-      throw e;
+    let pending = pendingConnections.get(profileId);
+    if (!pending) {
+      set({ connecting: true, error: null });
+      const profile = get().profiles.find(p => p.id === profileId);
+      pending = (async () => {
+        try {
+          const sessionId = await ipc.connect(profileId);
+          set(s => ({ sessions: [...s.sessions, { sessionId, profileId }] }));
+          toast.success("Connected", profile ? `${profile.name} — ${profile.username}@${profile.host}` : undefined);
+        } catch (e) {
+          set({ error: messageOf(e) });
+          toastError(e, profile ? `Couldn't connect to ${profile.name}` : "Connection failed");
+          throw e;
+        } finally {
+          pendingConnections.delete(profileId);
+          set({ connecting: pendingConnections.size > 0 });
+        }
+      })();
+      pendingConnections.set(profileId, pending);
+    }
+    await pending;
+    if (options?.focus !== false) {
+      const session = get().sessions.find(s => s.profileId === profileId);
+      if (session) get().setActiveSession(session.sessionId);
     }
   },
 

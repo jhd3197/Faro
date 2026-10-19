@@ -10,6 +10,7 @@ import { useLayout } from "@/stores/layoutStore";
 import { useSettings } from "@/stores/settingsStore";
 import { toast } from "@/stores/toastStore";
 import { LOCAL_SESSION, type DirEntry } from "@/lib/types";
+import { useSiteBrowser } from "@/hooks/useSiteBrowser";
 
 // Single-pane file browser: the active server is the main view. Uploads go
 // through a native OS picker (Upload button); downloads land in the Downloads
@@ -39,11 +40,10 @@ export function FileBrowser() {
 
   const isWindows = navigator.userAgent.includes("Windows");
   const [localPath, setLocalPath] = useState(isWindows ? "C:\\" : "/");
-  const [remotePaths, setRemotePaths] = useState<Record<string, string>>({});
+  const siteBrowser = useSiteBrowser(profile);
 
   const serverSid = activeSessionId;
-  const serverRemotePath =
-    (serverSid && remotePaths[serverSid]) || profile?.defaultRemotePath || ".";
+  const serverRemotePath = siteBrowser.path;
 
   // Honour a "reveal in browser" request from the Disk Usage explorer: point the
   // pane at the target directory on the matching session, then clear the signal.
@@ -55,11 +55,11 @@ export function FileBrowser() {
       clearReveal();
     } else if (revealTarget.sessionId === serverSid) {
       setBrowseLocal(false);
-      setRemotePaths((m) => ({ ...m, [serverSid]: revealTarget.path }));
+      siteBrowser.setPath(revealTarget.path);
       clearReveal();
     }
     // A reveal for a non-active session is left pending until it becomes active.
-  }, [revealTarget, serverSid, setBrowseLocal, clearReveal]);
+  }, [revealTarget, serverSid, setBrowseLocal, clearReveal, siteBrowser.setPath]);
 
   // Re-list the directory whenever a batch of transfers drains to zero, so an
   // upload's result shows up without a manual refresh.
@@ -91,9 +91,9 @@ export function FileBrowser() {
   const path = browseLocal ? localPath : serverRemotePath;
   const setPath = (p: string) => {
     if (browseLocal) setLocalPath(p);
-    else if (serverSid) setRemotePaths((m) => ({ ...m, [serverSid]: p }));
+    else if (serverSid) siteBrowser.setPath(p);
   };
-  const title = browseLocal ? "Local" : profile ? profile.name : "Server";
+  const title = browseLocal ? "Local" : siteBrowser.site?.name ?? profile?.name ?? "Server";
 
   // ---- Upload (server view) — native picker into the current remote dir ----
   const [uploadMenu, setUploadMenu] = useState<{ x: number; y: number } | null>(
@@ -165,6 +165,7 @@ export function FileBrowser() {
   return (
     <div className="relative flex h-full flex-1">
       <FilePane
+        key={browseLocal ? "local" : `${serverSid}:${siteBrowser.site?.id ?? "server"}`}
         paneId={browseLocal ? "local" : "remote"}
         title={title}
         sessionId={target}
@@ -174,7 +175,10 @@ export function FileBrowser() {
         onUpload={browseLocal ? undefined : onUpload}
         transferLabel={browseLocal ? "Upload" : "Download"}
         reloadToken={reloadToken}
+        onSaveSite={browseLocal || !serverSid ? undefined : siteBrowser.saveSite}
+        toolbarActions={browseLocal || !serverSid ? undefined : siteBrowser.toolbar}
       />
+      {siteBrowser.dialog}
       {uploadMenu && (
         <ContextMenu
           x={uploadMenu.x}

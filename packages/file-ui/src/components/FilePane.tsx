@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import {
   ArrowUp,
   ArrowLeft,
@@ -33,6 +33,7 @@ import {
   Upload,
   Download,
   Image as ImageIcon,
+  BookmarkPlus,
 } from "lucide-react";
 import type {
   Capabilities,
@@ -134,6 +135,9 @@ interface Props {
   transferLabel?: string;
   /** Bump to force a re-listing of the current directory (e.g. after an upload). */
   reloadToken?: number;
+  /** Host-provided shortcuts for a remote folder; absent in generic/local panes. */
+  onSaveSite?: (path: string) => void;
+  toolbarActions?: ReactNode;
 }
 
 /** Extract a human message from any thrown value. Transport backends may reject
@@ -167,6 +171,8 @@ export function FilePane({
   onDrop,
   transferLabel = "Transfer",
   reloadToken,
+  onSaveSite,
+  toolbarActions,
 }: Props) {
   // Everything that used to be a direct Tauri call or a zustand read now comes
   // through the injected adapter + settings. The component is otherwise the
@@ -627,6 +633,9 @@ export function FilePane({
         label: single.kind === "directory" ? "Open" : transferLabel,
         onClick: () => onRowActivate(single),
       });
+      if (single.kind === "directory" && isRemote && onSaveSite) {
+        items.push({ label: "Save as site…", icon: <BookmarkPlus size={12} />, onClick: () => onSaveSite(single.path) });
+      }
       // Edit-in-place sits right under the primary action so it's easy to find
       // (it used to be last, below chmod). Remote files only — local files open
       // in their app via the OS, and there's nothing to upload back.
@@ -803,6 +812,9 @@ export function FilePane({
     if (!sessionId) return;
     e.preventDefault();
     const items: MenuItem[] = [];
+    if (sessionId !== LOCAL_SESSION && onSaveSite) {
+      items.push({ label: "Save as site…", icon: <BookmarkPlus size={12} />, onClick: () => onSaveSite(path), separatorAfter: true });
+    }
     if (caps?.hasDirectories !== false) {
       items.push({
         label: "New folder…",
@@ -964,6 +976,7 @@ export function FilePane({
           </span>
         )}
         <div className="flex-1" />
+        {sessionId && toolbarActions}
         {selectionCount > 0 && onTransfer && (
           <button
             onClick={transferSelection}
