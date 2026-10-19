@@ -457,6 +457,9 @@ mod tests {
             ftp_active_mode: None,
             ftp_max_connections: None,
             ftp_segments: None,
+            proxy: None,
+            jump_profile: None,
+            jump_via: None,
         };
 
         // Client-credentials flavor: token exchange happens on first request.

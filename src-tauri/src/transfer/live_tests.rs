@@ -64,6 +64,9 @@ fn profile(protocol: &str, host: &str, port: u16, user: &str, pass: &str) -> Con
         ftp_active_mode: None,
         ftp_max_connections: None,
         ftp_segments: None,
+        proxy: None,
+        jump_profile: None,
+        jump_via: None,
     }
 }
 
@@ -773,4 +776,177 @@ async fn live_ftps_app_round_trip() {
     });
     crate::remotefs::RemoteFs::delete(&fs, "/app.bin", false).await.unwrap();
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---- Proxies and jump hosts (Plan 27) ----
+//
+// `docker compose -f scripts/proxy-lab.yml up -d`, then run with
+// FARO_LIVE_PROXY_LAB=1. The SFTP/FTP/S3 targets are only reachable through
+// the lab's SOCKS5 proxy (127.0.0.1:11080), HTTP proxy (127.0.0.1:13128) or
+// SSH bastion (127.0.0.1:12222); their hostnames don't resolve on the host.
+
+fn proxy_lab() -> bool {
+    std::env::var("FARO_LIVE_PROXY_LAB").is_ok()
+}
+
+fn lab_proxies() -> [crate::profiles::ProxyConfig; 2] {
+    use crate::profiles::{ProxyConfig, ProxyKind};
+    [
+        ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "127.0.0.1".into(),
+            port: 11080,
+            username: Some("faro".into()),
+            password: Some("p@ss:word".into()),
+        },
+        ProxyConfig {
+            kind: ProxyKind::Http,
+            host: "127.0.0.1".into(),
+            port: 13128,
+            username: Some("faro".into()),
+            password: Some("proxypw".into()),
+        },
+    ]
+}
+
+async fn lab_open(p: &ConnectionProfile) -> anyhow::Result<Arc<Session>> {
+    Ok(Arc::new(crate::session::open_session(p, Arc::new(AcceptAll)).await?))
+}
+
+/// Browse and download a 3 MiB file over `session`, checking the bytes
+/// against the copy read over SFTP-through-SOCKS.
+async fn lab_browse_and_download(session: &Arc<Session>, root: &str, reference: &Path) {
+    let names: Vec<String> = fs_for_session(session)
+        .list_dir(root)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert!(names.iter().any(|n| n == "blob.bin"), "{names:?}");
+    let dir = scratch("proxy-dl");
+    let mgr = Arc::new(TransferManager::new());
+    let (t, ..) = download(&mgr, session, &format!("{root}/blob.bin"), &dir).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    assert_eq!(sha_file(&dir.join("blob.bin")), sha_file(reference));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/proxy-lab.yml and FARO_LIVE_PROXY_LAB"]
+async fn live_proxy_sftp_ftp_s3() {
+    if !proxy_lab() {
+        return;
+    }
+    // Direct connections must fail: the targets only exist behind the proxy.
+    let direct = profile("sftp", "target", 22, "faro", "farotest");
+    assert!(lab_open(&direct).await.is_err());
+
+    // Reference copy of the blob, via SFTP through SOCKS5.
+    let [socks, http] = lab_proxies();
+    let mut sftp = direct.clone();
+    sftp.proxy = Some(socks.clone());
+    let session = lab_open(&sftp).await.expect("SFTP via SOCKS5");
+    let refdir = scratch("proxy-ref");
+    let mgr = Arc::new(TransferManager::new());
+    let (t, ..) = download(&mgr, &session, "/home/faro/data/blob.bin", &refdir).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    let reference = refdir.join("blob.bin");
+
+    for proxy in [socks, http] {
+        let label = proxy.kind.label();
+        let mut sftp = direct.clone();
+        sftp.proxy = Some(proxy.clone());
+        let s = lab_open(&sftp).await.unwrap_or_else(|e| panic!("SFTP via {label}: {e:#}"));
+        lab_browse_and_download(&s, "/home/faro/data", &reference).await;
+        if let Session::Ssh(ssh) = &*s {
+            let out = ssh.exec("cat /home/faro/data/hello.txt").await.unwrap();
+            assert_eq!(out.stdout.trim(), "hello through the proxy");
+        }
+
+        // FTP: control and passive data both through the proxy, with the
+        // transfer pool's extra logins.
+        let mut ftp = profile("ftp", "target", 21, "faro", "farotest");
+        ftp.proxy = Some(proxy.clone());
+        let s = lab_open(&ftp).await.unwrap_or_else(|e| panic!("FTP via {label}: {e:#}"));
+        lab_browse_and_download(&s, "/home/faro/data", &reference).await;
+
+        let mut active = ftp.clone();
+        active.ftp_active_mode = Some(true);
+        let err = lab_open(&active).await.err().expect("active FTP refused");
+        assert!(format!("{err:#}").contains("active mode"), "{err:#}");
+
+        // S3 through object_store's reqwest client.
+        let mut s3 = profile("s3", "", 0, "faroadmin", "farosecret");
+        s3.bucket = Some("faro-test".into());
+        s3.endpoint = Some("http://s3:9000".into());
+        s3.region = Some("us-east-1".into());
+        s3.proxy = Some(proxy.clone());
+        let s = lab_open(&s3).await.unwrap_or_else(|e| panic!("S3 via {label}: {e:#}"));
+        let names: Vec<String> =
+            fs_for_session(&s).list_dir("/").await.unwrap().into_iter().map(|e| e.name).collect();
+        assert!(names.iter().any(|n| n == "hello.txt"), "S3 via {label}: {names:?}");
+        println!("{label} proxy: SFTP, FTP and S3 OK");
+    }
+
+    // Wrong proxy credentials fail with a readable error.
+    let mut bad = direct.clone();
+    let mut p = lab_proxies()[0].clone();
+    p.password = Some("nope".into());
+    bad.proxy = Some(p);
+    let err = lab_open(&bad).await.err().expect("bad proxy password");
+    assert!(format!("{err:#}").contains("rejected the username or password"), "{err:#}");
+    let _ = std::fs::remove_dir_all(refdir);
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/proxy-lab.yml and FARO_LIVE_PROXY_LAB"]
+async fn live_jump_profile_chains() {
+    use crate::profiles::JumpVia;
+    if !proxy_lab() {
+        return;
+    }
+    let mut outer = profile("sftp", "127.0.0.1", 12222, "jump", "jumptest");
+    outer.id = "outer".into();
+    let mut target = profile("sftp", "target", 22, "faro", "farotest");
+    target.jump_profile = Some("outer".into());
+    target.jump_via = Some(JumpVia::Profile(Box::new(outer.clone())));
+
+    let session = lab_open(&target).await.expect("one hop");
+    let Session::Ssh(ssh) = &*session else { unreachable!() };
+    assert_eq!(ssh.exec("cat /home/faro/data/hello.txt").await.unwrap().stdout.trim(), "hello through the proxy");
+    assert_eq!(ssh.jump_handle_count().await, 1);
+
+    // Two hops: target <- bastion (by its inner name) <- bastion (published).
+    let mut inner = profile("sftp", "bastion", 22, "jump", "jumptest");
+    inner.id = "inner".into();
+    inner.jump_via = Some(JumpVia::Profile(Box::new(outer.clone())));
+    target.jump_via = Some(JumpVia::Profile(Box::new(inner.clone())));
+    let session = lab_open(&target).await.expect("two hops");
+    let Session::Ssh(ssh) = &*session else { unreachable!() };
+    assert_eq!(ssh.jump_handle_count().await, 2);
+    let dir = scratch("jump-ref");
+    let mgr = Arc::new(TransferManager::new());
+    let (t, ..) = download(&mgr, &session, "/home/faro/data/blob.bin", &dir).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+
+    // A bastion reached through the SOCKS5 proxy (by its inner name).
+    let mut proxied = inner.clone();
+    proxied.jump_via = None;
+    proxied.proxy = Some(lab_proxies()[0].clone());
+    target.jump_via = Some(JumpVia::Profile(Box::new(proxied)));
+    let session = lab_open(&target).await.expect("proxied bastion");
+    lab_browse_and_download(&session, "/home/faro/data", &dir.join("blob.bin")).await;
+
+    // A failing hop is named in the error; a broken chain never goes direct.
+    let mut bad = outer.clone();
+    bad.name = "bad bastion".into();
+    bad.auth = AuthMethod::Password { password: "wrong".into() };
+    target.jump_via = Some(JumpVia::Profile(Box::new(bad)));
+    let err = lab_open(&target).await.err().expect("bad bastion");
+    assert!(format!("{err:#}").contains("jump host 'bad bastion'"), "{err:#}");
+    target.jump_via = None;
+    let err = lab_open(&target).await.err().expect("unresolved chain");
+    assert!(format!("{err:#}").contains("could not be resolved"), "{err:#}");
+    let _ = std::fs::remove_dir_all(dir);
 }

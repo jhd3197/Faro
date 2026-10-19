@@ -111,6 +111,21 @@ export interface ConnectionProfile {
   ftpMaxConnections?: number;
   /** FTP/FTPS: parallel connections one download may use. Absent = 1. */
   ftpSegments?: number;
+  // SOCKS5 / HTTP CONNECT proxy for the connection's first TCP hop.
+  proxy?: ProxyConfig;
+  // Id of another SFTP profile to connect through (ProxyJump), with its own
+  // login. Distinct from the grant-only inline jumpHost above.
+  jumpProfile?: string;
+}
+
+export type ProxyKind = "socks5" | "http";
+
+export interface ProxyConfig {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
 }
 
 export const PROTOCOL_DEFAULT_PORT: Record<Protocol, number> = {
@@ -321,6 +336,9 @@ export interface ProfilePreview {
   note?: string;
   ftpEncoding?: string;
   ftpActiveMode?: boolean;
+  proxy?: ProxyConfig;
+  jumpPreviewId?: string;
+  jumpName?: string;
 }
 
 export type ImporterKind = "openssh" | "filezilla" | "putty";

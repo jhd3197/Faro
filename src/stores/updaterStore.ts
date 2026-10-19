@@ -4,141 +4,175 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { ipc } from "@/lib/ipc";
 import { toast } from "./toastStore";
 
-// In-app auto-updater (Plan 16 Phase 1/2). Drives the Tauri updater plugin from
-// the frontend: check a signed GitHub-Releases `latest.json`, download the
-// signed artifact (verified against the pubkey in tauri.conf.json), and relaunch
-// to apply. The signature check is the plugin's, not ours — the app never
-// installs an unverified update.
-//
-// `heldUpdate` keeps the (non-serializable) plugin Update object between the
-// check and the download; only plain, renderable fields live in the store.
-
+// Tauri owns downloading and signature verification in Rust. Keep the verified
+// package alive until the user explicitly chooses to install and restart.
 let heldUpdate: Update | null = null;
-
-/** How long to wait between quiet launch checks (persisted via `lastUpdateCheck`
- *  in faro.db so it survives restarts, per the plan). */
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+let installed = false;
+const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const RELEASES_URL = "https://github.com/jhd3197/Faro/releases/latest";
 
 export type UpdaterStatus =
-  | "idle" // no check run yet, or up to date
-  | "checking"
-  | "available"
-  | "downloading"
-  | "ready" // downloaded + installed; awaiting restart
-  | "error";
+  | "idle" | "checking" | "current" | "available" | "manual"
+  | "downloading" | "verifying" | "ready" | "installing" | "error";
+type Retry = "check" | "download" | "install";
 
 interface UpdaterState {
   status: UpdaterStatus;
-  /** The offered version (when an update is available). */
   version: string | null;
   currentVersion: string | null;
   notes: string | null;
-  /** Download progress, bytes. `total` is null until the Started event. */
+  releaseUrl: string;
   downloaded: number;
   total: number | null;
   error: string | null;
-  /** Session-only: hide the launch prompt without changing anything persisted. */
+  errorDetail: string | null;
+  retryAction: Retry;
+  lastChecked: number | null;
   dismissed: boolean;
-
-  /** Check now. `quiet` swallows the "up to date" toast + any endpoint error
-   *  (used for the throttled launch check); a manual check surfaces both. */
   check: (quiet: boolean) => Promise<void>;
-  downloadAndInstall: () => Promise<void>;
+  download: () => Promise<void>;
   restart: () => Promise<void>;
+  retry: () => Promise<void>;
   dismiss: () => void;
-  /** Throttled launch check. Returns a no-op cleanup so it slots into the same
-   *  mount pattern as the other startup stores. */
   init: () => Promise<() => void>;
 }
 
+function detail(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null) {
+    const e = error as { message?: string; detail?: string };
+    return e.detail ?? e.message ?? JSON.stringify(error);
+  }
+  return String(error);
+}
+
+function downloadError(error: unknown): string {
+  const raw = detail(error);
+  if (/signature|verify|minisign|pubkey/i.test(raw)) {
+    return "Faro couldn't verify this update. Nothing was installed. Try downloading it again, or open Downloads.";
+  }
+  return "The update couldn't finish downloading. Check your connection and try again.";
+}
+
 export const useUpdater = create<UpdaterState>((set, get) => ({
-  status: "idle",
-  version: null,
-  currentVersion: null,
-  notes: null,
-  downloaded: 0,
-  total: null,
-  error: null,
-  dismissed: false,
+  status: "idle", version: null, currentVersion: null, notes: null,
+  releaseUrl: RELEASES_URL, downloaded: 0, total: null,
+  error: null, errorDetail: null, retryAction: "check", lastChecked: null, dismissed: false,
 
   check: async (quiet) => {
-    if (get().status === "checking" || get().status === "downloading") return;
-    set({ status: "checking", error: null });
-    // Record the check time regardless of outcome so we don't hammer the endpoint.
-    ipc.settingsSet("lastUpdateCheck", JSON.stringify(Date.now())).catch(() => {});
+    // A second check must not discard a verified download or race an install.
+    if (["checking", "downloading", "verifying", "ready", "installing"].includes(get().status)
+      || (get().status === "error" && get().retryAction === "install")) return;
+    const previous = heldUpdate;
+    heldUpdate = null;
+    installed = false;
+    set({ status: "checking", error: null, errorDetail: null, version: null, notes: null,
+      downloaded: 0, total: null, releaseUrl: RELEASES_URL, retryAction: "check" });
+    await previous?.close().catch(() => {});
+    // Timestamp successful checks only. An offline launch must not suppress the
+    // next launch's check for six hours.
+    const checked = () => {
+      const now = Date.now();
+      set({ lastChecked: now });
+      void ipc.settingsSet("lastUpdateCheck", JSON.stringify(now)).catch(() => {});
+    };
     try {
-      const update = await check();
-      if (update && update.available) {
-        heldUpdate = update;
-        set({
-          status: "available",
-          version: update.version,
-          currentVersion: update.currentVersion,
-          notes: update.body ?? null,
-          dismissed: false,
-        });
+      const update = await check({ timeout: 15_000 });
+      heldUpdate = update;
+      if (update) {
+        set({ status: "available", version: update.version, currentVersion: update.currentVersion,
+          notes: update.body ?? null, dismissed: false });
       } else {
-        heldUpdate = null;
-        set({ status: "idle", version: null, notes: null });
+        set({ status: "current" });
         if (!quiet) toast.success("Faro is up to date");
       }
-    } catch (e) {
-      heldUpdate = null;
-      // A missing/unbuilt latest.json (404) is expected until the signed release
-      // pipeline is live — never nag on launch. Manual checks show the error.
-      if (quiet) {
-        set({ status: "idle" });
-      } else {
-        set({ status: "error", error: String(e) });
-        toast.error(`Update check failed: ${e}`);
+      checked();
+    } catch (pluginError) {
+      // Releases can exist without latest.json. Discover them natively, without
+      // weakening the signed installer path or pretending a failed check passed.
+      try {
+        const release = await ipc.appUpdateRelease();
+        set({ status: release.newer ? "manual" : "current", version: release.version,
+          currentVersion: release.currentVersion, notes: release.notes, releaseUrl: release.url,
+          errorDetail: release.newer ? detail(pluginError) : null, dismissed: false });
+        checked();
+        if (!release.newer && !quiet) toast.success("Faro is up to date");
+      } catch (fallbackError) {
+        const message = typeof fallbackError === "object" && fallbackError !== null
+          ? (fallbackError as { message?: string }).message : null;
+        set({ status: "error", error: message ?? "Couldn't check for updates. Check your connection and try again.",
+          errorDetail: `${detail(pluginError)}\n${detail(fallbackError)}` });
+        // The About panel owns this error; background checks stay quiet and a
+        // manual check doesn't produce a second, duplicate toast.
       }
     }
   },
 
-  downloadAndInstall: async () => {
-    if (!heldUpdate || get().status === "downloading") return;
-    set({ status: "downloading", downloaded: 0, total: null, error: null });
+  download: async () => {
+    if (!heldUpdate || !(get().status === "available"
+      || (get().status === "error" && get().retryAction === "download"))) return;
+    set({ status: "downloading", downloaded: 0, total: null, error: null, errorDetail: null, dismissed: false });
     try {
-      await heldUpdate.downloadAndInstall((event) => {
-        switch (event.event) {
-          case "Started":
-            set({ total: event.data.contentLength ?? null, downloaded: 0 });
-            break;
-          case "Progress":
-            set((s) => ({ downloaded: s.downloaded + event.data.chunkLength }));
-            break;
-          case "Finished":
-            break;
+      let received = 0;
+      let lastPaint = 0;
+      await heldUpdate.download((event) => {
+        if (event.event === "Started") {
+          received = 0;
+          set({ total: event.data.contentLength || null, downloaded: 0 });
+        } else if (event.event === "Progress") {
+          received += event.data.chunkLength;
+          const now = Date.now();
+          if (now - lastPaint >= 100) {
+            lastPaint = now;
+            set({ downloaded: received });
+          }
+        } else {
+          // Tauri emits Finished before signature verification, not after it.
+          set({ status: "verifying", downloaded: received });
         }
-      });
+      }, { timeout: 30 * 60 * 1000 });
       set({ status: "ready" });
-    } catch (e) {
-      set({ status: "error", error: String(e) });
-      toast.error(`Update download failed: ${e}`);
+    } catch (error) {
+      set({ status: "error", retryAction: "download", error: downloadError(error), errorDetail: detail(error) });
     }
   },
 
   restart: async () => {
+    if (!heldUpdate || !(get().status === "ready"
+      || (get().status === "error" && get().retryAction === "install"))) return;
+    set({ status: "installing", error: null, errorDetail: null, dismissed: false });
     try {
+      if (!installed) {
+        // Windows launches the installer and exits here; macOS/Linux return.
+        await heldUpdate.install();
+        installed = true;
+      }
       await relaunch();
-    } catch (e) {
-      toast.error(`Couldn't restart: ${e}`);
+    } catch (error) {
+      set({ status: "error", retryAction: "install",
+        error: installed ? "The update is installed, but Faro couldn't restart. Try again, or close and reopen Faro."
+          : "Faro couldn't install the update. Try again, or open Downloads to install it manually.",
+        errorDetail: detail(error) });
     }
   },
 
+  retry: async () => {
+    const state = get();
+    if (state.retryAction === "download") await state.download();
+    else if (state.retryAction === "install") await state.restart();
+    else await state.check(false);
+  },
   dismiss: () => set({ dismissed: true }),
-
   init: async () => {
     try {
       const all = await ipc.settingsGetAll();
-      const raw = all["lastUpdateCheck"];
-      const last = raw ? Number(JSON.parse(raw)) : 0;
-      if (!Number.isFinite(last) || Date.now() - last > CHECK_INTERVAL_MS) {
+      let last = 0;
+      try { last = Number(JSON.parse(all["lastUpdateCheck"] ?? "0")); } catch { /* Check again. */ }
+      if (Number.isFinite(last) && last > 0 && last <= Date.now()) set({ lastChecked: last });
+      if (!Number.isFinite(last) || last <= 0 || last > Date.now() || Date.now() - last > CHECK_INTERVAL_MS) {
         await get().check(true);
       }
-    } catch {
-      // No backend (mock) — skip the launch check.
-    }
+    } catch { /* Settings unavailable; leave the manual check usable. */ }
     return () => {};
   },
 }));

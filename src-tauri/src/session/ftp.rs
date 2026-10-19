@@ -684,17 +684,26 @@ macro_rules! open {
     ($ty:ty, $profile:expr) => {{
         let profile: &ConnectionProfile = $profile;
         let addr = format!("{}:{}", profile.host, profile.port);
-        let tcp = dial(host_only(&profile.host), profile.port)
+        let tcp = dial(profile, host_only(&profile.host), profile.port)
             .with_context(|| format!("FTP connect {addr}"))?;
+        // Through a proxy this is the proxy's address, which `data_mode` and
+        // the builder below account for.
         let server_ip = tcp.peer_addr()?.ip();
+        let data_profile = profile.clone();
         let mut ftp = <$ty>::connect_with_stream(tcp)
             .map_err(into_anyhow)
             .with_context(|| format!("FTP connect {addr}"))?
             .passive_stream_builder(move |addr| {
-                let addr = passive_target(addr, server_ip);
-                let s = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-                    .map_err(FtpError::ConnectionError)?;
-                set_io_timeouts(&s).map_err(FtpError::ConnectionError)?;
+                let s = if data_profile.proxy.is_some() {
+                    // EPSV reports the proxy's address and PASV often a
+                    // private one, so dial the control host at the announced
+                    // port, through the proxy.
+                    dial(&data_profile, host_only(&data_profile.host), addr.port())
+                } else {
+                    TcpStream::connect_timeout(&passive_target(addr, server_ip), CONNECT_TIMEOUT)
+                        .and_then(|s| set_io_timeouts(&s).map(|_| s))
+                }
+                .map_err(FtpError::ConnectionError)?;
                 Ok(s)
             });
         ftp.set_mode(data_mode(profile, server_ip));
@@ -727,6 +736,11 @@ fn connect_blocking(
             ))
         }
     };
+    if profile.proxy.is_some() && profile.ftp_active_mode == Some(true) {
+        return Err(anyhow!(
+            "FTP active mode can't work through a proxy (the server would have to connect back to you); switch to passive mode"
+        ));
+    }
     let charset = resolve_charset(profile.ftp_encoding.as_deref())?;
     let host = host_only(&profile.host);
 
@@ -786,6 +800,14 @@ fn connect_blocking(
 /// mode is opt-in, for servers whose passive port range is firewalled; it is
 /// IPv4-only in suppaftp, so IPv6 servers stay on EPSV.
 fn data_mode(profile: &ConnectionProfile, server_ip: IpAddr) -> Mode {
+    if profile.proxy.is_some() {
+        // `server_ip` is the proxy; only an IPv6 literal host needs EPSV.
+        // Active mode is refused before connecting.
+        return match host_only(&profile.host).parse::<IpAddr>() {
+            Ok(IpAddr::V6(_)) => Mode::ExtendedPassive,
+            _ => Mode::Passive,
+        };
+    }
     if server_ip.is_ipv6() {
         Mode::ExtendedPassive
     } else if profile.ftp_active_mode == Some(true) {
@@ -795,8 +817,15 @@ fn data_mode(profile: &ConnectionProfile, server_ip: IpAddr) -> Mode {
     }
 }
 
-/// TCP connect to the first address that answers within the timeout.
-fn dial(host: &str, port: u16) -> std::io::Result<TcpStream> {
+/// TCP connect to the first address that answers within the timeout, through
+/// the profile's proxy when it has one.
+fn dial(profile: &ConnectionProfile, host: &str, port: u16) -> std::io::Result<TcpStream> {
+    if profile.proxy.is_some() {
+        let s = crate::proxy::dial(profile.proxy.as_ref(), host, port)
+            .map_err(|e| std::io::Error::other(format!("{e:#}")))?;
+        set_io_timeouts(&s)?;
+        return Ok(s);
+    }
     let mut last = None;
     for a in (host, port).to_socket_addrs()? {
         match TcpStream::connect_timeout(&a, CONNECT_TIMEOUT) {

@@ -1,0 +1,65 @@
+# Proxy / jump-host lab for transfer::live_tests (Plan 27):
+#   docker compose -f scripts/proxy-lab.yml up -d
+#   FARO_LIVE_PROXY_LAB=1 cargo test -p faro --lib -- --ignored live_proxy live_jump --test-threads 1
+# The targets are reachable only through the proxies or the bastion.
+name: faro-proxylab
+networks:
+  inner:
+    # Not internal: the targets install packages at start. The host still
+    # can't resolve or route to them directly.
+  outer: {}
+services:
+  target:
+    image: alpine:3.20
+    networks: [inner]
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache openssh vsftpd >/dev/null
+        ssh-keygen -A
+        adduser -D faro && echo faro:farotest | chpasswd
+        printf 'PasswordAuthentication yes\nAllowTcpForwarding yes\nSubsystem sftp internal-sftp\n' > /etc/ssh/sshd_config
+        printf 'listen=YES\nanonymous_enable=NO\nlocal_enable=YES\nwrite_enable=YES\nseccomp_sandbox=NO\nisolate=NO\nisolate_network=NO\npasv_enable=YES\npasv_min_port=21100\npasv_max_port=21110\n' > /etc/vsftpd/vsftpd.conf
+        mkdir -p /home/faro/data && echo 'hello through the proxy' > /home/faro/data/hello.txt
+        head -c 3145728 /dev/urandom > /home/faro/data/blob.bin
+        chown -R faro /home/faro
+        vsftpd /etc/vsftpd/vsftpd.conf &
+        exec /usr/sbin/sshd -D -e
+  s3:
+    image: rustfs/rustfs
+    networks: [inner]
+    environment:
+      RUSTFS_ACCESS_KEY: faroadmin
+      RUSTFS_SECRET_KEY: farosecret
+  bastion:
+    image: alpine:3.20
+    networks: [inner, outer]
+    ports: ["12222:22"]
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache openssh >/dev/null
+        ssh-keygen -A
+        adduser -D jump && echo jump:jumptest | chpasswd
+        printf 'PasswordAuthentication yes\nAllowTcpForwarding yes\n' > /etc/ssh/sshd_config
+        exec /usr/sbin/sshd -D -e
+  socks:
+    image: serjs/go-socks5-proxy
+    networks: [inner, outer]
+    ports: ["11080:1080"]
+    environment:
+      PROXY_USER: faro
+      PROXY_PASSWORD: "p@ss:word"
+  http:
+    image: alpine:3.20
+    networks: [inner, outer]
+    ports: ["13128:8888"]
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache tinyproxy >/dev/null
+        printf 'Port 8888\nListen 0.0.0.0\nTimeout 600\nAllow 0.0.0.0/0\nBasicAuth faro proxypw\nLogLevel Info\n' > /etc/tinyproxy/tinyproxy.conf
+        exec tinyproxy -d -c /etc/tinyproxy/tinyproxy.conf

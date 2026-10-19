@@ -7,7 +7,7 @@
 //! channel transparently re-dials and re-handshakes (verifying the pinned key)
 //! so a browse after a long idle just works, mirroring `SshSession`'s reconnect.
 
-use crate::profiles::ConnectionProfile;
+use crate::profiles::{ConnectionProfile, ProxyConfig};
 use anyhow::{anyhow, bail, Context, Result};
 use faro_agent_proto::{
     identity::Identity,
@@ -47,7 +47,12 @@ pub struct PairOutcome {
 /// pairing handshake, learns + returns the daemon's static key (the caller pins
 /// it into the profile), and fetches system info so the UI can confirm which
 /// machine was paired. Does not create a persistent session.
-pub async fn agent_pair(host: &str, port: u16, code: &str) -> Result<PairOutcome> {
+pub async fn agent_pair(
+    host: &str,
+    port: u16,
+    code: &str,
+    proxy: Option<&ProxyConfig>,
+) -> Result<PairOutcome> {
     if !faro_agent_proto::is_valid_code(code) {
         bail!("pairing code must be 6 digits");
     }
@@ -55,9 +60,7 @@ pub async fn agent_pair(host: &str, port: u16, code: &str) -> Result<PairOutcome
     let sk = identity.private_bytes()?;
     let psk = faro_agent_proto::psk_from_code(code);
 
-    let stream = TcpStream::connect((host, port))
-        .await
-        .with_context(|| format!("connect to {host}:{port}"))?;
+    let stream = crate::proxy::dial_async(proxy, host, port).await?;
     let mut channel = SecureChannel::establish(stream, Role::Initiator, &sk, Auth::Pairing { psk })
         .await
         .context(
@@ -135,9 +138,8 @@ impl AgentSession {
         let identity = controller_identity()?;
         let sk = identity.private_bytes()?;
         let expect = faro_agent_proto::decode_public(server_key)?;
-        let stream = TcpStream::connect((profile.host.as_str(), profile.port))
-            .await
-            .with_context(|| format!("connect to {}:{}", profile.host, profile.port))?;
+        let stream =
+            crate::proxy::dial_async(profile.proxy.as_ref(), &profile.host, profile.port).await?;
         let mut channel = SecureChannel::establish(
             stream,
             Role::Initiator,
@@ -232,6 +234,9 @@ impl AgentSession {
                 ftp_active_mode: None,
                 ftp_max_connections: None,
                 ftp_segments: None,
+                proxy: None,
+                jump_profile: None,
+                jump_via: None,
             },
             server_key: String::new(),
             channel: Mutex::new(Some(channel)),

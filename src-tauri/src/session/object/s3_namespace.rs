@@ -75,7 +75,7 @@ impl S3Namespace {
             bail!("S3 requires password authentication")
         };
         Ok(Self {
-            client: Client::builder()
+            client: crate::proxy::http_client_builder(profile)?
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(60))
                 .redirect(reqwest::redirect::Policy::none())

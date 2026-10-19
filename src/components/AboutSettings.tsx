@@ -16,11 +16,10 @@ import { openExternal } from "@/lib/openExternal";
 import { toast } from "@/stores/toastStore";
 import { useSettings } from "@/stores/settingsStore";
 import { useUpdater } from "@/stores/updaterStore";
+import { UpdateProgress } from "./UpdateProgress";
 import type { PathStatus } from "@/lib/types";
 import { getVersion } from "@tauri-apps/api/app";
 import { cn } from "@/lib/cn";
-
-const RELEASES_URL = "https://github.com/jhd3197/Faro/releases";
 
 /// Settings → About. The app's identity/version, plus the trust/UX fundamentals
 /// from Plan 16: the one-click "Add faro-cli to PATH" row (Phase 4). The updater
@@ -68,91 +67,73 @@ export function AboutSettings() {
 /// status, and the download → restart flow. The launch check + the prompt bar
 /// live in UpdatePrompt; this is the on-demand surface.
 function UpdaterCard() {
-  const status = useUpdater((s) => s.status);
-  const version = useUpdater((s) => s.version);
-  const downloaded = useUpdater((s) => s.downloaded);
-  const total = useUpdater((s) => s.total);
-  const error = useUpdater((s) => s.error);
-  const check = useUpdater((s) => s.check);
-  const download = useUpdater((s) => s.downloadAndInstall);
-  const restart = useUpdater((s) => s.restart);
-
-  const busy = status === "checking" || status === "downloading";
-  const pct =
-    total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : null;
+  const { status, version, downloaded, total, error, errorDetail, releaseUrl,
+    notes, lastChecked, retryAction, check, download, restart, retry } = useUpdater();
+  const busy = ["checking", "downloading", "verifying", "installing"].includes(status);
+  const title = status === "current" ? "You're on the latest version."
+    : status === "available" || status === "manual" ? `Faro ${version} is available.`
+    : status === "checking" ? "Checking for updates…"
+    : status === "downloading" ? `Downloading Faro ${version}…`
+    : status === "verifying" ? "Verifying update…"
+    : status === "ready" ? `Faro ${version} is ready to install.`
+    : status === "installing" ? "Installing and restarting Faro…"
+    : status === "error" ? retryAction === "check" ? "Couldn't check for updates" : "Update couldn't finish"
+    : "Keep Faro up to date.";
+  const description = status === "manual" ? "This update needs a manual download. Open Downloads to get the installer."
+    : status === "available" ? "Download while you work. Install and restart when you're ready."
+    : status === "ready" ? "Your download is verified. Finish your transfers and save your work before restarting."
+    : status === "verifying" ? "Checking the download's signature before installation."
+    : status === "error" ? error : null;
+  const action = status === "available" ? download : status === "ready" ? restart
+    : status === "manual" ? () => openExternal(releaseUrl)
+    : status === "error" ? retry : () => check(false);
+  const label = status === "available" ? "Download update" : status === "ready" ? "Install & restart"
+    : status === "manual" ? "Open Downloads"
+    : status === "error" ? retryAction === "download" ? "Retry download" : "Try again"
+    : "Check for updates";
 
   return (
     <div>
       <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
-        <ArrowUpCircle size={15} className="text-accent" />
-        Updates
+        <ArrowUpCircle size={15} className="text-accent" /> Updates
       </div>
-
       <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm">
-        {status === "available" || status === "downloading" || status === "ready" ? (
-          <div className="flex items-start gap-2">
-            <ArrowUpCircle size={15} className="mt-0.5 shrink-0 text-accent" />
-            <div className="min-w-0">
-              {status === "available" && (
-                <div className="text-text">Faro {version} is available.</div>
-              )}
-              {status === "downloading" && (
-                <div className="text-text">
-                  Downloading update{pct !== null ? ` — ${pct}%` : "…"}
-                </div>
-              )}
-              {status === "ready" && (
-                <div className="text-text">
-                  Update downloaded — restart Faro to finish installing.
-                </div>
-              )}
-            </div>
+        <div className="flex items-start gap-2" role="status" aria-live="polite">
+          {busy ? <Loader2 size={15} className="mt-0.5 shrink-0 animate-spin text-accent" />
+            : status === "current" ? <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-500" />
+            : <ArrowUpCircle size={15} className="mt-0.5 shrink-0 text-accent" />}
+          <div className="min-w-0">
+            <div className="font-medium text-text">{title}</div>
+            {description && <p className="mt-1 text-xs leading-relaxed text-text-muted">{description}</p>}
           </div>
-        ) : status === "error" ? (
-          <div className="text-text-muted">{error ?? "Update check failed."}</div>
-        ) : status === "checking" ? (
-          <div className="flex items-center gap-2 text-text-muted">
-            <Loader2 size={15} className="animate-spin" /> Checking…
-          </div>
-        ) : (
-          <div className="flex items-start gap-2">
-            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-500" />
-            <div className="text-text">You're on the latest version.</div>
-          </div>
-        )}
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {status === "available" ? (
-            <button
-              onClick={() => void download()}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
-            >
-              <Download size={13} /> Download &amp; install
-            </button>
-          ) : status === "ready" ? (
-            <button
-              onClick={() => void restart()}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
-            >
-              <RefreshCw size={13} /> Restart now
-            </button>
-          ) : (
-            <button
-              onClick={() => void check(false)}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-60"
-            >
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-              Check for updates
-            </button>
-          )}
-          <button
-            onClick={() => openExternal(RELEASES_URL)}
-            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text"
-          >
-            Release notes
-          </button>
         </div>
+        {status === "downloading" && <div className="mt-3"><UpdateProgress downloaded={downloaded} total={total} /></div>}
+        {!busy && <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button onClick={() => void action()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 active:scale-[0.98]">
+            {status === "available" || status === "manual" ? <Download size={13} /> : <RefreshCw size={13} />}
+            {label}
+          </button>
+          {status !== "manual" && <button onClick={() => openExternal(releaseUrl)}
+            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text">
+            {status === "error" ? "Open Downloads" : "Release notes"}
+          </button>}
+          {status === "manual" && <button onClick={() => void check(false)}
+            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text">
+            Check again
+          </button>}
+        </div>}
+        {notes && ["available", "manual", "ready"].includes(status) && <details className="mt-3 text-xs text-text-muted">
+          <summary className="cursor-pointer hover:text-text">What's new</summary>
+          <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words leading-relaxed">{notes}</p>
+        </details>}
+        {errorDetail && <details className="mt-3 text-xs text-text-muted">
+          <summary className="cursor-pointer hover:text-text">Technical details</summary>
+          <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words">{errorDetail}</p>
+        </details>}
+        {lastChecked && !busy && <p className="mt-3 text-xs text-text-muted">
+          Last checked {new Date(lastChecked).toLocaleString()}
+        </p>}
       </div>
     </div>
   );

@@ -39,10 +39,14 @@ fn client_options(profile: &ConnectionProfile) -> ClientOptions {
         .endpoint
         .as_deref()
         .is_some_and(|e| e.trim().to_ascii_lowercase().starts_with("http://"));
-    ClientOptions::new()
+    let options = ClientOptions::new()
         .with_connect_timeout(Duration::from_secs(10))
         .with_timeout_disabled()
-        .with_allow_http(plain_http)
+        .with_allow_http(plain_http);
+    match &profile.proxy {
+        Some(p) => options.with_proxy_url(crate::proxy::proxy_url(p)),
+        None => options,
+    }
 }
 
 pub async fn object_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {

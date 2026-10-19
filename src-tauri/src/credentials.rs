@@ -30,6 +30,11 @@ pub fn profile_passphrase_purpose(profile_id: &str) -> String {
     format!("profile-passphrase:{profile_id}")
 }
 
+/// Keychain purpose for a connection profile's proxy password.
+pub fn profile_proxy_password_purpose(profile_id: &str) -> String {
+    format!("profile-proxy-password:{profile_id}")
+}
+
 /// Write (or overwrite) a secret for `purpose`. An empty value clears it.
 pub fn set_secret(purpose: &str, value: &str) -> Result<()> {
     if value.is_empty() {

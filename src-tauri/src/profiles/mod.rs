@@ -56,6 +56,27 @@ pub enum AuthMethod {
     KeyRef { key_ref: String },
 }
 
+/// Client-side proxy a connection's first TCP hop goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyKind {
+    Socks5,
+    Http,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyConfig {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    // Kept in the keychain (and blanked from profiles.json) in keychain mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -131,6 +152,63 @@ pub struct ConnectionProfile {
     // = 1, since many servers cap logins per user.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_segments: Option<u8>,
+    // SOCKS5 / HTTP CONNECT proxy for backends that dial TCP. Absent = direct.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
+    // Id of another SSH profile to connect through (ProxyJump), with that
+    // profile's own auth, proxy and jump host. Distinct from the inline
+    // `jump_host` above, which access grants use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jump_profile: Option<String>,
+    // `jump_profile` resolved against the store when the profile is read.
+    #[serde(skip)]
+    pub jump_via: Option<JumpVia>,
+}
+
+/// Longest bastion chain a profile may connect through.
+pub const MAX_JUMP_HOPS: usize = 8;
+
+/// A profile's resolved jump host: the bastion profile (itself resolved), or
+/// why the chain can't be built. Connecting fails on `Broken` rather than
+/// silently going direct.
+#[derive(Debug, Clone)]
+pub enum JumpVia {
+    Profile(Box<ConnectionProfile>),
+    Broken(String),
+}
+
+/// Resolve `profile.jump_profile` (recursively) against `all`.
+fn resolve_jump(all: &[ConnectionProfile], mut profile: ConnectionProfile) -> ConnectionProfile {
+    profile.jump_via = jump_chain(all, &profile, &mut vec![profile.id.clone()]);
+    profile
+}
+
+fn jump_chain(
+    all: &[ConnectionProfile],
+    profile: &ConnectionProfile,
+    seen: &mut Vec<String>,
+) -> Option<JumpVia> {
+    let id = profile.jump_profile.as_deref().filter(|id| !id.is_empty())?;
+    let broken = |msg: String| Some(JumpVia::Broken(msg));
+    if seen.iter().any(|s| s == id) {
+        return broken(format!("the jump host chain of '{}' loops back on itself", profile.name));
+    }
+    if seen.len() > MAX_JUMP_HOPS {
+        return broken(format!("the jump host chain is longer than {MAX_JUMP_HOPS} hops"));
+    }
+    let Some(bastion) = all.iter().find(|p| p.id == id) else {
+        return broken(format!(
+            "the jump host of '{}' was deleted; pick another in the connection editor",
+            profile.name
+        ));
+    };
+    if !matches!(bastion.protocol.as_str(), "sftp" | "ssh" | "") {
+        return broken(format!("jump host '{}' is not an SSH connection", bastion.name));
+    }
+    seen.push(id.to_string());
+    let mut bastion = bastion.clone();
+    bastion.jump_via = jump_chain(all, &bastion, seen);
+    Some(JumpVia::Profile(Box::new(bastion)))
 }
 
 // Plain JSON file in the app data dir. With the keychain setting on, saved
@@ -172,6 +250,16 @@ impl ProfileStore {
         let mut unresolved = Vec::new();
         if keychain {
             for p in profiles.iter_mut() {
+                if let Some(proxy) = p.proxy.as_mut().filter(|x| x.password.is_none()) {
+                    let purpose = credentials::profile_proxy_password_purpose(&p.id);
+                    match credentials::get_secret(&purpose) {
+                        Ok(v) => proxy.password = v,
+                        Err(e) => {
+                            eprintln!("keychain read failed for profile {} proxy: {e:#}", p.name);
+                            unresolved.push((p.id.clone(), p.name.clone()));
+                        }
+                    }
+                }
                 let purpose = match secret_purpose(p) {
                     Some(purpose) if secret_is_empty(&p.auth) => purpose,
                     _ => continue,
@@ -185,6 +273,8 @@ impl ProfileStore {
                     }
                 }
             }
+            // A profile whose proxy and auth secrets both failed is listed once.
+            unresolved.dedup();
         }
         Ok(Self {
             path: path.clone(),
@@ -237,7 +327,10 @@ impl ProfileStore {
                 return Err(e);
             }
             for p in g.iter() {
-                for purpose in all_secret_purposes(&p.id) {
+                for purpose in all_secret_purposes(&p.id)
+                    .into_iter()
+                    .chain([credentials::profile_proxy_password_purpose(&p.id)])
+                {
                     credentials::delete_secret(&purpose);
                     let _ = db.forget_keychain(credentials::SERVICE, &purpose);
                 }
@@ -247,11 +340,19 @@ impl ProfileStore {
     }
 
     pub async fn list(&self) -> Result<Vec<ConnectionProfile>> {
-        Ok(self.inner.lock().await.clone())
+        let g = self.inner.lock().await;
+        Ok(g.iter().cloned().map(|p| resolve_jump(&g, p)).collect())
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<ConnectionProfile>> {
-        Ok(self.inner.lock().await.iter().find(|p| p.id == id).cloned())
+        let g = self.inner.lock().await;
+        Ok(g.iter().find(|p| p.id == id).cloned().map(|p| resolve_jump(&g, p)))
+    }
+
+    /// `profile` (e.g. an unsaved one from the editor) with its jump host
+    /// resolved against the saved profiles.
+    pub async fn with_jump_resolved(&self, profile: ConnectionProfile) -> ConnectionProfile {
+        resolve_jump(&self.inner.lock().await, profile)
     }
 
     pub async fn upsert(&self, profile: ConnectionProfile) -> Result<()> {
@@ -334,6 +435,7 @@ fn set_secret_value(auth: &mut AuthMethod, value: String) {
 /// or clear both when it is empty. An empty value on an unresolved profile
 /// (`keep_unresolved`) is skipped so a failed read can't delete its entry.
 pub fn sync_profile_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved: bool) -> Result<()> {
+    sync_proxy_secret(profile, db, keep_unresolved)?;
     // An entry left under the other auth kind (e.g. password -> key) is stale.
     let current = secret_purpose(profile);
     for stale in all_secret_purposes(&profile.id) {
@@ -361,6 +463,22 @@ pub fn sync_profile_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved
     db.record_keychain(credentials::SERVICE, &purpose)
 }
 
+/// Keychain side of a profile's proxy password, like `sync_profile_secret`.
+fn sync_proxy_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved: bool) -> Result<()> {
+    let purpose = credentials::profile_proxy_password_purpose(&profile.id);
+    match profile.proxy.as_ref().and_then(|p| p.password.as_deref()).filter(|v| !v.is_empty()) {
+        Some(value) => {
+            credentials::set_secret(&purpose, value)?;
+            db.record_keychain(credentials::SERVICE, &purpose)
+        }
+        None if keep_unresolved => Ok(()),
+        None => {
+            credentials::delete_secret(&purpose);
+            db.forget_keychain(credentials::SERVICE, &purpose)
+        }
+    }
+}
+
 /// What lands in `profiles.json`: with the keychain on, secrets are blanked so
 /// they never reach the file.
 fn for_disk(profiles: &[ConnectionProfile], keychain: bool) -> Vec<ConnectionProfile> {
@@ -373,6 +491,9 @@ fn for_disk(profiles: &[ConnectionProfile], keychain: bool) -> Vec<ConnectionPro
                     AuthMethod::Password { password } => password.clear(),
                     AuthMethod::Key { passphrase, .. } => *passphrase = None,
                     _ => {}
+                }
+                if let Some(proxy) = p.proxy.as_mut() {
+                    proxy.password = None;
                 }
             }
             p
@@ -418,6 +539,76 @@ mod tests {
         assert!(on.contains("id_ed25519"));
         let off = serde_json::to_string(&for_disk(&profiles, false)).unwrap();
         assert!(off.contains("s3cret"));
+    }
+
+    #[test]
+    fn keychain_mode_keeps_proxy_password_out_of_file() {
+        let mut p = profile(serde_json::json!({ "kind": "agent" }));
+        p.proxy = Some(ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "proxy.test".into(),
+            port: 1080,
+            username: Some("u".into()),
+            password: Some("proxy-pw".into()),
+        });
+        let on = serde_json::to_string(&for_disk(&[p.clone()], true)).unwrap();
+        assert!(!on.contains("proxy-pw") && on.contains("proxy.test"));
+        let off = serde_json::to_string(&for_disk(&[p], false)).unwrap();
+        assert!(off.contains("proxy-pw") && off.contains(r#""kind":"socks5""#));
+    }
+
+    fn ssh(id: &str, jump: Option<&str>) -> ConnectionProfile {
+        let mut p = profile(serde_json::json!({ "kind": "agent" }));
+        p.id = id.into();
+        p.name = id.into();
+        p.jump_profile = jump.map(Into::into);
+        p
+    }
+
+    fn hops(p: &ConnectionProfile) -> Result<Vec<String>, String> {
+        let mut out = Vec::new();
+        let mut cur = p;
+        loop {
+            match &cur.jump_via {
+                None => return Ok(out),
+                Some(JumpVia::Broken(msg)) => return Err(msg.clone()),
+                Some(JumpVia::Profile(b)) => {
+                    out.push(b.id.clone());
+                    cur = b;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jump_chain_resolves_recursively() {
+        let all = vec![ssh("a", Some("b")), ssh("b", Some("c")), ssh("c", None)];
+        assert_eq!(hops(&resolve_jump(&all, all[0].clone())), Ok(vec!["b".into(), "c".into()]));
+        assert_eq!(hops(&resolve_jump(&all, all[2].clone())), Ok(vec![]));
+    }
+
+    #[test]
+    fn jump_chain_rejects_cycles_missing_and_non_ssh() {
+        let all = vec![ssh("a", Some("b")), ssh("b", Some("a"))];
+        assert!(hops(&resolve_jump(&all, all[0].clone())).unwrap_err().contains("loops back"));
+        let self_loop = vec![ssh("a", Some("a"))];
+        assert!(hops(&resolve_jump(&self_loop, self_loop[0].clone())).is_err());
+
+        let missing = vec![ssh("a", Some("gone"))];
+        assert!(hops(&resolve_jump(&missing, missing[0].clone())).unwrap_err().contains("deleted"));
+
+        let mut s3 = ssh("b", None);
+        s3.protocol = "s3".into();
+        let all = vec![ssh("a", Some("b")), s3];
+        assert!(hops(&resolve_jump(&all, all[0].clone())).unwrap_err().contains("not an SSH"));
+    }
+
+    #[test]
+    fn jump_chain_depth_is_capped() {
+        let mut all: Vec<_> = (0..12).map(|i| ssh(&format!("p{i}"), Some(&format!("p{}", i + 1)))).collect();
+        all.push(ssh("p12", None));
+        assert!(hops(&resolve_jump(&all, all[0].clone())).unwrap_err().contains("longer than"));
+        assert_eq!(hops(&resolve_jump(&all, all[5].clone())).unwrap().len(), 7);
     }
 
     #[test]

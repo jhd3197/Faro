@@ -68,6 +68,12 @@ export async function invoke<T = unknown>(cmd: string, args: Args = {}): Promise
 
 async function dispatch(cmd: string, a: Args): Promise<unknown> {
   switch (cmd) {
+    case "app_update_release": {
+      const w = window as any;
+      if (w.__mockReleaseError) throw w.__mockReleaseError;
+      return w.__mockRelease ?? { version: "1.3.49", currentVersion: "1.3.43", notes: "Fixes and improvements.",
+        newer: true, url: "https://github.com/jhd3197/Faro/releases/tag/v1.3.49" };
+    }
     // ---- profiles ----
     case "list_profiles":
       return data.profiles;

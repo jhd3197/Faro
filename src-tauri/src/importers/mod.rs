@@ -2,7 +2,8 @@ pub mod filezilla;
 pub mod openssh;
 pub mod putty;
 
-use crate::profiles::{AuthMethod, ConnectionProfile};
+use crate::profiles::{AuthMethod, ConnectionProfile, ProxyConfig};
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -37,6 +38,16 @@ pub struct ProfilePreview {
     /// FTP active (PORT) mode carried over from the source. `None` = passive.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ftp_active_mode: Option<bool>,
+    /// Proxy carried over from the source (OpenSSH `ProxyCommand nc -X ...`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
+    /// Jump host (OpenSSH `ProxyJump`): the bastion's preview in the same
+    /// import, and its name for matching an existing profile when that
+    /// preview isn't imported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jump_preview_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jump_name: Option<String>,
 }
 
 impl ProfilePreview {
@@ -52,6 +63,9 @@ impl ProfilePreview {
             note: None,
             ftp_encoding: None,
             ftp_active_mode: None,
+            proxy: None,
+            jump_preview_id: None,
+            jump_name: None,
         }
     }
 
@@ -95,6 +109,66 @@ impl ProfilePreview {
             ftp_active_mode: self.ftp_active_mode,
             ftp_max_connections: None,
             ftp_segments: None,
+            proxy: self.proxy,
+            jump_profile: None,
+            jump_via: None,
         }
+    }
+}
+
+/// Bake a batch of previews into profiles, linking jump hosts: to the
+/// bastion's profile from the same batch, else to an existing SSH profile of
+/// the same name. A bastion found in neither leaves the profile direct.
+pub fn into_profiles(previews: Vec<ProfilePreview>, existing: &[ConnectionProfile]) -> Vec<ConnectionProfile> {
+    let links: Vec<(Option<String>, Option<String>)> = previews
+        .iter()
+        .map(|p| (p.jump_preview_id.clone(), p.jump_name.clone()))
+        .collect();
+    let ids: Vec<String> = previews.iter().map(|p| p.preview_id.clone()).collect();
+    let mut profiles: Vec<ConnectionProfile> = previews.into_iter().map(ProfilePreview::into_profile).collect();
+    let by_preview: HashMap<String, String> = ids
+        .into_iter()
+        .zip(profiles.iter().map(|p| p.id.clone()))
+        .collect();
+    for (profile, (preview_id, name)) in profiles.iter_mut().zip(links) {
+        profile.jump_profile = preview_id
+            .and_then(|id| by_preview.get(&id).cloned())
+            .or_else(|| {
+                let name = name?;
+                existing
+                    .iter()
+                    .find(|e| e.name == name && matches!(e.protocol.as_str(), "sftp" | "ssh" | ""))
+                    .map(|e| e.id.clone())
+            });
+    }
+    profiles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn into_profiles_links_jump_hosts() {
+        let cfg = concat!(
+            "Host bastion\n HostName b\n",
+            "Host app\n HostName a\n ProxyJump bastion\n",
+        );
+        let profiles = into_profiles(openssh::parse(cfg, "t".into()), &[]);
+        let find = |n: &str| profiles.iter().find(|p| p.name == n).unwrap();
+        assert_eq!(find("app").jump_profile.as_deref(), Some(find("bastion").id.as_str()));
+        assert!(find("bastion").jump_profile.is_none());
+
+        // The bastion preview left out of the import: an existing SSH
+        // profile of the same name is used instead.
+        let mut existing = find("bastion").clone();
+        existing.id = "existing-id".into();
+        let app: Vec<_> = openssh::parse(cfg, "t".into())
+            .into_iter()
+            .filter(|p| p.name == "app")
+            .collect();
+        let profiles = into_profiles(app.clone(), std::slice::from_ref(&existing));
+        assert_eq!(profiles[0].jump_profile.as_deref(), Some("existing-id"));
+        assert!(into_profiles(app, &[])[0].jump_profile.is_none());
     }
 }

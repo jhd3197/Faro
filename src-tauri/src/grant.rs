@@ -445,6 +445,9 @@ async fn import_connection(
         ftp_active_mode: None,
         ftp_max_connections: None,
         ftp_segments: None,
+        proxy: None,
+        jump_profile: None,
+        jump_via: None,
     };
     if let Err(e) = state.profiles.upsert(profile.clone()).await {
         crate::credentials::delete_secret(&key_ref);

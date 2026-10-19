@@ -77,6 +77,20 @@ function profileAddress(p: ConnectionProfile): string {
   return `${p.username}@${p.host}${port}`;
 }
 
+/// How the connection reaches its server, for the tooltip: "via <bastion>"
+/// or "via SOCKS5 proxy host:port". Empty for a direct connection.
+function profileRoute(p: ConnectionProfile, profiles: ConnectionProfile[]): string {
+  if (p.protocol === "sftp" && p.jumpProfile) {
+    const bastion = profiles.find((b) => b.id === p.jumpProfile);
+    return `via ${bastion?.name ?? "a deleted jump host"}`;
+  }
+  if (p.jumpHost) return `via ${p.jumpHost}`;
+  if (p.proxy) {
+    return `via ${p.proxy.kind === "socks5" ? "SOCKS5" : "HTTP"} proxy ${p.proxy.host}:${p.proxy.port}`;
+  }
+  return "";
+}
+
 // The single connection navigator — a Discord-style vertical rail of round
 // "server" bubbles. Replaces the old ConnectionManager sidebar and the
 // ConnectionTabs strip: one bubble per saved server, status dot, hover name,
@@ -1044,6 +1058,7 @@ function RailBubble({
   const plaintext = p.protocol === "ftp";
   const color = p.color || fallbackColor;
   const addr = profileAddress(p);
+  const route = useConnections((s) => profileRoute(p, s.profiles));
   // Custom bubble glyph (profile.icon): a bundled Iconify key wins; an emoji /
   // short string renders as text; anything else (or an unknown key) falls back
   // to the name monogram.
@@ -1144,6 +1159,7 @@ function RailBubble({
           <span className="flex flex-col gap-0.5 text-left">
             <span className="font-semibold text-text">{p.name}</span>
             <span className="font-mono text-[10px] text-text-dim">{addr}</span>
+            {route && <span className="text-[10px] text-text-dim">{route}</span>}
             <span className="text-[10px] text-text-dim">
               {PROTOCOL_LABEL[p.protocol]}
               {bridged ? " · bridged" : ""}

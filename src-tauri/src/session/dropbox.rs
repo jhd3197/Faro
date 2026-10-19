@@ -204,7 +204,7 @@ pub async fn dropbox_connect(profile: &ConnectionProfile) -> Result<DropboxSessi
         )
     })?;
 
-    let client = Client::builder()
+    let client = crate::proxy::http_client_builder(profile)?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(300))
         .user_agent(concat!("Faro/", env!("CARGO_PKG_VERSION")))
