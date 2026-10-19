@@ -24,6 +24,8 @@ import {
   FolderOpen,
   FolderPlus,
   FolderMinus,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useBridge } from "@/stores/bridgeStore";
@@ -48,6 +50,7 @@ import { BRAND_ICONS } from "@/lib/brandIconData";
 import { ServerSites, leaveSiteNavigation } from "./ServerSites";
 import { useSites } from "@/stores/sitesStore";
 import { toastError } from "@/lib/errors";
+import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
 
 type RowState = "focused" | "connected" | "connecting" | "error" | "idle";
 
@@ -115,6 +118,7 @@ export function ServerRail() {
     saveProfile,
     saveProfiles,
     reorderProfiles,
+    reordering,
   } = useConnections();
   const setTerminalOpen = useLayout((s) => s.setTerminalOpen);
   const openDialog = useLayout((s) => s.openDialog);
@@ -151,17 +155,9 @@ export function ServerRail() {
   const [siteMenuOpen, setSiteMenuOpen] = useState(false);
   const hoverTimer = useRef<number | null>(null);
 
-  // Drag-and-drop reorder state: the profile being dragged and where it would
-  // land if dropped now (between two rows, into a group, at a section's end,
-  // or at the very top of the rail).
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<
-    | { kind: "row"; id: string; after: boolean }
-    | { kind: "group"; name: string }
-    | { kind: "sectionEnd"; group: string | undefined }
-    | { kind: "top" }
-    | null
-  >(null);
+  const { scrollRef, dragId, dropTarget, onPointerDown, onClickCapture } = useRailDrag(
+    (id, target) => commitDrop(id, target), reordering
+  );
   // Naming/renaming a group happens through a small prompt dialog.
   const [groupPrompt, setGroupPrompt] = useState<
     | { kind: "assign"; profile: ConnectionProfile }
@@ -302,69 +298,8 @@ export function ServerRail() {
     ...sections.groups.flatMap(([, items]) => items),
   ];
 
-  const endDrag = () => {
-    setDragId(null);
-    setDropTarget(null);
-  };
-
-  const onRowDragStart = (e: React.DragEvent, p: ConnectionProfile) => {
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", p.id);
-    setDragId(p.id);
-  };
-
-  const onRowDragOver = (e: React.DragEvent, p: ConnectionProfile) => {
-    if (!dragId || dragId === p.id) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const r = e.currentTarget.getBoundingClientRect();
-    const after = e.clientY > r.top + r.height / 2;
-    setDropTarget((cur) =>
-      cur?.kind === "row" && cur.id === p.id && cur.after === after
-        ? cur
-        : { kind: "row", id: p.id, after }
-    );
-  };
-
-  const onGroupDragOver = (e: React.DragEvent, name: string) => {
-    if (!dragId) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDropTarget((cur) =>
-      cur?.kind === "group" && cur.name === name ? cur : { kind: "group", name }
-    );
-  };
-
-  // Drop strips between rail sections (top of the rail, end of the ungrouped
-  // list, end of a group) — the only way to drop above the first row, below
-  // the last, or out of a folder when no ungrouped neighbour exists.
-  const onStripDragOver = (
-    e: React.DragEvent,
-    target: { kind: "top" } | { kind: "sectionEnd"; group: string | undefined }
-  ) => {
-    if (!dragId) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDropTarget((cur) => {
-      if (target.kind === "top" && cur?.kind === "top") return cur;
-      if (
-        target.kind === "sectionEnd" &&
-        cur?.kind === "sectionEnd" &&
-        cur.group === target.group
-      )
-        return cur;
-      return target;
-    });
-  };
-
-  // Dropping between rows adopts the neighbour's group; dropping on a group
-  // header appends to that group. One ipc round-trip persists both.
-  const commitDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const target = dropTarget;
-    const id = dragId;
-    endDrag();
-    if (!id || !target) return;
+  const commitDrop = (id: string, target: RailDropTarget) => {
+    if (reordering) return;
     const rest = flatOrder().filter((p) => p.id !== id);
     const dragged = profiles.find((p) => p.id === id);
     if (!dragged) return;
@@ -383,7 +318,7 @@ export function ServerRail() {
       // Ungrouped renders first, so its end is right after the last
       // group-less profile — this is also how a bubble leaves a folder.
       group = undefined;
-      at = rest.filter((p) => p.group === undefined).length;
+      at = rest.filter((p) => !p.group).length;
     } else {
       const g = target.kind === "sectionEnd" ? target.group : target.name;
       group = g;
@@ -403,7 +338,7 @@ export function ServerRail() {
     void reorderProfiles(
       ids,
       dragged.group !== group ? { id, group } : undefined
-    );
+    ).catch(e => toastError(e, "Couldn't save server order"));
   };
 
   const rowState = (p: ConnectionProfile): RowState => {
@@ -486,6 +421,16 @@ export function ServerRail() {
       },
       separatorAfter: true,
     });
+    const siblings = flatOrder().filter(item => (item.group || undefined) === (p.group || undefined));
+    const position = siblings.findIndex(item => item.id === p.id);
+    const move = (offset: number) => {
+      const neighbour = siblings[position + offset];
+      if (neighbour) commitDrop(p.id, { kind: "row", id: neighbour.id, after: offset > 0 });
+    };
+    items.push(
+      { label: "Move up", icon: <ArrowUp size={14} />, disabled: reordering || position <= 0, onClick: () => move(-1) },
+      { label: "Move down", icon: <ArrowDown size={14} />, disabled: reordering || position >= siblings.length - 1, onClick: () => move(1), separatorAfter: true }
+    );
     // Group membership: one flat item per existing group, plus "New group…".
     for (const g of groupNames) {
       if (g === p.group) continue;
@@ -675,7 +620,13 @@ export function ServerRail() {
   };
 
   const renderBubble = (p: ConnectionProfile) => (
-    <div key={p.id} className="w-full">
+    <div key={p.id} data-rail-server={p.id} className="relative w-full">
+    {dropTarget?.kind === "row" && dropTarget.id === p.id && (
+      <span aria-hidden className={cn(
+        "pointer-events-none absolute left-2 right-2 z-10 h-0.5 rounded-full bg-accent",
+        dropTarget.after ? "-bottom-1" : "-top-1"
+      )} />
+    )}
     <RailBubble
       key={p.id}
       profile={p}
@@ -683,22 +634,12 @@ export function ServerRail() {
       bridged={bridgedIds.has(p.id)}
       expanded={expanded}
       dragging={dragId === p.id}
-      dropIndicator={
-        dropTarget?.kind === "row" && dropTarget.id === p.id
-          ? dropTarget.after
-            ? "below"
-            : "above"
-          : null
-      }
       onClick={(e) => onBubbleClick(e, p)}
       onContextMenu={(e) => {
         e.preventDefault();
         openMenuAt(e, bubbleMenuItems(p));
       }}
-      onDragStart={(e) => onRowDragStart(e, p)}
-      onDragOver={(e) => onRowDragOver(e, p)}
-      onDrop={commitDrop}
-      onDragEnd={endDrag}
+      onPointerDown={(e) => onPointerDown(e, p.id)}
     />
     <ServerSites profileId={p.id} serverName={p.name} expanded={expanded} onMenuChange={setSiteMenuOpen} />
     </div>
@@ -711,13 +652,16 @@ export function ServerRail() {
       <div
         onMouseEnter={onRailEnter}
         onMouseLeave={onRailLeave}
+        onClickCapture={onClickCapture}
+        onDragStartCapture={e => e.preventDefault()}
         className={cn(
           "absolute inset-y-0 left-0 z-dropdown flex flex-col border-r border-border bg-bg transition-[width] duration-150 motion-reduce:transition-none",
           expanded ? "w-64" : "w-[68px]",
-          !pinned && expanded && "shadow-elev-3"
+          !pinned && expanded && "shadow-elev-3",
+          !!dragId && "cursor-grabbing [&_button]:cursor-grabbing"
         )}
       >
-      <div className="flex-1 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div ref={scrollRef} data-rail-scroll className="flex-1 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {/* Local files (single-pane layout only) */}
         {browserLayout === "single" && (
           <div className="mb-2 flex flex-col items-center gap-1.5">
@@ -760,7 +704,7 @@ export function ServerRail() {
           </div>
         )}
         {/* Connections */}
-        <div className="flex flex-col items-center gap-1.5">
+        <div data-rail-connections className="flex flex-col items-center gap-1.5">
           {ordered.length === 0 ? (
             <div
               className={cn(
@@ -786,15 +730,13 @@ export function ServerRail() {
               <DropStrip
                 dragging={!!dragId}
                 hot={dropTarget?.kind === "top"}
-                onDragOver={(e) => onStripDragOver(e, { kind: "top" })}
-                onDrop={commitDrop}
+                target={{ kind: "top" }}
               />
               {sections.ungrouped.map(renderBubble)}
               <DropStrip
                 dragging={!!dragId}
                 hot={dropTarget?.kind === "sectionEnd" && dropTarget.group === undefined}
-                onDragOver={(e) => onStripDragOver(e, { kind: "sectionEnd", group: undefined })}
-                onDrop={commitDrop}
+                target={{ kind: "sectionEnd", group: undefined }}
               />
               {sections.groups.map(([name, items]) => {
                 const collapsed = collapsedGroups.includes(name);
@@ -810,8 +752,6 @@ export function ServerRail() {
                       }
                       onToggle={() => toggleRailGroup(name)}
                       onContextMenu={(e) => groupMenu(e, name)}
-                      onDragOver={(e) => onGroupDragOver(e, name)}
-                      onDrop={commitDrop}
                     />
                     {!collapsed && items.map(renderBubble)}
                     {!collapsed && (
@@ -820,8 +760,7 @@ export function ServerRail() {
                         hot={
                           dropTarget?.kind === "sectionEnd" && dropTarget.group === name
                         }
-                        onDragOver={(e) => onStripDragOver(e, { kind: "sectionEnd", group: name })}
-                        onDrop={commitDrop}
+                        target={{ kind: "sectionEnd", group: name }}
                       />
                     )}
                   </Fragment>
@@ -1050,26 +989,18 @@ function RailBubble({
   bridged,
   expanded,
   dragging,
-  dropIndicator,
   onClick,
   onContextMenu,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
+  onPointerDown,
 }: {
   profile: ConnectionProfile;
   state: RowState;
   bridged: boolean;
   expanded: boolean;
   dragging: boolean;
-  dropIndicator: "above" | "below" | null;
   onClick: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent) => void;
-  onDragStart: (e: React.DragEvent) => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDrop: (e: React.DragEvent) => void;
-  onDragEnd: () => void;
+  onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
 }) {
   const focused = state === "focused";
   const connected = state === "focused" || state === "connected";
@@ -1137,27 +1068,14 @@ function RailBubble({
 
   return (
     <div
-      draggable
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onDragEnd={onDragEnd}
+      data-rail-profile-id={p.id}
+      onPointerDown={onPointerDown}
       className={cn(
-        "group relative flex w-full items-center",
+        "group relative flex w-full touch-none select-none items-center",
         expanded ? "justify-start pr-2" : "justify-center",
-        dragging && "opacity-40"
+        dragging && "cursor-grabbing opacity-40"
       )}
     >
-      {/* Drop-position line while another server is dragged over this row. */}
-      {dropIndicator && (
-        <span
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute left-2 right-2 z-10 h-0.5 rounded-full bg-accent",
-            dropIndicator === "above" ? "-top-1" : "-bottom-1"
-          )}
-        />
-      )}
       {/* Active / connected pill on the rail's left edge. */}
       <span
         aria-hidden
@@ -1210,19 +1128,17 @@ function RailBubble({
 function DropStrip({
   dragging,
   hot,
-  onDragOver,
-  onDrop,
+  target,
 }: {
   dragging: boolean;
   hot: boolean;
-  onDragOver: (e: React.DragEvent) => void;
-  onDrop: (e: React.DragEvent) => void;
+  target: { kind: "top" } | { kind: "sectionEnd"; group: string | undefined };
 }) {
   return (
     <div
       aria-hidden
-      onDragOver={onDragOver}
-      onDrop={onDrop}
+      data-rail-drop={target.kind === "top" ? "top" : "end"}
+      data-rail-group-name={target.kind === "sectionEnd" ? target.group : undefined}
       className="flex w-full items-center px-3 py-[3px]"
     >
       <span
@@ -1247,8 +1163,6 @@ function RailGroupHeader({
   isDropTarget,
   onToggle,
   onContextMenu,
-  onDragOver,
-  onDrop,
 }: {
   name: string;
   count: number;
@@ -1257,8 +1171,6 @@ function RailGroupHeader({
   isDropTarget: boolean;
   onToggle: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDrop: (e: React.DragEvent) => void;
 }) {
   const btn = (
     <button
@@ -1293,8 +1205,7 @@ function RailGroupHeader({
   );
   return (
     <div
-      onDragOver={onDragOver}
-      onDrop={onDrop}
+      data-rail-group={name}
       className={cn(
         "mt-1.5 flex w-full items-center",
         expanded ? "justify-start px-1" : "justify-center"

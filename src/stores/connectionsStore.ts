@@ -25,6 +25,7 @@ interface ConnectionsState {
   /** Profile of the focused session; kept in sync with activeSessionId. */
   activeProfileId: string | null;
   connecting: boolean;
+  reordering: boolean;
   error: string | null;
 
   loadProfiles: () => Promise<void>;
@@ -55,6 +56,7 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
   activeSessionId: null,
   activeProfileId: null,
   connecting: false,
+  reordering: false,
   error: null,
 
   loadProfiles: async () => {
@@ -73,12 +75,29 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
   },
 
   reorderProfiles: async (ids, groupChange) => {
-    if (groupChange) {
-      const p = get().profiles.find((x) => x.id === groupChange.id);
-      if (p) await ipc.saveProfile({ ...p, group: groupChange.group });
+    if (get().reordering) return;
+    const before = get().profiles;
+    const positions = new Map(ids.map((id, index) => [id, index]));
+    // Reflect the drop immediately; don't let overlapping saves race and put
+    // an older order back on screen. Read the saved state again on failure.
+    set({ reordering: true, profiles: before.map(p => ({
+      ...p,
+      sortOrder: positions.get(p.id) ?? p.sortOrder,
+      ...(groupChange?.id === p.id ? { group: groupChange.group } : {}),
+    })) });
+    try {
+      if (groupChange) {
+        const p = before.find(x => x.id === groupChange.id);
+        if (p) await ipc.saveProfile({ ...p, group: groupChange.group });
+      }
+      await ipc.reorderProfiles(ids);
+    } catch (e) {
+      try { await get().loadProfiles(); }
+      catch { set({ profiles: before }); }
+      throw e;
+    } finally {
+      set({ reordering: false });
     }
-    await ipc.reorderProfiles(ids);
-    await get().loadProfiles();
   },
 
   deleteProfile: async (id) => {
