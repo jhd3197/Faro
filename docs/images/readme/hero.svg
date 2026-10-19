@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="390" viewBox="0 0 1280 390" role="img" aria-labelledby="title">
+<title id="title">Faro. Your files, wherever you work. File and Agent Remote Operations.</title>
+<rect width="1280" height="390" rx="16" fill="#10141c"/>
+<g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<text x="56" y="62" font-size="18" fill="#e9bd69" font-weight="600" letter-spacing="3">FILE &amp; AGENT REMOTE OPERATIONS</text>
+<text x="50" y="186" font-size="120" fill="#f4f1ea" font-weight="650" letter-spacing="-6">Faro</text>
+<text x="56" y="247" font-size="34" fill="#f4f1ea" font-weight="500" >Your files, wherever you work.</text>
+<text x="56" y="289" font-size="23" fill="#b2bac7" font-weight="400" >Servers, cloud storage, and remote machines.</text>
+<path d="M56 326L1224 326" stroke="#343b47"/>
+<text x="56" y="360" font-size="16" fill="#e9bd69" font-weight="600" letter-spacing="2">BROWSE  /  TRANSFER  /  AUTOMATE</text>
+<text x="1224" y="360" font-size="16" fill="#b2bac7" font-weight="400" text-anchor="end">WINDOWS · macOS · LINUX</text>
+<g fill="none" stroke="#343b47" stroke-width="1.5">
+<circle cx="820" cy="168" r="46"/><circle cx="820" cy="168" r="78"/>
+<path d="M866 168H950V82H1008 M898 168H1008 M866 168H950V254H1008"/>
+</g>
+<circle cx="820" cy="168" r="7" fill="#e9bd69"/>
+
+<rect x="1008" y="57" width="216" height="50" rx="6" fill="#181e28" stroke="#343b47"/>
+<path d="M1027 82h14" stroke="#e9bd69" stroke-width="2"/>
+<text x="1054" y="88" font-size="17" fill="#b2bac7" font-weight="500" letter-spacing="1.5">SERVERS</text>
+<rect x="1008" y="143" width="216" height="50" rx="6" fill="#181e28" stroke="#343b47"/>
+<path d="M1027 168h14" stroke="#e9bd69" stroke-width="2"/>
+<text x="1054" y="174" font-size="17" fill="#b2bac7" font-weight="500" letter-spacing="1.5">CLOUD</text>
+<rect x="1008" y="229" width="216" height="50" rx="6" fill="#181e28" stroke="#343b47"/>
+<path d="M1027 254h14" stroke="#e9bd69" stroke-width="2"/>
+<text x="1054" y="260" font-size="17" fill="#b2bac7" font-weight="500" letter-spacing="1.5">MACHINES</text>
+</g>
+</svg>

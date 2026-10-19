@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="470" viewBox="0 0 600 470" role="img" aria-labelledby="title">
+<title id="title">Local AI agent to Faro approval policy to authenticated server session.</title>
+<rect width="600" height="470" rx="16" fill="#10141c"/>
+<g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+
+<rect x="24" y="24" width="552" height="102" rx="8" fill="#181e28" stroke="#343b47"/>
+<text x="50" y="64" font-size="24" fill="#e9bd69" font-weight="600" letter-spacing="1.5">YOUR AI AGENT</text>
+<text x="50" y="100" font-size="26" fill="#f4f1ea" font-weight="400" >MCP over localhost</text>
+<rect x="24" y="184" width="552" height="102" rx="8" fill="#181e28" stroke="#343b47"/>
+<text x="50" y="224" font-size="24" fill="#e9bd69" font-weight="600" letter-spacing="1.5">FARO</text>
+<text x="50" y="260" font-size="26" fill="#f4f1ea" font-weight="400" >Your approval policy</text>
+<rect x="24" y="344" width="552" height="102" rx="8" fill="#181e28" stroke="#343b47"/>
+<text x="50" y="384" font-size="24" fill="#e9bd69" font-weight="600" letter-spacing="1.5">YOUR SERVER</text>
+<text x="50" y="420" font-size="26" fill="#f4f1ea" font-weight="400" >Authenticated session</text>
+<path d="M300 134v40m-8-8 8 8 8-8M300 294v40m-8-8 8 8 8-8" fill="none" stroke="#e9bd69" stroke-width="2"/>
+</g>
+</svg>
