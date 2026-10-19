@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/badge/version-1.3.50-e9bd69?style=flat-square&amp;labelColor=181e28" alt="Latest release" /></a>
+  <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/badge/version-1.3.51-e9bd69?style=flat-square&amp;labelColor=181e28" alt="Latest release" /></a>
   <a href="https://github.com/jhd3197/faro/releases"><img src="https://img.shields.io/github/downloads/jhd3197/faro/total?style=flat-square&amp;color=e9bd69&amp;labelColor=181e28" alt="Downloads" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-e9bd69?style=flat-square&amp;labelColor=181e28" alt="MIT license" /></a>
   <a href="https://discord.gg/ZKk6tkCQfG"><img src="https://img.shields.io/badge/Discord-join_the_community-e9bd69?style=flat-square&amp;labelColor=181e28" alt="Join the Faro Discord" /></a>
