@@ -45,6 +45,24 @@ pub struct DirEntry {
     pub etag: Option<String>,
 }
 
+/// Browser-only listing. Skipped entries must stay visible as a warning;
+/// callers that infer absence (sync, transfers, deletion) use `list_dir`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryListing {
+    pub entries: Vec<DirEntry>,
+    pub skipped_entries: usize,
+}
+
+impl DirectoryListing {
+    pub fn into_complete(self) -> anyhow::Result<Vec<DirEntry>> {
+        anyhow::ensure!(self.skipped_entries == 0,
+            "Incomplete directory listing: {} entries have unsupported names containing '/' or '\\'. Rename them with another client before scanning or processing this folder.",
+            self.skipped_entries);
+        Ok(self.entries)
+    }
+}
+
 /// The cheapest reliable "did this file change" a backend can offer. Consumed by
 /// folder-sync's `sync_state` index (Plan 3), diff's `--hash` mode (Plan 6), and
 /// declared per-backend so callers stop guessing from mtime.
@@ -84,7 +102,12 @@ pub struct Capabilities {
 /// to expose per-backend.
 #[async_trait]
 pub trait RemoteFs: Send + Sync {
+    /// Complete listing or an error; never silently omit unrepresentable names.
     async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<DirEntry>>;
+    /// Display-only listing. Other backends remain strict by default.
+    async fn browse_dir(&self, path: &str) -> anyhow::Result<DirectoryListing> {
+        Ok(DirectoryListing { entries: self.list_dir(path).await?, skipped_entries: 0 })
+    }
     async fn rename(&self, from: &str, to: &str) -> anyhow::Result<()>;
     /// Delete a file. For a directory, `recursive=true` walks children first.
     async fn delete(&self, path: &str, recursive: bool) -> anyhow::Result<()>;

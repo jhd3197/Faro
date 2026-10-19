@@ -134,6 +134,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- files ----
     case "list_directory":
       return data.listDir(a.sessionId, a.path);
+    case "browse_directory":
+      return { entries: data.listDir(a.sessionId, a.path), skippedEntries: 0 };
     case "capabilities":
       return data.capabilities(a.sessionId);
     case "read_file_preview":

@@ -16,6 +16,12 @@ export interface DirEntry {
   etag?: string;
 }
 
+/** Display-only result: hidden entries do not mean those files are absent. */
+export interface DirectoryListing {
+  entries: DirEntry[];
+  skippedEntries: number;
+}
+
 export interface Capabilities {
   canChmod: boolean;
   canSymlink: boolean;

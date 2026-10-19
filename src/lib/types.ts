@@ -855,6 +855,7 @@ export {
   LOCAL_SESSION,
   type FileKind,
   type DirEntry,
+  type DirectoryListing,
   type Capabilities,
   type SessionId,
 } from "@faro/file-ui";

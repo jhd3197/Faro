@@ -511,6 +511,7 @@ pub fn run() {
             commands::start_edit,
             commands::stop_edit,
             commands::list_directory,
+            commands::browse_directory,
             commands::capabilities,
             commands::read_file_preview,
             preview::preview_thumbnail,
