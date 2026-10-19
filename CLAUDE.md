@@ -26,7 +26,9 @@ See `PRODUCT.md` for the full pitch.
   complete and verified, say so. If a PR write-up helps, run the **`create-pr`**
   skill — it only *writes a description file* to `.pr/`, it does not open or push
   anything.
-- Keep the repo's commit trailer: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+- Use the configured Git author. Do not add AI/model `Co-Authored-By` trailers
+  unless Juan explicitly requests an accurate attribution for that commit.
+  Never copy a model name from earlier commits or repository instructions.
 
 ### PR titles are plain English
 
