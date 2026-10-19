@@ -17,6 +17,7 @@ import type {
   GeneratedKey,
   SshKeyDefaults,
   DirEntry,
+  DirectoryListing,
   Capabilities,
   EditErrorEvent,
   EditSavedEvent,
@@ -208,6 +209,8 @@ export const ipc = {
 
   listDirectory: (sessionId: SessionId, path: string) =>
     invoke<DirEntry[]>("list_directory", { sessionId, path }),
+  browseDirectory: (sessionId: SessionId, path: string) =>
+    invoke<DirectoryListing>("browse_directory", { sessionId, path }),
 
   capabilities: (sessionId: SessionId) =>
     invoke<Capabilities>("capabilities", { sessionId }),

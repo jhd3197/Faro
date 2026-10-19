@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import {
   ArrowUp,
   ArrowLeft,
@@ -18,6 +18,7 @@ import {
   GitCompareArrows,
   CopyX,
   Info,
+  AlertTriangle,
   Search,
   X,
   ChevronUp,
@@ -32,6 +33,7 @@ import {
   Upload,
   Download,
   Image as ImageIcon,
+  BookmarkPlus,
 } from "lucide-react";
 import type {
   Capabilities,
@@ -133,6 +135,9 @@ interface Props {
   transferLabel?: string;
   /** Bump to force a re-listing of the current directory (e.g. after an upload). */
   reloadToken?: number;
+  /** Host-provided shortcuts for a remote folder; absent in generic/local panes. */
+  onSaveSite?: (path: string) => void;
+  toolbarActions?: ReactNode;
 }
 
 /** Extract a human message from any thrown value. Transport backends may reject
@@ -166,6 +171,8 @@ export function FilePane({
   onDrop,
   transferLabel = "Transfer",
   reloadToken,
+  onSaveSite,
+  toolbarActions,
 }: Props) {
   // Everything that used to be a direct Tauri call or a zustand read now comes
   // through the injected adapter + settings. The component is otherwise the
@@ -221,6 +228,8 @@ export function FilePane({
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [skippedEntries, setSkippedEntries] = useState(0);
+  const loadVersion = useRef(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
@@ -258,21 +267,28 @@ export function FilePane({
 
   const load = useCallback(
     async (p: string) => {
+      const version = ++loadVersion.current;
+      setEntries([]);
+      setSkippedEntries(0);
+      setError(null);
+      setSelected(new Set());
+      setAnchor(null);
       if (!sessionId) {
-        setEntries([]);
+        setLoading(false);
         return;
       }
       setLoading(true);
-      setError(null);
       try {
-        const list = await fs.listDirectory(sessionId, p);
-        setEntries(list);
-        setSelected(new Set());
-        setAnchor(null);
+        const listing = fs.browseDirectory
+          ? await fs.browseDirectory(sessionId, p)
+          : { entries: await fs.listDirectory(sessionId, p), skippedEntries: 0 };
+        if (version !== loadVersion.current) return;
+        setEntries(listing.entries);
+        setSkippedEntries(listing.skippedEntries);
       } catch (e) {
-        setError(errorText(e));
+        if (version === loadVersion.current) setError(errorText(e));
       } finally {
-        setLoading(false);
+        if (version === loadVersion.current) setLoading(false);
       }
     },
     [sessionId, fs]
@@ -280,6 +296,9 @@ export function FilePane({
 
   useEffect(() => {
     load(path);
+    // A slow response from a previous folder/session must not replace the
+    // current entries or attach its warning to a different breadcrumb.
+    return () => { ++loadVersion.current; };
   }, [sessionId, path, load, reloadToken]);
 
   // Pull capabilities once per session so chmod / mkdir / etc. can be hidden
@@ -614,6 +633,9 @@ export function FilePane({
         label: single.kind === "directory" ? "Open" : transferLabel,
         onClick: () => onRowActivate(single),
       });
+      if (single.kind === "directory" && isRemote && onSaveSite) {
+        items.push({ label: "Save as site…", icon: <BookmarkPlus size={12} />, onClick: () => onSaveSite(single.path) });
+      }
       // Edit-in-place sits right under the primary action so it's easy to find
       // (it used to be last, below chmod). Remote files only — local files open
       // in their app via the OS, and there's nothing to upload back.
@@ -790,6 +812,9 @@ export function FilePane({
     if (!sessionId) return;
     e.preventDefault();
     const items: MenuItem[] = [];
+    if (sessionId !== LOCAL_SESSION && onSaveSite) {
+      items.push({ label: "Save as site…", icon: <BookmarkPlus size={12} />, onClick: () => onSaveSite(path), separatorAfter: true });
+    }
     if (caps?.hasDirectories !== false) {
       items.push({
         label: "New folder…",
@@ -951,6 +976,7 @@ export function FilePane({
           </span>
         )}
         <div className="flex-1" />
+        {sessionId && toolbarActions}
         {selectionCount > 0 && onTransfer && (
           <button
             onClick={transferSelection}
@@ -1250,6 +1276,16 @@ export function FilePane({
         </div>
       )}
 
+      {sessionId && !loading && !error && skippedEntries > 0 && (
+        <div role="status" className="flex shrink-0 items-start gap-2 border-b border-border px-3 py-2 text-xs text-text-muted">
+          <AlertTriangle size={14} aria-hidden="true" className="mt-0.5 shrink-0" />
+          <p>
+            <strong className="font-medium text-text">Incomplete listing: {skippedEntries} {skippedEntries === 1 ? "entry" : "entries"} hidden.</strong>{" "}
+            Their names contain unsupported path separators. Folder operations will report an error instead of silently skipping them.
+          </p>
+        </div>
+      )}
+
       <div role="presentation" className="flex-1 overflow-y-auto">
         {!sessionId ? (
           <EmptyState
@@ -1285,7 +1321,7 @@ export function FilePane({
               }
             />
           ) : (
-            <EmptyState icon={<Inbox size={20} />} title="Empty folder" />
+            <EmptyState icon={<Inbox size={20} />} title={skippedEntries > 0 ? "No supported entries" : "Empty folder"} />
           )
         ) : paneViewMode === "grid" ? (
           <div className="grid [grid-template-columns:repeat(auto-fill,minmax(108px,1fr))] gap-1 p-2">

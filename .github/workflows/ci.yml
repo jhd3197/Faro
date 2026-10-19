@@ -52,6 +52,9 @@ jobs:
       - name: Release upload retry and completeness tests
         run: node --test scripts/release-tools.test.mjs
 
+      - name: File pane listing and navigation regression tests
+        run: node --test scripts/file-pane.test.mjs
+
       - name: TypeScript + Vite build
         run: npm run build
 

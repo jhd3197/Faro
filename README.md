@@ -149,6 +149,8 @@ Builds are **unsigned** (no Apple Developer / Windows EV certificate yet), so ea
 
 ### 🛠️ Productivity
 
+**Site shortcuts:** right-click a remote folder and choose **Save as site**, or use the bookmark button to save the current folder. Sites appear beneath their server and reuse its connection and credentials. Each site keeps its own browsing location during the app session; **Site home** returns to its saved folder. Rename or remove shortcuts from their options menu. Shortcuts survive restarts and are included in Faro backups. They use the parent account's permissions and do not restrict access to other folders.
+
 | | |
 |---|---|
 | **Profile importers**<br>Bring connections in from `~/.ssh/config`, FileZilla's `sitemanager.xml`, and PuTTY sessions. | **Keyboard-first**<br>Command palette (Ctrl/⌘-K), sortable columns, breadcrumbs, in-pane filter, toasts, custom title bar with menus. |

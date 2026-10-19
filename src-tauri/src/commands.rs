@@ -1,7 +1,7 @@
 use crate::proc::NoConsoleWindow;
 use crate::error::{ErrorKind, FaroError};
 use crate::profiles::{AuthMethod, ConnectionProfile};
-use crate::remotefs::{Capabilities, DirEntry, RemoteFs};
+use crate::remotefs::{Capabilities, DirEntry, DirectoryListing, RemoteFs};
 use crate::session::{HostDecision, JobHandle, Session, SshSession};
 use crate::transfer::{OverwritePolicy, Transfer, TransferStatus};
 use crate::AppState;
@@ -631,6 +631,18 @@ pub async fn list_directory(
 ) -> Result<Vec<DirEntry>, String> {
     let fs = fs_for(&session_id, &state).await?;
     fs.list_dir(&path).await.map_err(err)
+}
+
+/// Only the file pane uses this endpoint. Listing for conflict detection,
+/// transfers and all other operations remains strict through `list_directory`.
+#[tauri::command]
+pub async fn browse_directory(
+    session_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<DirectoryListing, String> {
+    let fs = fs_for(&session_id, &state).await?;
+    fs.browse_dir(&path).await.map_err(err)
 }
 
 #[tauri::command]

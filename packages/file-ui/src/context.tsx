@@ -3,6 +3,7 @@ import type {
   ArchiveFormat,
   Capabilities,
   DirEntry,
+  DirectoryListing,
   FileKind,
   PaneDensity,
   PaneViewMode,
@@ -22,6 +23,9 @@ import type { FileBrowserAction } from "./lib/keys";
 export interface FileSystemAdapter {
   /** List a directory. `sessionId` is opaque; LOCAL_SESSION means the host FS. */
   listDirectory(sessionId: SessionId, path: string): Promise<DirEntry[]>;
+  /** Optional display-only listing. The pane shows a persistent warning when
+   * entries were skipped. Operational callers must keep using listDirectory. */
+  browseDirectory?(sessionId: SessionId, path: string): Promise<DirectoryListing>;
   /** Which operations this backend supports (hides chmod/mkdir for object stores). */
   capabilities(sessionId: SessionId): Promise<Capabilities>;
   rename(sessionId: SessionId, from: string, to: string): Promise<void>;

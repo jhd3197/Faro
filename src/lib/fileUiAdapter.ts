@@ -125,6 +125,7 @@ async function remoteThumbnail(
 // and the same components would drive any other backend (HTTP, mock, …).
 export const tauriFileSystem: FileSystemAdapter = {
   listDirectory: (sessionId, path) => ipc.listDirectory(sessionId, path),
+  browseDirectory: (sessionId, path) => ipc.browseDirectory(sessionId, path),
   capabilities: (sessionId) => ipc.capabilities(sessionId),
   rename: (sessionId, from, to) => ipc.renamePath(sessionId, from, to),
   remove: (sessionId, path, recursive) =>

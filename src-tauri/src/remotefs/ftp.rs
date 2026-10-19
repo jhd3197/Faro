@@ -1,4 +1,4 @@
-use super::{Capabilities, ChangeSignal, DirEntry, FileKind, RemoteFs};
+use super::{Capabilities, ChangeSignal, DirEntry, DirectoryListing, FileKind, RemoteFs};
 use crate::session::FtpSession;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -169,7 +169,7 @@ fn list_entries(
     stream: &mut crate::session::ftp::FtpStreamKind,
     dir: &str,
     use_mlsd: bool,
-) -> Result<Vec<DirEntry>> {
+) -> Result<DirectoryListing> {
     let target = if dir.is_empty() { "." } else { dir };
     if use_mlsd {
         if let Ok(lines) = stream.mlsd(target) {
@@ -179,14 +179,20 @@ fn list_entries(
     parse_entries(dir, &list_lines(stream, target)?, false)
 }
 
-fn parse_entries(dir: &str, lines: &[String], mlsd: bool) -> Result<Vec<DirEntry>> {
+fn parse_entries(dir: &str, lines: &[String], mlsd: bool) -> Result<DirectoryListing> {
     let mut entries = Vec::new();
+    let mut skipped_entries = 0;
     for line in lines {
         if line.is_empty() { continue; }
         let entry = if mlsd { entry_from_mlsd(dir, line) } else { entry_from_listing(dir, line) };
         if let Some(entry) = entry {
+            // Keep EdiBianco's #43 browsing recovery, but preserve incompleteness
+            // so sync and recursive operations cannot mistake hidden files for absence.
+            // Backslashes may be literal Unix names, but Faro's cross-platform
+            // path consumers cannot safely represent them as child names yet.
             if entry.name.contains('/') || entry.name.contains('\\') {
-                anyhow::bail!("FTP listing contains an unsafe child name");
+                skipped_entries += 1;
+                continue;
             }
             entries.push(entry);
             continue;
@@ -203,7 +209,7 @@ fn parse_entries(dir: &str, lines: &[String], mlsd: bool) -> Result<Vec<DirEntry
         };
         if !special { anyhow::bail!("unrecognized FTP listing entry; refusing an incomplete listing"); }
     }
-    Ok(entries)
+    Ok(DirectoryListing { entries, skipped_entries })
 }
 
 /// Issue a directory listing that includes dotfiles.
@@ -232,6 +238,10 @@ fn list_lines(
 #[async_trait]
 impl RemoteFs for FtpFs {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>> {
+        self.browse_dir(path).await?.into_complete()
+    }
+
+    async fn browse_dir(&self, path: &str) -> Result<DirectoryListing> {
         let path = path.to_string();
         let use_mlsd = self.session.supports_mlsd();
         self.session
@@ -331,7 +341,7 @@ async fn delete_recursive(session: Arc<FtpSession>, root: String) -> Result<()> 
                 while let Some(d) = stack.pop() {
                     // MLSD / `LIST -a`, so a directory holding only dotfiles
                     // isn't reported as empty and left behind by the RMD pass.
-                    let listing = list_entries(stream, &d, use_mlsd)?;
+                    let listing = list_entries(stream, &d, use_mlsd)?.into_complete()?;
                     for entry in listing {
                         match entry.kind {
                             FileKind::Directory => {
@@ -369,6 +379,10 @@ fn unsupported(action: &str) -> anyhow::Error {
 }
 
 #[cfg(test)]
+#[path = "ftp_tests.rs"]
+mod protocol_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -376,8 +390,77 @@ mod tests {
     fn malformed_listing_cannot_hide_files() {
         assert!(parse_entries("/", &["not a listing".into()], false).is_err());
         assert!(parse_entries("/", &["broken".into()], true).is_err());
-        assert!(parse_entries("/", &["type=file;size=1; ../outside".into()], true).is_err());
-        assert!(parse_entries("/", &["type=cdir; .".into(), "type=pdir; ..".into()], true).unwrap().is_empty());
+        assert!(parse_entries("/", &["type=cdir; .".into(), "type=pdir; ..".into()], true).unwrap().into_complete().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unsafe_name_skips_only_that_entry() {
+        let lines = vec![
+            "type=file;size=1; ../outside".to_string(),
+            "type=file;size=2; keep.txt".to_string(),
+        ];
+        let listing = parse_entries("/www", &lines, true).unwrap();
+        assert_eq!(listing.skipped_entries, 1);
+        assert!(listing.clone().into_complete().is_err());
+        let entries = listing.entries;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "keep.txt");
+        assert_eq!(entries[0].path, "/www/keep.txt");
+    }
+
+    #[test]
+    fn separator_names_are_browse_only_in_every_listing_format() {
+        for name in ["../outside", "/absolute", "sub/file", r"..\outside", r"report\2026.txt"] {
+            for (mlsd, bad, good) in [
+                (true, format!("type=file;size=18; {name}"), "type=file;size=4; keep.txt"),
+                (false, format!("-rw-r--r-- 1 user group 18 Jan  1  2024 {name}"), "-rw-r--r-- 1 user group 4 Jan  1  2024 keep.txt"),
+                (false, format!("01-16-24  09:30AM                  18 {name}"), "01-16-24  09:30AM                   4 keep.txt"),
+            ] {
+                let listing = parse_entries("./www", &[bad.clone(), good.into()], mlsd).unwrap();
+                assert_eq!(listing.skipped_entries, 1, "{bad}");
+                assert_eq!(listing.entries.len(), 1);
+                assert_eq!(listing.entries[0].path, "./www/keep.txt");
+                assert!(listing.into_complete().is_err(), "{bad}");
+                let all_skipped = parse_entries("/", &[bad], mlsd).unwrap();
+                assert_eq!(all_skipped.skipped_entries, 1);
+                assert!(all_skipped.entries.is_empty());
+                assert!(all_skipped.into_complete().is_err(), "not an empty folder");
+            }
+        }
+    }
+
+    #[test]
+    fn supported_paths_and_symlink_targets_are_unchanged() {
+        for parent in ["/", "/www/", ".", "./www", "/café/sub folder"] {
+            let lines = vec![
+                "type=file;size=4; .hidden".into(),
+                "type=dir; café; site=1".into(),
+                "type=OS.unix=slink:/etc/passwd; link".into(),
+                "type=cdir; /www".into(),
+                "type=pdir; /".into(),
+            ];
+            let entries = parse_entries(parent, &lines, true).unwrap().into_complete().unwrap();
+            assert_eq!(entries.len(), 3);
+            assert_eq!(entries[1].name, "café; site=1");
+            assert_eq!(entries[1].path, format!("{}/café; site=1", parent.trim_end_matches('/')));
+            assert_eq!(entries[2].kind, FileKind::Symlink);
+        }
+        let entries = parse_entries("/", &[
+            "total 4".into(),
+            "lrwxrwxrwx 1 user group 11 Jan  1  2024 link -> /etc/passwd".into(),
+        ], false).unwrap().into_complete().unwrap();
+        assert_eq!(entries[0].name, "link");
+        assert_eq!(entries[0].path, "/link");
+    }
+
+    #[test]
+    fn malformed_lines_still_fail_after_a_skipped_entry() {
+        for (mlsd, lines) in [
+            (true, vec!["type=file; ../outside".into(), "broken".into()]),
+            (false, vec!["-rw-r--r-- 1 user group 1 Jan  1  2024 ../outside".into(), "broken".into()]),
+        ] {
+            assert!(parse_entries("/", &lines, mlsd).is_err());
+        }
     }
 
     #[test]
