@@ -1,6 +1,7 @@
 // Dependency-free README artwork. Run: node scripts/generate-readme-art.mjs
 // Keep colors here so banners and cards share one palette.
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { artworkTranslations } from './readme-art-translations.mjs';
 
 const out = new URL('../docs/images/readme/', import.meta.url);
 mkdirSync(out, { recursive: true });
@@ -10,11 +11,23 @@ const text = (x, y, value, size = 24, fill = c.ink, weight = 400, extra = '') =>
   `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" font-weight="${weight}" ${extra}>${escape(value)}</text>`;
 const line = (x1, y1, x2, y2, color = c.line) => `<path d="M${x1} ${y1}L${x2} ${y2}" stroke="${color}"/>`;
 function save(name, w, h, title, body) {
-  writeFileSync(new URL(`${name}.svg`, out), `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-labelledby="title">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-labelledby="title">
 <title id="title">${escape(title)}</title>
 <rect width="${w}" height="${h}" rx="16" fill="${c.bg}"/>
 <g font-family="Segoe UI, Helvetica, Arial, sans-serif">${body}</g>
-</svg>\n`);
+</svg>\n`;
+  writeFileSync(new URL(`${name}.svg`, out), svg);
+  for (const [index, locale] of ['es', 'pt', 'zh-CN'].entries()) {
+    const translations = new Map(artworkTranslations.map(row => [escape(row[0]), escape(row[index + 1])]));
+    let localized = svg.replace(/(<(?:text|title)\b[^>]*>)([^<]*)(<\/(?:text|title)>)/g,
+      (_, open, value, close) => `${open}${translations.get(value) ?? value}${close}`);
+    if (locale === 'zh-CN') {
+      localized = localized.replace('Segoe UI, Helvetica, Arial, sans-serif', 'Segoe UI, Microsoft YaHei, Noto Sans CJK SC, sans-serif');
+    }
+    const dir = new URL(`${locale}/`, out);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(new URL(`${name}.svg`, dir), localized);
+  }
 }
 
 save('hero', 1280, 390, 'Faro. Your files, wherever you work. File and Agent Remote Operations.', `
@@ -89,4 +102,4 @@ ${text(50, y + 40, title, 24, c.gold, 600, 'letter-spacing="1.5"')}
 ${text(50, y + 76, subtitle, 26, c.ink)}`).join('')}
 <path d="M300 134v40m-8-8 8 8 8-8M300 294v40m-8-8 8 8 8-8" fill="none" stroke="${c.gold}" stroke-width="2"/>
 `);
-console.log('Generated 9 README assets in docs/images/readme/.');
+console.log('Generated 9 README assets in each of 4 languages.');

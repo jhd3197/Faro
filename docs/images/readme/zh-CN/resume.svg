@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="290" viewBox="0 0 600 290" role="img" aria-labelledby="title">
+<title id="title">断点续传：在支持的数据源上保留已完成的分段，重试缺失的数据。</title>
+<rect width="600" height="290" rx="16" fill="#10141c"/>
+<g font-family="Segoe UI, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+<text x="32" y="43" font-size="16" fill="#e9bd69" font-weight="600" letter-spacing="2">分段下载</text>
+<text x="30" y="124" font-size="43" fill="#f4f1ea" font-weight="600" >从上次中断的</text>
+<text x="30" y="173" font-size="43" fill="#f4f1ea" font-weight="600" >地方继续。</text>
+<rect x="32" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="77" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="122" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="167" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="212" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="257" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="302" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="347" y="199" width="38" height="10" rx="2" fill="#e9bd69"/><rect x="392" y="199" width="38" height="10" rx="2" fill="#343b47"/><rect x="437" y="199" width="38" height="10" rx="2" fill="#343b47"/><rect x="482" y="199" width="38" height="10" rx="2" fill="#343b47"/><rect x="527" y="199" width="38" height="10" rx="2" fill="#343b47"/>
+<text x="32" y="250" font-size="20" fill="#b2bac7" font-weight="400" >保留已完成的分段，重试缺失的数据。</text>
+<text x="32" y="277" font-size="18" fill="#b2bac7" font-weight="400" >能否续传取决于数据源。</text>
+</g>
+</svg>

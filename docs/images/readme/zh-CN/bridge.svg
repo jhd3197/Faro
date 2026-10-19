@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="180" viewBox="0 0 1280 180" role="img" aria-labelledby="title">
+<title id="title">本地 AI 智能体通过 localhost 连接 Faro。Faro 在使用已认证会话前执行你的审批策略。</title>
+<rect width="1280" height="180" rx="16" fill="#10141c"/>
+<g font-family="Segoe UI, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+
+<rect x="32" y="30" width="380" height="120" rx="8" fill="#181e28" stroke="#343b47"/>
+<text x="58" y="77" font-size="21" fill="#e9bd69" font-weight="600" letter-spacing="1.5">你的 AI 智能体</text>
+<text x="58" y="115" font-size="22" fill="#f4f1ea" font-weight="400" >通过 localhost 使用 MCP</text>
+<rect x="450" y="30" width="380" height="120" rx="8" fill="#181e28" stroke="#343b47"/>
+<text x="476" y="77" font-size="21" fill="#e9bd69" font-weight="600" letter-spacing="1.5">FARO</text>
+<text x="476" y="115" font-size="22" fill="#f4f1ea" font-weight="400" >你的审批策略</text>
+<rect x="868" y="30" width="380" height="120" rx="8" fill="#181e28" stroke="#343b47"/>
+<text x="894" y="77" font-size="21" fill="#e9bd69" font-weight="600" letter-spacing="1.5">你的服务器</text>
+<text x="894" y="115" font-size="22" fill="#f4f1ea" font-weight="400" >已认证的会话</text>
+<path d="M412 90h30m-8-6 8 6-8 6M830 90h30m-8-6 8 6-8 6" fill="none" stroke="#e9bd69" stroke-width="2"/>
+</g>
+</svg>
