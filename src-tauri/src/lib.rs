@@ -12,6 +12,7 @@ pub mod backup;
 pub mod bridge;
 pub mod commands;
 mod agent_host;
+mod app_updater;
 mod cli_updater;
 pub mod credentials;
 pub mod db;
@@ -459,6 +460,7 @@ pub fn run() {
             agent_host::agent_host_close_pairing,
             agent_host::agent_host_set_policy,
             agent_host::agent_host_revoke_peer,
+            app_updater::app_update_release,
             cli_updater::cli_updater_status,
             cli_updater::cli_updater_check,
             cli_updater::cli_updater_update,

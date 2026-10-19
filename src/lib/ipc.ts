@@ -185,6 +185,15 @@ export const ipc = {
   agentHostRevokePeer: (publicKey: string) =>
     invoke<AgentHostStatus>("agent_host_revoke_peer", { publicKey }),
 
+  // Release discovery when the signed desktop update feed is unavailable.
+  appUpdateRelease: () => invoke<{
+    version: string;
+    currentVersion: string;
+    notes: string | null;
+    url: string;
+    newer: boolean;
+  }>("app_update_release"),
+
   // --- CLI updater (Plan 10 Phase 0c/0d): keep faro-cli in step with the app.
   cliUpdaterStatus: () => invoke<CliStatus>("cli_updater_status"),
   cliUpdaterCheck: () => invoke<CliStatus>("cli_updater_check"),
