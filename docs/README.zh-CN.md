@@ -1,9 +1,12 @@
 <p align="center">
-  <picture>
-    <source media="(max-width: 600px)" srcset="images/readme/zh-CN/hero-mobile.svg" />
-    <img src="images/readme/zh-CN/hero.svg" width="100%" alt="Faro。无论在哪里工作，都能访问你的文件。连接服务器、云存储与远程设备。" />
-  </picture>
+  <img src="screenshots/poster.png" width="100%" alt="Faro：访问服务器与云存储中的文件" />
 </p>
+
+<h1 align="center">Faro</h1>
+
+<p align="center"><strong>File &amp; Agent Remote Operations</strong></p>
+
+<p align="center"><strong>一款现代桌面客户端，支持 SFTP、FTP、SSH、S3 兼容存储、WebDAV 及云存储。</strong></p>
 
 <p align="center">
   <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/github/v/release/jhd3197/faro?style=flat-square&amp;color=e9bd69&amp;labelColor=181e28" alt="最新版本" /></a>

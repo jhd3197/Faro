@@ -1,9 +1,12 @@
 <p align="center">
-  <picture>
-    <source media="(max-width: 600px)" srcset="docs/images/readme/hero-mobile.svg" />
-    <img src="docs/images/readme/hero.svg" width="100%" alt="Faro. Your files, wherever you work. A desktop workspace for servers, cloud storage, and remote machines." />
-  </picture>
+  <img src="docs/screenshots/poster.png" width="100%" alt="Faro: modern file access for servers and cloud" />
 </p>
+
+<h1 align="center">Faro</h1>
+
+<p align="center"><strong>File &amp; Agent Remote Operations</strong></p>
+
+<p align="center"><strong>A modern desktop client for SFTP, FTP, SSH, S3-compatible storage, WebDAV, and cloud storage.</strong></p>
 
 <p align="center">
   <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/badge/version-1.3.52-e9bd69?style=flat-square&amp;labelColor=181e28" alt="Latest release" /></a>
