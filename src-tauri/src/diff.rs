@@ -324,11 +324,9 @@ pub(crate) async fn hash_path(session: Option<&Session>, path: &str) -> Result<S
     }
 }
 
-/// POSIX single-quote a path so it survives spaces / shell metacharacters when
-/// interpolated into a remote command.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a path so it survives spaces / shell metacharacters when
+// interpolated into a remote command.
+use crate::scp::quote_path as sh_quote;
 
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -775,15 +773,6 @@ pub async fn diff_start(
             session_a, path_a, fs_a, sess_a, session_b, path_b, fs_b, sess_b, hash, app,
         )
         .await)
-}
-
-#[tauri::command]
-pub async fn diff_status(diff_id: String, state: State<'_, AppState>) -> Result<DiffSnapshot, String> {
-    state
-        .diff
-        .snapshot(&diff_id)
-        .await
-        .ok_or_else(|| format!("diff {diff_id} not found"))
 }
 
 /// Full snapshot including the `result` (present once the diff is done).

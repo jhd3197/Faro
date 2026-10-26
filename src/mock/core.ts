@@ -114,6 +114,16 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return [];
     case "api_key_status":
       return false;
+    case "oauth_builtin_apps":
+      return { dropbox: false, onedrive: false, gdrive: false, box: false };
+    case "dropbox_authorize":
+    case "onedrive_authorize":
+    case "gdrive_authorize":
+    case "box_authorize":
+      if (!a.clientId) {
+        throw "this Faro build has no built-in app for this provider";
+      }
+      return { accountLabel: "demo@example.com" };
 
     // ---- sessions ----
     case "connect":
@@ -209,6 +219,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- transfers ----
     case "list_transfers":
       return transfers.listTransfers();
+    case "transfer_forget_finished":
+      return;
     case "start_download": {
       const dir = a.remotePath.replace(/\/[^/]*$/, "") || "/";
       const name = a.remotePath.split("/").pop();
@@ -326,7 +338,6 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // id, and the store immediately reads diskScanTree, which reports "done".
     case "diskscan_start":
       return "scan-1";
-    case "diskscan_status":
     case "diskscan_tree":
       return data.diskScanSnapshot;
     case "diskscan_cancel":
@@ -377,9 +388,6 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "export_agent_log":
       return "C:\\Users\\demo\\Downloads\\faro-agent-console.txt";
 
-    // ---- folder sync (no pairs in the demo) ----
-    case "foldersync_list":
-      return [];
 
     // ---- one-click PATH install (Plan 16 Phase 4) ----
     case "path_status":

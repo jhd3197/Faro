@@ -18,10 +18,13 @@ export function HostKeyModal() {
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let cancelled = false;
     onHostPrompt((e) => setQueue((q) => [...q, e])).then((u) => {
-      unlisten = u;
+      if (cancelled) u();
+      else unlisten = u;
     });
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, []);

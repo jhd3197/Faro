@@ -273,8 +273,7 @@ impl AuthPrompter for RejectAuthPrompter {
 /// Decides what to do with a server key on connect. Implementations: the
 /// GUI's `TauriHostKeyVerifier` (emits a Tauri event + awaits the user's
 /// click via oneshot), and the CLI's `CliHostKeyVerifier` (prompts on
-/// stdin/stdout). A no-op `AutoTrustVerifier` exists for scripted scenarios
-/// where the operator has explicitly opted out of prompting.
+/// stdin/stdout). Silent reconnects use `ReconnectVerifier`.
 #[async_trait]
 pub trait HostKeyVerifier: Send + Sync {
     async fn decide(
@@ -374,41 +373,78 @@ impl HostKeyVerifier for TauriHostKeyVerifier {
     }
 }
 
-/// A non-interactive host-key verifier used for transparent reconnects. On a
-/// reconnect the server key is already in `known_hosts`, so `check_server_key`
-/// short-circuits on `Match` *before* `decide()` is ever called; `decide()`
-/// therefore only runs for an unknown or **changed** key — which a silent
-/// background reconnect must refuse rather than auto-trust behind the user's
-/// back. `reject_unknown` (the safe default) makes that explicit.
-pub struct AutoTrustVerifier {
-    reject_unknown: bool,
+/// The keychain service holding a profile's OAuth token, by protocol. One
+/// list, so backup and keychain migration can't drift apart.
+pub fn oauth_token_service(protocol: &str) -> Option<&'static str> {
+    Some(match protocol {
+        "dropbox" => dropbox::DROPBOX_SERVICE,
+        "onedrive" => onedrive::ONEDRIVE_SERVICE,
+        "gdrive" => gdrive::GDRIVE_SERVICE,
+        "box" => boxdrive::BOX_SERVICE,
+        "dynamics" => dynamics::DYNAMICS_TOKEN_SERVICE,
+        _ => return None,
+    })
 }
 
-impl AutoTrustVerifier {
-    /// Refuse any key not already trusted in `known_hosts`. Safe for silent
-    /// reconnects: a matching key never reaches `decide()`; an unknown/changed
-    /// one is rejected loudly instead of being trusted without the user.
-    pub fn reject_unknown() -> Self {
-        Self { reject_unknown: true }
-    }
+/// Host keys the user accepted for one session only ("Accept once"), as
+/// `(host, port, fingerprint)` — one per hop when a jump host is involved.
+type AcceptedKeys = Arc<std::sync::Mutex<Vec<(String, u16, String)>>>;
+
+/// Wraps the interactive verifier on first connect and remembers every key
+/// the user accepted for this session only, so a reconnect can reuse it.
+struct RecordingVerifier {
+    inner: Arc<dyn HostKeyVerifier>,
+    accepted: AcceptedKeys,
 }
 
 #[async_trait]
-impl HostKeyVerifier for AutoTrustVerifier {
+impl HostKeyVerifier for RecordingVerifier {
     async fn decide(
         &self,
-        _host: &str,
-        _port: u16,
+        host: &str,
+        port: u16,
+        key_type: &str,
+        fingerprint: &str,
+        stored_fingerprint: Option<&str>,
+        kind: HostPromptKind,
+    ) -> Result<HostDecision, russh::Error> {
+        let d = self
+            .inner
+            .decide(host, port, key_type, fingerprint, stored_fingerprint, kind)
+            .await?;
+        if matches!(d, HostDecision::Accept) {
+            if let Ok(mut keys) = self.accepted.lock() {
+                keys.push((host.to_string(), port, fingerprint.to_string()));
+            }
+        }
+        Ok(d)
+    }
+}
+
+/// The verifier for a silent reconnect. A key already in `known_hosts`
+/// never reaches `decide()`; besides that, only the exact keys the user
+/// accepted for this session are allowed — an unknown or changed key is
+/// refused instead of being trusted with no user to ask.
+pub struct ReconnectVerifier {
+    accepted: AcceptedKeys,
+}
+
+#[async_trait]
+impl HostKeyVerifier for ReconnectVerifier {
+    async fn decide(
+        &self,
+        host: &str,
+        port: u16,
         _key_type: &str,
-        _fingerprint: &str,
+        fingerprint: &str,
         _stored_fingerprint: Option<&str>,
         _kind: HostPromptKind,
     ) -> Result<HostDecision, russh::Error> {
-        Ok(if self.reject_unknown {
-            HostDecision::Reject
-        } else {
-            HostDecision::Accept
-        })
+        let known = self.accepted.lock().is_ok_and(|keys| {
+            keys.iter()
+                .any(|(h, p, fp)| h == host && *p == port && fp == fingerprint)
+        });
+        Ok(if known { HostDecision::Accept } else { HostDecision::Reject })
     }
 }
 
@@ -489,6 +525,8 @@ pub struct SshSession {
     sftp: Mutex<Option<Arc<Mutex<SftpSession>>>>,
     /// Serializes reconnects so a burst of failed ops triggers exactly one.
     reconnect_lock: Mutex<()>,
+    /// Keys accepted "once" at connect time; a reconnect may reuse them.
+    accepted_keys: AcceptedKeys,
     /// Bumped on every successful reconnect; lets a waiter that lost the race
     /// notice another task already reconnected and skip doing it again.
     generation: AtomicU64,
@@ -529,6 +567,7 @@ impl SshSession {
             jump_handles: Mutex::new(Vec::new()),
             sftp: Mutex::new(None),
             reconnect_lock: Mutex::new(()),
+            accepted_keys: AcceptedKeys::default(),
             generation: AtomicU64::new(0),
             jobs: Mutex::new(HashMap::new()),
         }
@@ -655,7 +694,9 @@ impl SshSession {
             return Ok(()); // someone else already reconnected while we waited
         }
         tracing::warn!(session = %self.id, host = %self.profile.host, "SSH transport dead — reconnecting");
-        let verifier: Arc<dyn HostKeyVerifier> = Arc::new(AutoTrustVerifier::reject_unknown());
+        let verifier: Arc<dyn HostKeyVerifier> = Arc::new(ReconnectVerifier {
+            accepted: self.accepted_keys.clone(),
+        });
         // A silent reconnect has no user to answer prompts — refuse interactive
         // auth rather than hang. (An expired password on reconnect surfaces as a
         // failed reconnect, which the user resolves by reconnecting by hand.)
@@ -830,6 +871,7 @@ impl SshSession {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code = None;
+        let mut saw_eof = false;
         let mut truncated = false;
 
         // Process-group id of the running command, parsed from the marker line
@@ -842,7 +884,7 @@ impl SshSession {
 
         let collect = async {
             loop {
-                let Some(msg) = channel.wait().await else { break };
+                let Some(msg) = next_after_eof(&mut channel, saw_eof).await else { break };
                 match msg {
                     ChannelMsg::Data { ref data } => {
                         let total = stdout.len() + stderr.len();
@@ -892,8 +934,21 @@ impl SshSession {
                             emit_chunk(s, if is_err { "stderr" } else { "stdout" }, data);
                         }
                     }
-                    ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status as i32),
-                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    // OpenSSH sends EOF *before* the exit status, so keep
+                    // reading past EOF until the status (or Close) arrives.
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        exit_code = Some(exit_status as i32);
+                        if saw_eof {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Eof => {
+                        saw_eof = true;
+                        if exit_code.is_some() {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Close => break,
                     _ => {}
                 }
                 if truncated {
@@ -1073,7 +1128,12 @@ impl SshSession {
         stream: Option<&ExecStream>,
     ) -> Result<ExecOutput> {
         let marker = format!("[faro-sudo-{}]", Uuid::new_v4().simple());
-        let wrapped = format!("sudo -p '{marker}' -v && {command}");
+        // Echoed once priming is over; after it the password is never typed
+        // again, even if the marker shows up in the command's own output (`ps`
+        // prints our command line). Split in the shell so the command line
+        // itself doesn't contain the joined text.
+        let primed = format!("{marker}-ok");
+        let wrapped = format!("sudo -p '{marker}' -v && echo '{marker}''-ok' && {command}");
         let wrapped_ref = wrapped.as_str();
 
         // Open + request a PTY + exec, reconnecting once if the transport is dead
@@ -1095,14 +1155,16 @@ impl SshSession {
 
         let mut out = Vec::new();
         let mut exit_code = None;
+        let mut saw_eof = false;
         let mut truncated = false;
         let marker_bytes = marker.as_bytes();
         let mut markers_seen = 0usize; // prompts observed so far
         let mut pw_sent = 0usize; // password lines typed
+        let mut priming = true; // false once sudo -v has succeeded
 
         let collect = async {
             loop {
-                let Some(msg) = channel.wait().await else { break };
+                let Some(msg) = next_after_eof(&mut channel, saw_eof).await else { break };
                 match msg {
                     ChannelMsg::Data { ref data } | ChannelMsg::ExtendedData { ref data, .. } => {
                         let total = out.len();
@@ -1113,7 +1175,10 @@ impl SshSession {
                         // Type the password each time a *new* sudo prompt appears.
                         // sudo retries up to 3x on a wrong password and then gives
                         // up (channel closes), so capping the sends avoids a hang.
-                        let hits = count_occurrences(&out, marker_bytes);
+                        if priming && count_occurrences(&out, primed.as_bytes()) > 0 {
+                            priming = false;
+                        }
+                        let hits = if priming { count_occurrences(&out, marker_bytes) } else { 0 };
                         while markers_seen < hits {
                             markers_seen += 1;
                             if pw_sent < 3 {
@@ -1126,8 +1191,21 @@ impl SshSession {
                             }
                         }
                     }
-                    ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status as i32),
-                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    // OpenSSH sends EOF *before* the exit status, so keep
+                    // reading past EOF until the status (or Close) arrives.
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        exit_code = Some(exit_status as i32);
+                        if saw_eof {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Eof => {
+                        saw_eof = true;
+                        if exit_code.is_some() {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Close => break,
                     _ => {}
                 }
                 if truncated {
@@ -1138,8 +1216,21 @@ impl SshSession {
 
         let timed_out = tokio::time::timeout(timeout, collect).await.is_err();
 
+        // A sudo'd command runs as root, so `kill_pgid` from the login user
+        // can't reach it — but its terminal can: Ctrl-C on the PTY sends SIGINT
+        // to the foreground group whoever owns it, and closing the channel
+        // hangs the PTY up (SIGHUP). Something that ignores both still survives.
+        let mut killed = false;
+        if timed_out {
+            if channel.data(&[0x03u8][..]).await.is_ok() {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                killed = channel.close().await.is_ok();
+            }
+            tracing::info!(session = %self.id, killed, "interrupted timed-out sudo command");
+        }
+
         // Scrub the priming prompt(s) so the caller/agent sees clean output.
-        let text = String::from_utf8_lossy(&out).replace(&marker, "");
+        let text = String::from_utf8_lossy(&out).replace(&primed, "").replace(&marker, "");
         let text = text.trim_start_matches(['\r', '\n']).to_string();
 
         Ok(ExecOutput {
@@ -1148,11 +1239,22 @@ impl SshSession {
             exit_code,
             truncated,
             timed_out,
-            // TODO: extend the pgid wrapping + kill-on-timeout to the sudo/PTY
-            // path too (a sudo'd migration is exactly the dangerous case). For
-            // now the sudo path still abandons on timeout, as before.
-            killed: false,
+            killed,
         })
+    }
+}
+
+/// The next channel message; once EOF has been seen, wait at most a moment
+/// for the trailing exit status / close so a server that never sends one
+/// can't stall the call until its timeout.
+async fn next_after_eof(
+    channel: &mut russh::Channel<russh::client::Msg>,
+    saw_eof: bool,
+) -> Option<ChannelMsg> {
+    if saw_eof {
+        tokio::time::timeout(Duration::from_secs(2), channel.wait()).await.ok().flatten()
+    } else {
+        channel.wait().await
     }
 }
 
@@ -1854,6 +1956,11 @@ impl SessionManager {
         let _ = app;
         let session = match profile.protocol.as_str() {
             "sftp" | "ssh" | "" => {
+                let accepted = AcceptedKeys::default();
+                let verifier: Arc<dyn HostKeyVerifier> = Arc::new(RecordingVerifier {
+                    inner: verifier,
+                    accepted: accepted.clone(),
+                });
                 let conn = ssh_connect(&profile, verifier, prompter).await?;
                 let id = Uuid::new_v4().to_string();
                 let ssh = Arc::new(SshSession {
@@ -1863,6 +1970,7 @@ impl SessionManager {
                     jump_handles: Mutex::new(conn.jump_handles),
                     sftp: Mutex::new(None),
                     reconnect_lock: Mutex::new(()),
+                    accepted_keys: accepted,
                     generation: AtomicU64::new(0),
                     jobs: Mutex::new(HashMap::new()),
                 });
@@ -2086,5 +2194,61 @@ impl SessionManager {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod reconnect_verifier_tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_accepts_only_keys_accepted_once() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async {
+            let accepted = AcceptedKeys::default();
+            accepted.lock().unwrap().push(("h".into(), 22, "SHA256:a".into()));
+            let v = ReconnectVerifier { accepted };
+            let d = |fp: &'static str, port| {
+                let v = &v;
+                async move { v.decide("h", port, "ssh-ed25519", fp, None, HostPromptKind::Unknown).await.unwrap() }
+            };
+            assert!(matches!(d("SHA256:a", 22).await, HostDecision::Accept));
+            assert!(matches!(d("SHA256:b", 22).await, HostDecision::Reject));
+            assert!(matches!(d("SHA256:a", 2222).await, HostDecision::Reject));
+        });
+    }
+}
+
+#[cfg(test)]
+mod sudo_live_tests {
+    use super::*;
+
+    /// Against the `transfer::live_tests` SFTP fixture, whose user has sudo
+    /// with its login password.
+    #[tokio::test]
+    #[ignore = "needs FARO_LIVE_SFTP with a sudo-capable user"]
+    async fn live_sudo_timeout_kills_and_password_never_leaks() {
+        let session = crate::transfer::live_tests::sftp_session().await.expect("FARO_LIVE_SFTP");
+        let Session::Ssh(ssh) = &*session else { unreachable!() };
+        let pw = std::env::var("FARO_LIVE_SFTP").unwrap().rsplit(':').next().unwrap().to_string();
+
+        // `ps` prints our wrapper's command line, prompt marker included.
+        // Exit codes survive OpenSSH's EOF-before-exit-status ordering.
+        let plain = ssh.exec_bounded("exit 3", 4096, Duration::from_secs(10), None).await.unwrap();
+        assert_eq!(plain.exit_code, Some(3));
+        let out = ssh.exec_sudo("sudo ps -ef", &pw, 1 << 20, Duration::from_secs(20), None).await.unwrap();
+        assert_eq!(out.exit_code, Some(0), "{}", out.stdout);
+        let failed = ssh.exec_sudo("sudo sh -c 'exit 7'", &pw, 4096, Duration::from_secs(20), None).await.unwrap();
+        assert_eq!(failed.exit_code, Some(7));
+        assert!(!out.stdout.contains(&pw), "password leaked into output:\n{}", out.stdout);
+
+        let out = ssh.exec_sudo("sudo sleep 4242", &pw, 4096, Duration::from_secs(3), None).await.unwrap();
+        assert!(out.timed_out && out.killed, "{out:?}");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let left = ssh
+            .exec_bounded("pgrep -f 'sleep 424[2]' || echo gone", 4096, Duration::from_secs(10), None)
+            .await
+            .unwrap();
+        assert_eq!(left.stdout.trim(), "gone", "sudo'd sleep survived the timeout");
     }
 }

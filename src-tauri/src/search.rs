@@ -811,11 +811,9 @@ async fn name_object(
 
 // ---------- Exec fast path (rg / grep / find) ----------
 
-/// POSIX single-quote a string so it survives spaces / shell metacharacters when
-/// interpolated into a remote command.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a string so it survives spaces / shell metacharacters when
+// interpolated into a remote command.
+use crate::scp::quote_path as sh_quote;
 
 /// The glob `find -iname` should match. A pattern with `*`/`?` is used verbatim;
 /// a plain substring becomes `*substr*` (matching the generic substring rule).
@@ -1449,15 +1447,6 @@ pub async fn search_start(
     let fs = crate::commands::fs_for_public(&session_id, &state).await?;
     let mgr = Arc::clone(&state.search);
     Ok(mgr.start(session_id, path, query, fs, session, app).await)
-}
-
-#[tauri::command]
-pub async fn search_status(search_id: String, state: State<'_, AppState>) -> Result<SearchSnapshot, String> {
-    state
-        .search
-        .snapshot(&search_id, false)
-        .await
-        .ok_or_else(|| format!("search {search_id} not found"))
 }
 
 /// Full snapshot including the `hits` (present once the search is done).

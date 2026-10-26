@@ -163,6 +163,11 @@ pub struct ConnectionProfile {
     // `jump_profile` resolved against the store when the profile is read.
     #[serde(skip)]
     pub jump_via: Option<JumpVia>,
+    // Cloud drives (Dropbox/OneDrive/Google Drive/Box): the client id of the
+    // user's own registered OAuth app. Absent = the app built into Faro, if
+    // the release has one. Its optional client secret lives in the keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
 }
 
 /// Longest bastion chain a profile may connect through.
@@ -240,13 +245,9 @@ impl ProfileStore {
     pub fn from_dir(dir: &std::path::Path, keychain: bool) -> Result<Self> {
         std::fs::create_dir_all(dir).ok();
         let path = dir.join("profiles.json");
-        let mut profiles: Vec<ConnectionProfile> = if path.exists() {
-            let bytes = std::fs::read(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            serde_json::from_slice(&bytes).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        // An unparseable file is moved aside rather than read as "no
+        // profiles" — otherwise the next save would replace it for good.
+        let mut profiles: Vec<ConnectionProfile> = crate::fsutil::read_json_or_quarantine(&path);
         let mut unresolved = Vec::new();
         if keychain {
             for p in profiles.iter_mut() {
@@ -388,7 +389,7 @@ impl ProfileStore {
 
     fn write(&self, profiles: &[ConnectionProfile]) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(&for_disk(profiles, self.keychain_enabled()))?;
-        std::fs::write(&self.path, bytes)
+        crate::fsutil::write_atomic(&self.path, &bytes)
             .with_context(|| format!("writing {}", self.path.display()))?;
         Ok(())
     }

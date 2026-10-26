@@ -448,6 +448,7 @@ async fn import_connection(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        oauth_client_id: None,
     };
     if let Err(e) = state.profiles.upsert(profile.clone()).await {
         crate::credentials::delete_secret(&key_ref);

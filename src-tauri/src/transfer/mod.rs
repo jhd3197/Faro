@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 #[cfg(test)]
-mod live_tests;
+pub(crate) mod live_tests;
 mod partfile;
 mod ranged;
 mod retry;
@@ -389,8 +389,10 @@ pub struct TransferManager {
     restored: Mutex<HashMap<String, crate::db::ResumeRow>>,
 }
 
-/// Bytes moved between resume checkpoints.
-const RESUME_SAVE_BYTES: u64 = 8 * 1024 * 1024;
+/// Bytes moved between resume checkpoints. Large on purpose: each checkpoint
+/// syncs the part file and writes SQLite, so on a fast link the 2 s timer
+/// below should decide, not this.
+const RESUME_SAVE_BYTES: u64 = 256 * 1024 * 1024;
 /// Longest gap between resume checkpoints while bytes move.
 const RESUME_SAVE_EVERY: Duration = Duration::from_secs(2);
 /// Ranges per file when `transferSegments` is `auto`, before probing.
@@ -511,6 +513,43 @@ fn join_remote(dir: &str, name: &str) -> String {
     format!("{dir}{}{name}", if windows_style { '\\' } else { '/' })
 }
 
+/// True when `seg` is exactly one ordinary file name on this OS, so joining it
+/// onto a local folder stays inside that folder. Remote listings are untrusted:
+/// a Linux name like `..\x` or `C:x` is one name there but a path here.
+pub(crate) fn is_plain_local_name(seg: &str) -> bool {
+    let mut parts = Path::new(seg).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
+}
+
+/// Where an in-place upload writes before it replaces `remote_path`.
+fn remote_part_path(remote_path: &str) -> String {
+    format!("{remote_path}.faro-part")
+}
+
+/// Move a finished SFTP part file over `target`. SFTP v3 rename refuses an
+/// existing target, so on failure the old file is removed and the rename
+/// retried; the original's permission bits are carried over first.
+async fn sftp_replace_with_part(
+    sftp: &russh_sftp::client::SftpSession,
+    part: &str,
+    target: &str,
+) -> Result<()> {
+    if let Ok(old) = sftp.metadata(target).await {
+        if let Some(perm) = old.permissions {
+            let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+            attrs.permissions = Some(perm & 0o7777);
+            let _ = sftp.set_metadata(part, attrs).await;
+        }
+    }
+    if sftp.rename(part, target).await.is_ok() {
+        return Ok(());
+    }
+    let _ = sftp.remove_file(target).await;
+    sftp.rename(part, target)
+        .await
+        .with_context(|| format!("uploaded to {part} but could not rename it to {target}"))
+}
+
 fn basename(path: &str) -> String {
     path.trim_end_matches(['/', '\\']).rsplit(|c| c == '/' || c == '\\')
         .next()
@@ -518,7 +557,9 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
-/// Append _1, _2, … to the stem until a free local path is found.
+/// Append _1, _2, … to the stem until a free local path is found. When all
+/// 999 are taken it falls back to a unique suffix rather than the original
+/// path — Rename must never overwrite.
 fn resolve_local_rename(path: &Path) -> PathBuf {
     if !path.exists() {
         return path.to_path_buf();
@@ -538,7 +579,7 @@ fn resolve_local_rename(path: &Path) -> PathBuf {
             return candidate;
         }
     }
-    path.to_path_buf()
+    parent.join(format!("{stem}_{}{ext}", Uuid::new_v4().simple()))
 }
 
 async fn sftp_exists(sftp: &russh_sftp::client::SftpSession, path: &str) -> Result<bool> {
@@ -1083,6 +1124,24 @@ impl TransferManager {
         }
     }
 
+    /// Drop finished rows (Done / Skipped / Canceled) from `ids`, so "Clear
+    /// finished" frees them here too instead of only hiding them in the UI.
+    pub async fn forget_finished(&self, ids: &[String]) {
+        let mut transfers = self.transfers.lock().await;
+        let mut retry = self.retry.lock().await;
+        let mut pauses = self.pauses.lock().await;
+        for id in ids {
+            let finished = transfers.get(id).is_some_and(|t| {
+                matches!(t.status, TransferStatus::Done | TransferStatus::Skipped | TransferStatus::Canceled)
+            });
+            if finished {
+                transfers.remove(id);
+                retry.remove(id);
+                pauses.remove(id);
+            }
+        }
+    }
+
     pub async fn list(&self) -> Vec<Transfer> {
         let mut v: Vec<Transfer> = self.transfers.lock().await.values().cloned().collect();
         v.sort_by_key(|t| t.started_at);
@@ -1478,7 +1537,11 @@ impl TransferManager {
     ) -> Result<String> {
         let size = remote_size(&session, &remote_path).await.unwrap_or(0);
 
-        let initial = PathBuf::from(&local_dir).join(basename(&remote_path));
+        let name = basename(&remote_path);
+        if !is_plain_local_name(&name) {
+            anyhow::bail!("unsafe file name from the server: {name:?}");
+        }
+        let initial = PathBuf::from(&local_dir).join(name);
         // Skip is decided now (no point downloading a file we'll drop) and
         // again at rename time; Rename shows its likely name now and picks a
         // free one at rename time; Overwrite only replaces the existing file
@@ -2099,6 +2162,11 @@ impl TransferManager {
             self.forget_resume(id, false).await;
             return Err(e);
         }
+        if size.is_none() {
+            // The listing only guessed this size; what arrived is the truth,
+            // so `finalize` must not call the finished file a mismatch.
+            self.update(id, |t| t.size = written).await;
+        }
         let placed = partfile::place(&part_path, target, policy, ident.mtime_systime()).await?;
         self.forget_resume(id, false).await;
         match placed {
@@ -2332,11 +2400,15 @@ impl TransferManager {
             self.set_notice(id, "local file changed, restarted").await;
         }
         let prev = prev.filter(|p| p.local == Some(local));
+        // Bytes go to a sibling part file; the target is only replaced once
+        // the whole upload is on the server, so a dropped link or a cancel
+        // never leaves the original truncated.
+        let part = remote_part_path(remote_path);
         let mut start = 0;
         if let Some(prev) = &prev {
             let acked = prev.ranges.prefix();
             if acked > 0 {
-                if let Ok(meta) = sftp.metadata(remote_path).await {
+                if let Ok(meta) = sftp.metadata(part.as_str()).await {
                     if meta.size.unwrap_or(0) >= acked {
                         start = acked;
                     }
@@ -2345,15 +2417,15 @@ impl TransferManager {
         }
         let mut remote_file = if start > 0 {
             let mut f = sftp
-                .open_with_flags(remote_path, OpenFlags::WRITE)
+                .open_with_flags(part.as_str(), OpenFlags::WRITE)
                 .await
-                .with_context(|| format!("open remote {remote_path}"))?;
+                .with_context(|| format!("open remote {part}"))?;
             f.seek(std::io::SeekFrom::Start(start)).await?;
             f
         } else {
-            sftp.create(remote_path)
+            sftp.create(part.as_str())
                 .await
-                .with_context(|| format!("create remote {remote_path}"))?
+                .with_context(|| format!("create remote {part}"))?
         };
         let mut done = ranged::Intervals::default();
         done.add(0, start);
@@ -2407,6 +2479,8 @@ impl TransferManager {
             return Err(e);
         }
         remote_file.shutdown().await?;
+        drop(remote_file);
+        sftp_replace_with_part(sftp, &part, remote_path).await?;
         self.forget_resume(id, false).await;
         Ok(transferred)
     }
@@ -2577,6 +2651,9 @@ impl TransferManager {
         app: AppHandle,
     ) -> Result<Vec<String>> {
         let root_name = basename(&remote_root);
+        if !is_plain_local_name(&root_name) {
+            anyhow::bail!("unsafe folder name from the server: {root_name:?}");
+        }
         let local_root = PathBuf::from(&local_dir).join(&root_name);
         tokio::fs::create_dir_all(&local_root)
             .await
@@ -2612,6 +2689,15 @@ impl TransferManager {
                     .strip_prefix(&remote_root)
                     .unwrap_or(&remote_child)
                     .trim_start_matches('/');
+                if !rel.split('/').all(is_plain_local_name) {
+                    let err = anyhow::anyhow!("unsafe file name from the server: {rel:?}");
+                    let local = local_root.to_string_lossy().into_owned();
+                    ids.push(
+                        self.failed_row(TransferKind::Download, &remote_child, &local, &err, &app)
+                            .await,
+                    );
+                    continue;
+                }
                 let local_child = local_root.join(rel);
                 match entry.kind {
                     crate::remotefs::FileKind::Directory => {
@@ -2784,7 +2870,10 @@ impl TransferManager {
         let resumable = prev.is_some_and(|p| p.local == Some(local_id));
         let (gate, rx, ack) = FtpGate::new();
         let local = local_path.to_path_buf();
-        let remote = remote_path.to_string();
+        let target = remote_path.to_string();
+        // Upload to a part file and rename it over the target at the end (see
+        // `run_ssh_upload`), so a failed overwrite keeps the server's copy.
+        let remote = remote_part_path(remote_path);
         let copy = session.with_transfer_stream(move |stream| {
             let mut file = std::fs::File::open(&local)
                 .with_context(|| format!("open {}", local.display()))?;
@@ -2809,6 +2898,13 @@ impl TransferManager {
             // not ours and a retry must not append to it.
             stream.upload(&remote, start > 0, &mut reader, |r| r.gate.start(start))?;
             reader.finish()?;
+            if stream.rename(&remote, &target).is_err() {
+                // Many servers refuse RNTO onto an existing file.
+                let _ = stream.rm(&target);
+                stream.rename(&remote, &target).with_context(|| {
+                    format!("uploaded to {remote} but could not rename it to {target}")
+                })?;
+            }
             Ok(())
         });
         let (res, (stop, done)) = tokio::join!(copy, self.ftp_pump(id, rx, ack, local_id));
@@ -3952,7 +4048,7 @@ async fn finalize(mgr: &Arc<TransferManager>, id: &str, result: Result<u64>) {
                 Ok(written)
             } else {
                 Err(anyhow::anyhow!(
-                    "size mismatch: expected {expected} bytes, transferred {written}                      (the file changed or the connection dropped mid-transfer)"
+                    "size mismatch: expected {expected} bytes, transferred {written} (the file changed or the connection dropped mid-transfer)"
                 ))
             }
         }
@@ -3999,6 +4095,11 @@ async fn finalize(mgr: &Arc<TransferManager>, id: &str, result: Result<u64>) {
             }
         }
     }
+    if !matches!(mgr.get(id).await.map(|t| t.status), Some(TransferStatus::Error)) {
+        // Only an Error row can be retried; everything else is finished for good.
+        mgr.retry.lock().await.remove(id);
+        mgr.pauses.lock().await.remove(id);
+    }
     mgr.tasks.lock().await.remove(id);
     mgr.drop_live(id);
 }
@@ -4006,6 +4107,20 @@ async fn finalize(mgr: &Arc<TransferManager>, id: &str, result: Result<u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_local_name_rejects_paths_from_the_server() {
+        for ok in ["a.txt", "notes&x", "..a", "a b"] {
+            assert!(is_plain_local_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "a/b", "/etc"] {
+            assert!(!is_plain_local_name(bad), "{bad}");
+        }
+        #[cfg(windows)]
+        for bad in [r"..\evil", r"a\b", "C:x", r"C:\x"] {
+            assert!(!is_plain_local_name(bad), "{bad}");
+        }
+    }
 
     // ---------- TokenBucket (Phase 4) ----------
 
@@ -4450,6 +4565,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            oauth_client_id: None,
         }
     }
 
@@ -4495,6 +4611,7 @@ mod tests {
             (
                 "object",
                 Session::Object(Arc::new(ObjectSession {
+                    namespace: Default::default(),
                     id: "t".into(),
                     profile: delta_gate_profile("s3"),
                     container: "b".into(),
@@ -4685,6 +4802,7 @@ mod tests {
     /// serves ranged GETs and honours `if_match` like a real store.
     fn memory_session(store: Arc<object_store::memory::InMemory>) -> Arc<Session> {
         Arc::new(Session::Object(Arc::new(crate::session::ObjectSession {
+            namespace: Default::default(),
             id: "mem".into(),
             profile: delta_gate_profile("s3"),
             container: "b".into(),

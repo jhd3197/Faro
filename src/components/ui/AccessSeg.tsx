@@ -49,11 +49,13 @@ export function AccessSeg({
             tabIndex={on || (value === null && i === 0) ? 0 : -1}
             onClick={() => !on && onChange(l.value)}
             onKeyDown={(e) => {
-              // Arrow keys move between levels, like a native radio group.
+              // Arrow keys move between levels. No wrap-around: one stray ←
+              // on Off must not jump straight to Auto.
               const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
               if (!d) return;
               e.preventDefault();
-              const next = LEVELS[(i + d + LEVELS.length) % LEVELS.length];
+              const next = LEVELS[i + d];
+              if (!next) return;
               onChange(next.value);
               const sib = (e.currentTarget.parentElement?.children[
                 LEVELS.indexOf(next)

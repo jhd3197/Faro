@@ -23,6 +23,19 @@ pub struct ObjectSession {
     /// Bucket (S3) or container (Azure). Surfaced for path-bar display.
     pub container: String,
     pub store: Arc<dyn ObjectStore>,
+    /// List/rename/delete client for S3 and Azure, built on first use and
+    /// reused so each folder click doesn't pay a fresh TCP + TLS handshake.
+    pub namespace: std::sync::OnceLock<super::object::namespace::Namespace>,
+}
+
+impl ObjectSession {
+    pub fn namespace(&self) -> Result<&super::object::namespace::Namespace> {
+        if let Some(n) = self.namespace.get() {
+            return Ok(n);
+        }
+        let n = super::object::namespace::Namespace::new(&self.profile)?;
+        Ok(self.namespace.get_or_init(|| n))
+    }
 }
 
 /// HTTP client options shared by every object-store backend (Plan 24).
@@ -97,6 +110,7 @@ async fn s3_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
         .with_context(|| format!("constructing S3 client for bucket {bucket}"))?;
 
     Ok(ObjectSession {
+        namespace: Default::default(),
         id: Uuid::new_v4().to_string(),
         profile: profile.clone(),
         container: bucket,
@@ -149,6 +163,7 @@ async fn azure_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
         .with_context(|| format!("constructing Azure client for {account}/{container}"))?;
 
     Ok(ObjectSession {
+        namespace: Default::default(),
         id: Uuid::new_v4().to_string(),
         profile: profile.clone(),
         container,
@@ -192,6 +207,7 @@ async fn gcs_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
         .with_context(|| format!("constructing GCS client for bucket {bucket}"))?;
 
     Ok(ObjectSession {
+        namespace: Default::default(),
         id: Uuid::new_v4().to_string(),
         profile: profile.clone(),
         container: bucket,

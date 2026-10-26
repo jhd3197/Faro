@@ -112,6 +112,7 @@ impl ProfilePreview {
             proxy: self.proxy,
             jump_profile: None,
             jump_via: None,
+            oauth_client_id: None,
         }
     }
 }

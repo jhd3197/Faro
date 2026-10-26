@@ -463,20 +463,25 @@ export const useTransfers = create<TransfersState>((set, get) => ({
     await ipc.transferSetThrottle(kbps);
   },
 
-  clearFinished: () =>
-    set((s) => {
-      const next: Record<string, Transfer> = {};
-      for (const t of Object.values(s.byId)) {
-        // Paused rows are still in flight — keep them like active ones.
-        if (
-          t.status === "transferring" ||
-          t.status === "queued" ||
-          t.status === "paused" || t.status === "error" ||
-          s.uploadReports.some((r) => r.transferIds.includes(t.id))
-        ) {
-          next[t.id] = t;
-        }
+  clearFinished: () => {
+    const s = get();
+    const next: Record<string, Transfer> = {};
+    const cleared: string[] = [];
+    for (const t of Object.values(s.byId)) {
+      // Paused rows are still in flight — keep them like active ones.
+      if (
+        t.status === "transferring" ||
+        t.status === "queued" ||
+        t.status === "paused" || t.status === "error" ||
+        s.uploadReports.some((r) => r.transferIds.includes(t.id))
+      ) {
+        next[t.id] = t;
+      } else {
+        cleared.push(t.id);
       }
-      return { byId: next };
-    }),
+    }
+    set({ byId: next });
+    // Free them in the backend too, so a reload doesn't bring them back.
+    if (cleared.length) void ipc.transferForgetFinished(cleared).catch(() => {});
+  },
 }));

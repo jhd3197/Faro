@@ -123,7 +123,7 @@ fn app_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// First `faro-cli` hit on PATH via `where` (Windows) / `which` (Unix), if any.
-fn which_faro_cli() -> Option<PathBuf> {
+pub(crate) fn which_faro_cli() -> Option<PathBuf> {
     let finder = if cfg!(windows) { "where" } else { "which" };
     let out = std::process::Command::new(finder)
         .arg("faro-cli")
@@ -231,9 +231,11 @@ mod platform {
         let env = open_env()?;
         let (current, vtype) = read_path(&env);
 
-        // Snapshot the true prior value ONCE, before we ever touch it, so a later
-        // remove can restore it faithfully.
-        db.env_backup_set_once(
+        // Snapshot the true prior value ONCE, before we ever touch it — the
+        // record to restore by hand if PATH ever needs recovering (`remove`
+        // edits the live value and never needs it). Best-effort: a DB hiccup
+        // must not block adding the CLI to PATH.
+        if let Err(e) = db.env_backup_set_once(
             WIN_PATH_BACKUP_KEY,
             if current.is_empty() {
                 None
@@ -241,8 +243,9 @@ mod platform {
                 Some(current.as_str())
             },
             vtype_u32(&vtype),
-        )
-        .map_err(|e| format!("back up prior PATH: {e}"))?;
+        ) {
+            tracing::warn!("could not back up the prior PATH: {e:#}");
+        }
 
         if !super::contains_dir(&current, &bin_str) {
             let next = super::add_dir(&current, &bin_str);

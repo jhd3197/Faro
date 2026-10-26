@@ -846,6 +846,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            oauth_client_id: None,
         };
 
         let pid = profile.id.clone();
@@ -1106,6 +1107,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            oauth_client_id: None,
         };
 
         let pid = profile.id.clone();

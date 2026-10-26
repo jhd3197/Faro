@@ -65,7 +65,7 @@ export const ACCESS_COLUMNS: {
   risky: boolean;
 }[] = [
   { key: "read", label: "Browse & read", short: "Read", help: "List directories, read files, search", risky: false },
-  { key: "write", label: "Transfer & write", short: "Write", help: "Uploads, downloads, deletes, renames, syncs", risky: false },
+  { key: "write", label: "Transfer & write", short: "Write", help: "Uploads, downloads, deletes, renames, syncs", risky: true },
   { key: "exec", label: "Run commands", short: "Commands", help: "Shell commands over SSH or a Faro Agent", risky: true },
   { key: "sudo", label: "Sudo", short: "Sudo", help: "Off: never answer sudo · Ask: sudo always prompts · Auto: follows Run commands", risky: true },
 ];

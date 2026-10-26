@@ -372,10 +372,8 @@ async fn fallback_walk(
 
 // ---------- Protocol fast paths ----------
 
-/// POSIX single-quote a path so `find` survives spaces / shell metacharacters.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a path so `find` survives spaces / shell metacharacters.
+use crate::scp::quote_path as sh_quote;
 
 /// `find <root> -type f -printf '%s\t%p\n'` — one line per regular file, its
 /// byte size and absolute path, tab-separated. Symlinks aren't `-type f`, so
@@ -672,18 +670,6 @@ pub async fn diskscan_start(
     let fs = crate::commands::fs_for_public(&session_id, &state).await?;
     let mgr = Arc::clone(&state.diskscan);
     Ok(mgr.start(session_id, path, session, fs, app).await)
-}
-
-#[tauri::command]
-pub async fn diskscan_status(
-    scan_id: String,
-    state: State<'_, AppState>,
-) -> Result<ScanSnapshot, String> {
-    state
-        .diskscan
-        .snapshot(&scan_id)
-        .await
-        .ok_or_else(|| format!("scan {scan_id} not found"))
 }
 
 /// Full snapshot including the aggregated `tree` (present once the scan is done).

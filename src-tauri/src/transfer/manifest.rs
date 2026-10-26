@@ -68,8 +68,10 @@ pub async fn inventory(root: &Path) -> Result<Manifest> {
     Ok(result)
 }
 
-/// Shared by the directory scheduler and integration tests. All directories
-/// are prepared, parent first, before a single file can enter the queue.
+/// Test convenience over `prepare_destination_checked` with no expected
+/// fingerprint. All directories are prepared, parent first, before a single
+/// file can enter the queue.
+#[cfg(test)]
 pub async fn prepare_destination(
     root: &Path, remote_root: &str, fs: &dyn crate::remotefs::RemoteFs,
 ) -> Result<Vec<(PathBuf, String)>> {

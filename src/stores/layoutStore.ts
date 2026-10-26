@@ -70,6 +70,11 @@ interface LayoutState {
 
   shortcutsOpen: boolean;
   setShortcutsOpen: (v: boolean) => void;
+
+  // Zen mode: only the file panes (plus any dock the user opens on purpose).
+  // Toggle through `lib/windowMode`, which also handles full screen.
+  zen: boolean;
+  setZen: (v: boolean) => void;
 }
 
 export const useLayout = create<LayoutState>((set) => ({
@@ -110,4 +115,7 @@ export const useLayout = create<LayoutState>((set) => ({
 
   shortcutsOpen: false,
   setShortcutsOpen: (v) => set({ shortcutsOpen: v }),
+
+  zen: false,
+  setZen: (v) => set({ zen: v }),
 }));

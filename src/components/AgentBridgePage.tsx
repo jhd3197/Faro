@@ -215,15 +215,20 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
               aria-checked={status.enabled}
               aria-label="Agent Bridge on"
               onClick={() => void setEnabled(!status.enabled)}
+              // Same look as the Settings toggles: a white knob reads on the
+              // amber track in both themes, where a background-coloured one
+              // vanished in dark mode.
               className={cn(
-                "relative h-5 w-9 rounded-full transition-colors",
-                status.enabled ? "bg-accent" : "bg-bg-hover"
+                "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
+                status.enabled
+                  ? "border-accent bg-accent"
+                  : "border-border bg-bg-subtle hover:border-text-dim"
               )}
             >
               <span
                 className={cn(
-                  "absolute top-0.5 h-4 w-4 rounded-full transition-[left]",
-                  status.enabled ? "left-[18px] bg-bg" : "left-0.5 bg-text-dim"
+                  "absolute left-px top-1/2 h-4 w-4 -translate-y-1/2 rounded-full bg-white shadow-elev-1 transition-transform",
+                  status.enabled ? "translate-x-4" : "translate-x-0"
                 )}
               />
             </button>

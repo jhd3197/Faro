@@ -17,6 +17,12 @@ export function getCurrentWindow() {
     async onResized() {
       return () => {};
     },
+    async isFullscreen() {
+      return !!(window as any).__fullscreen;
+    },
+    async setFullscreen(on: boolean) {
+      (window as any).__fullscreen = on;
+    },
     async minimize() {},
     async toggleMaximize() {},
     async close() {},

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import {
   ArrowUp,
   ArrowLeft,
@@ -76,6 +76,12 @@ function isWindowsPath(path: string): boolean {
   return /^[a-zA-Z]:/.test(path) || path.startsWith("\\\\");
 }
 
+// Path separators for `path`: on POSIX a backslash is an ordinary filename
+// character (`a\b.txt` is one name), so only Windows paths split on it.
+function pathSplitter(path: string): RegExp {
+  return isWindowsPath(path) ? /[/\\]/ : /\//;
+}
+
 // Build clickable breadcrumb segments for the address bar. Windows-style
 // paths keep drive/UNC prefix + backslashes, everything else is POSIX "/".
 // Relative POSIX paths (e.g. "." or "./public_html" — the SFTP default home
@@ -84,7 +90,7 @@ function isWindowsPath(path: string): boolean {
 function parseSegments(path: string): Segment[] {
   if (!path || path === ".") return [{ label: path || "/", path: path || "/" }];
   if (path === "/") return [{ label: "/", path: "/" }];
-  const parts = path.split(/[/\\]/).filter(Boolean);
+  const parts = path.split(pathSplitter(path)).filter(Boolean);
   const segs: Segment[] = [];
   if (isWindowsPath(path)) {
     // UNC: \\server\share is the smallest listable root, so it's one crumb.
@@ -499,7 +505,7 @@ export function FilePane({
     // home): going up must stay relative, and the relative root itself has
     // no parent to go to.
     const isRelative = !isWin && !path.startsWith("/");
-    const parts = path.split(/[/\\]/).filter(Boolean);
+    const parts = path.split(pathSplitter(path)).filter(Boolean);
     const rootParts = isUnc ? 2 : 1; // UNC root is \\server\share
     if (parts.length <= rootParts) {
       onPathChange(isWin || isRelative ? path : "/");
@@ -844,10 +850,9 @@ export function FilePane({
 
   const doRename = async (entry: DirEntry, newName: string) => {
     if (!sessionId) return;
-    const parentEnd = Math.max(
-      entry.path.lastIndexOf("/"),
-      entry.path.lastIndexOf("\\")
-    );
+    const parentEnd = isWindowsPath(entry.path)
+      ? Math.max(entry.path.lastIndexOf("/"), entry.path.lastIndexOf("\\"))
+      : entry.path.lastIndexOf("/");
     const parent = entry.path.slice(0, parentEnd);
     const to = joinPath(parent, newName);
     try {
@@ -944,6 +949,9 @@ export function FilePane({
     setDraftPath(path);
     setEditingPath(false);
   };
+
+  const rowHandlers = useRef({ onRowClick, onRowActivate, onRowDragStart, openRowMenu });
+  rowHandlers.current = { onRowClick, onRowActivate, onRowDragStart, openRowMenu };
 
   return (
     <div
@@ -1349,10 +1357,7 @@ export function FilePane({
                 showPermsCol={showPermsCol}
                 sessionId={sessionId}
                 loadThumb={loadThumb}
-                onClick={(e) => onRowClick(entry, e)}
-                onActivate={() => onRowActivate(entry)}
-                onDragStart={(e) => onRowDragStart(e, entry)}
-                onContextMenu={(e) => openRowMenu(e, entry)}
+                handlers={rowHandlers}
               />
             ))}
           </div>
@@ -1372,10 +1377,7 @@ export function FilePane({
               showPermsCol={showPermsCol}
               sessionId={sessionId}
               loadThumb={loadThumb}
-              onClick={(e) => onRowClick(entry, e)}
-              onActivate={() => onRowActivate(entry)}
-              onDragStart={(e) => onRowDragStart(e, entry)}
-              onContextMenu={(e) => openRowMenu(e, entry)}
+              handlers={rowHandlers}
             />
           ))
         )}
@@ -1483,7 +1485,17 @@ export function FilePane({
   );
 }
 
-function Row({
+/// Per-row callbacks, read through a ref that stays the same object for the
+/// pane's lifetime, so a memoized row only re-renders when its own props
+/// change — not on every click elsewhere in a 10k-entry folder.
+type RowHandlers = React.MutableRefObject<{
+  onRowClick: (entry: DirEntry, e: React.MouseEvent) => void;
+  onRowActivate: (entry: DirEntry) => void;
+  onRowDragStart: (e: React.DragEvent, entry: DirEntry) => void;
+  openRowMenu: (e: React.MouseEvent, entry: DirEntry) => void;
+}>;
+
+const Row = memo(function Row({
   paneId,
   entry,
   icon,
@@ -1496,10 +1508,7 @@ function Row({
   showPermsCol,
   sessionId,
   loadThumb,
-  onClick,
-  onActivate,
-  onDragStart,
-  onContextMenu,
+  handlers,
 }: {
   paneId: string;
   entry: DirEntry;
@@ -1517,11 +1526,12 @@ function Row({
     entry: DirEntry,
     signal?: AbortSignal
   ) => Promise<Blob | null>;
-  onClick: (e: React.MouseEvent) => void;
-  onActivate: () => void;
-  onDragStart: (e: React.DragEvent) => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  handlers: RowHandlers;
 }) {
+  const onClick = (e: React.MouseEvent) => handlers.current.onRowClick(entry, e);
+  const onActivate = () => handlers.current.onRowActivate(entry);
+  const onDragStart = (e: React.DragEvent) => handlers.current.onRowDragStart(e, entry);
+  const onContextMenu = (e: React.MouseEvent) => handlers.current.openRowMenu(e, entry);
   const { Icon, className: iconColor } = icon;
   const pad = density === "compact" ? "py-0.5 text-xs" : "py-1 text-sm";
   const sel = selected
@@ -1683,7 +1693,7 @@ function Row({
       )}
     </div>
   );
-}
+});
 
 function SortHeader({
   label,

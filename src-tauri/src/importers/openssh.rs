@@ -263,6 +263,12 @@ fn split_kv(line: &str) -> Option<(&str, &str)> {
         .position(|&b| b == b' ' || b == b'\t' || b == b'=')?;
     let key = &line[..key_end];
     let rest = line[key_end..].trim_start_matches(|c: char| c.is_whitespace() || c == '=');
+    // `IdentityFile "~/.ssh/my key"`: the quotes aren't part of the value.
+    let rest = rest
+        .trim_end()
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(rest);
     Some((key, rest))
 }
 
@@ -278,12 +284,7 @@ fn is_pattern(host: &str) -> bool {
 }
 
 fn expand_tilde(value: &str) -> String {
-    if let Some(stripped) = value.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped).to_string_lossy().into_owned();
-        }
-    }
-    value.to_string()
+    crate::keys::expand_tilde(value).to_string_lossy().into_owned()
 }
 
 struct HostBlock {
@@ -332,6 +333,16 @@ mod tests {
 
     fn by_name<'a>(ps: &'a [ProfilePreview], name: &str) -> &'a ProfilePreview {
         ps.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    #[test]
+    fn quoted_identity_file_drops_the_quotes() {
+        let cfg = "Host web
+  HostName web.example
+  IdentityFile \"/keys/my key\"
+";
+        let ps = parse(cfg, "test".into());
+        assert_eq!(by_name(&ps, "web").identity_file.as_deref(), Some("/keys/my key"));
     }
 
     #[test]

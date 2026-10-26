@@ -33,7 +33,8 @@ const SETS = {
 // protocolIcon() in src/lib/brandIcons.ts maps a Protocol onto one of these.
 const CURATED = [
   // Protocol glyphs
-  "mdi:ssh", // sftp / ssh
+  "mdi:ssh", // sftp / ssh (icon picker)
+  "mdi:console", // sftp / ssh protocol mark: reads at chip size, unlike the SSH lettering
   "mdi:folder-network-outline", // ftp
   "mdi:folder-network", // ftps
   "mdi:web", // webdav

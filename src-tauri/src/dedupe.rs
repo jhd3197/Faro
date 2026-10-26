@@ -619,18 +619,6 @@ pub async fn dedupe_start(
     Ok(mgr.start(session_id, path, mode, fs, sess, app).await)
 }
 
-#[tauri::command]
-pub async fn dedupe_status(
-    dedupe_id: String,
-    state: State<'_, AppState>,
-) -> Result<DedupeSnapshot, String> {
-    state
-        .dedupe
-        .snapshot(&dedupe_id)
-        .await
-        .ok_or_else(|| format!("dedupe {dedupe_id} not found"))
-}
-
 /// Full snapshot including the `result` (present once the scan is done).
 #[tauri::command]
 pub async fn dedupe_result(

@@ -13,13 +13,14 @@ pub mod bridge;
 pub mod commands;
 mod agent_host;
 mod app_updater;
-mod cli_updater;
+pub mod cli_updater;
 pub mod credentials;
 pub mod db;
 mod deeplink;
 pub mod dedupe;
 pub mod diff;
 pub mod error;
+pub mod fsutil;
 mod diskscan;
 mod editor;
 mod foldersync;
@@ -240,13 +241,8 @@ pub fn run() {
                         // OAuth tokens aren't in the manifest: one entry per
                         // cloud profile under its provider's service.
                         for p in profiles.list().await.unwrap_or_default() {
-                            let service = match p.protocol.as_str() {
-                                "dropbox" => session::dropbox::DROPBOX_SERVICE,
-                                "onedrive" => session::onedrive::ONEDRIVE_SERVICE,
-                                "gdrive" => session::gdrive::GDRIVE_SERVICE,
-                                "box" => session::boxdrive::BOX_SERVICE,
-                                "dynamics" => session::dynamics::DYNAMICS_TOKEN_SERVICE,
-                                _ => continue,
+                            let Some(service) = session::oauth_token_service(&p.protocol) else {
+                                continue;
                             };
                             entries.push((service.to_string(), p.id.clone()));
                         }
@@ -450,6 +446,7 @@ pub fn run() {
             commands::agent_public_key,
             commands::pair_agent,
             commands::dropbox_authorize,
+            commands::oauth_builtin_apps,
             commands::onedrive_authorize,
             commands::gdrive_authorize,
             commands::box_authorize,
@@ -477,23 +474,19 @@ pub fn run() {
             virtualfs::virtualfs_status,
             virtualfs::virtualfs_free_up_space,
             diskscan::diskscan_start,
-            diskscan::diskscan_status,
             diskscan::diskscan_tree,
             diskscan::diskscan_cancel,
             diskscan::diskscan_forget,
             diff::diff_start,
-            diff::diff_status,
             diff::diff_result,
             diff::diff_cancel,
             diff::diff_forget,
             dedupe::dedupe_start,
-            dedupe::dedupe_status,
             dedupe::dedupe_result,
             dedupe::dedupe_cancel,
             dedupe::dedupe_forget,
             dedupe::dedupe_delete,
             search::search_start,
-            search::search_status,
             search::search_result,
             search::search_cancel,
             search::search_forget,
@@ -532,6 +525,7 @@ pub fn run() {
             commands::verify_upload_directories,
             commands::cancel_transfer,
             commands::list_transfers,
+            commands::transfer_forget_finished,
             commands::transfer_move,
             commands::transfer_pause,
             commands::transfer_resume,

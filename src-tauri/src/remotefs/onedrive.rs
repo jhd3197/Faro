@@ -327,6 +327,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            oauth_client_id: None,
         };
         let session = Arc::new(onedrive_connect(&profile).await.expect("connect"));
 

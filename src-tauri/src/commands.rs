@@ -101,6 +101,11 @@ pub async fn delete_profile(
             }
             _ => {}
         }
+        if matches!(p.protocol.as_str(), "dropbox" | "onedrive" | "gdrive" | "box") {
+            let purpose = crate::oauth::app_secret_purpose(&id);
+            crate::credentials::delete_secret(&purpose);
+            let _ = state.db.forget_keychain(crate::credentials::SERVICE, &purpose);
+        }
         // Grant-imported profiles hold their private key in the OS keychain
         // under `grant-key:<profile-id>` — remove it with the profile.
         if let AuthMethod::KeyRef { key_ref } = &p.auth {
@@ -300,6 +305,66 @@ pub async fn pair_agent(
 
 // ---------- Dropbox (OAuth cloud) ----------
 
+/// Apply the user's own OAuth app (if the editor sent one) to a provider
+/// config. A secret typed for this attempt wins over the one already stored.
+/// Returns the trimmed custom id so the probe connects through the same app.
+fn custom_oauth_app(
+    base: crate::oauth::OAuthConfig,
+    profile_id: &str,
+    client_id: Option<String>,
+    client_secret: &Option<String>,
+) -> (crate::oauth::OAuthConfig, Option<String>) {
+    let client_id = client_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
+    let mut config = crate::oauth::with_profile_app(base, profile_id, client_id.as_deref());
+    if let Some(secret) = client_secret.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if client_id.is_some() {
+            config.client_secret = Some(secret.to_string());
+        }
+    }
+    (config, client_id)
+}
+
+/// Keep a typed app secret once authorization worked, and drop a stored one
+/// when the profile went back to the built-in app.
+fn store_oauth_app_secret(
+    state: &AppState,
+    profile_id: &str,
+    custom_app: bool,
+    client_secret: Option<String>,
+) -> Result<(), String> {
+    let purpose = crate::oauth::app_secret_purpose(profile_id);
+    if !custom_app {
+        crate::credentials::delete_secret(&purpose);
+        let _ = state.db.forget_keychain(crate::credentials::SERVICE, &purpose);
+        return Ok(());
+    }
+    if let Some(secret) = client_secret.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        crate::credentials::set_secret(&purpose, &secret).map_err(err)?;
+        state
+            .db
+            .record_keychain(crate::credentials::SERVICE, &purpose)
+            .map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Which cloud drives have an OAuth app built into this release. The editor
+/// asks the user for their own app's Client ID for the rest.
+#[tauri::command]
+pub async fn oauth_builtin_apps() -> Result<std::collections::HashMap<String, bool>, String> {
+    Ok([
+        ("dropbox", crate::session::dropbox::dropbox_config().client_id),
+        ("onedrive", crate::session::onedrive::onedrive_config().client_id),
+        ("gdrive", crate::session::gdrive::gdrive_config().client_id),
+        ("box", crate::session::boxdrive::box_config().client_id),
+    ]
+    .into_iter()
+    .map(|(protocol, id)| (protocol.to_string(), !id.is_empty()))
+    .collect())
+}
+
 /// Result of a Dropbox authorization, shown to the user to confirm the account.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -312,9 +377,15 @@ pub struct DropboxAuthResult {
 /// and return the account label. Mirrors agent pairing: the editor persists the
 /// profile once this succeeds, so a cancelled flow leaves no saved connection.
 #[tauri::command]
-pub async fn dropbox_authorize(profile_id: String) -> Result<DropboxAuthResult, String> {
-    let config = crate::session::dropbox::dropbox_config();
+pub async fn dropbox_authorize(
+    profile_id: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<DropboxAuthResult, String> {
+    let (config, client_id) = custom_oauth_app(crate::session::dropbox::dropbox_config(), &profile_id, client_id, &client_secret);
     let (tokens, _raw) = crate::oauth::authorize_loopback(&config).await.map_err(err)?;
+    store_oauth_app_secret(&state, &profile_id, client_id.is_some(), client_secret)?;
     crate::oauth::store_tokens(
         crate::session::dropbox::DROPBOX_SERVICE,
         &profile_id,
@@ -352,6 +423,7 @@ pub async fn dropbox_authorize(profile_id: String) -> Result<DropboxAuthResult, 
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        oauth_client_id: client_id,
     };
     let account_label = match crate::session::dropbox_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -363,9 +435,15 @@ pub async fn dropbox_authorize(profile_id: String) -> Result<DropboxAuthResult, 
 /// Run the interactive OneDrive OAuth flow, store tokens in the keychain keyed by
 /// `profile_id`, and return the account label. Same shape as `dropbox_authorize`.
 #[tauri::command]
-pub async fn onedrive_authorize(profile_id: String) -> Result<DropboxAuthResult, String> {
-    let config = crate::session::onedrive::onedrive_config();
+pub async fn onedrive_authorize(
+    profile_id: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<DropboxAuthResult, String> {
+    let (config, client_id) = custom_oauth_app(crate::session::onedrive::onedrive_config(), &profile_id, client_id, &client_secret);
     let (tokens, _raw) = crate::oauth::authorize_loopback(&config).await.map_err(err)?;
+    store_oauth_app_secret(&state, &profile_id, client_id.is_some(), client_secret)?;
     crate::oauth::store_tokens(
         crate::session::onedrive::ONEDRIVE_SERVICE,
         &profile_id,
@@ -402,6 +480,7 @@ pub async fn onedrive_authorize(profile_id: String) -> Result<DropboxAuthResult,
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        oauth_client_id: client_id,
     };
     let account_label = match crate::session::onedrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -463,6 +542,7 @@ pub async fn dynamics_authorize(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        oauth_client_id: None,
     };
     let account_label = match crate::session::dynamics_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -473,9 +553,15 @@ pub async fn dynamics_authorize(
 
 /// Run the interactive Google Drive OAuth flow, store tokens, return the label.
 #[tauri::command]
-pub async fn gdrive_authorize(profile_id: String) -> Result<DropboxAuthResult, String> {
-    let config = crate::session::gdrive::gdrive_config();
+pub async fn gdrive_authorize(
+    profile_id: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<DropboxAuthResult, String> {
+    let (config, client_id) = custom_oauth_app(crate::session::gdrive::gdrive_config(), &profile_id, client_id, &client_secret);
     let (tokens, _raw) = crate::oauth::authorize_loopback(&config).await.map_err(err)?;
+    store_oauth_app_secret(&state, &profile_id, client_id.is_some(), client_secret)?;
     crate::oauth::store_tokens(crate::session::gdrive::GDRIVE_SERVICE, &profile_id, &tokens)
         .map_err(err)?;
 
@@ -508,6 +594,7 @@ pub async fn gdrive_authorize(profile_id: String) -> Result<DropboxAuthResult, S
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        oauth_client_id: client_id,
     };
     let account_label = match crate::session::gdrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -518,9 +605,15 @@ pub async fn gdrive_authorize(profile_id: String) -> Result<DropboxAuthResult, S
 
 /// Run the interactive Box OAuth flow, store tokens, return the label.
 #[tauri::command]
-pub async fn box_authorize(profile_id: String) -> Result<DropboxAuthResult, String> {
-    let config = crate::session::boxdrive::box_config();
+pub async fn box_authorize(
+    profile_id: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<DropboxAuthResult, String> {
+    let (config, client_id) = custom_oauth_app(crate::session::boxdrive::box_config(), &profile_id, client_id, &client_secret);
     let (tokens, _raw) = crate::oauth::authorize_loopback(&config).await.map_err(err)?;
+    store_oauth_app_secret(&state, &profile_id, client_id.is_some(), client_secret)?;
     crate::oauth::store_tokens(crate::session::boxdrive::BOX_SERVICE, &profile_id, &tokens)
         .map_err(err)?;
 
@@ -553,6 +646,7 @@ pub async fn box_authorize(profile_id: String) -> Result<DropboxAuthResult, Stri
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        oauth_client_id: client_id,
     };
     let account_label = match crate::session::box_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -1056,6 +1150,15 @@ pub async fn list_transfers(
 }
 
 #[tauri::command]
+pub async fn transfer_forget_finished(
+    transfer_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.transfers.forget_finished(&transfer_ids).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn start_directory_download(
     session_id: String,
     remote_dir: String,
@@ -1181,8 +1284,8 @@ pub async fn fs_for_public(
     fs_for(session_id, state).await
 }
 
-pub fn fs_for_session(session: &Arc<Session>) -> Box<dyn RemoteFs> {
-    match &**session {
+pub fn fs_for_session(session: &Session) -> Box<dyn RemoteFs> {
+    match session {
         Session::Ssh(ssh) => Box::new(crate::remotefs::sftp::SftpFs::new(ssh.clone())),
         Session::Ftp(ftp) => Box::new(crate::remotefs::ftp::FtpFs::new(ftp.clone())),
         Session::Object(obj) => {
@@ -1247,11 +1350,9 @@ pub async fn chmod_path(
 
 // ---------- Duplicate ----------
 
-/// POSIX single-quote a string so it survives spaces / shell metacharacters when
-/// interpolated into a remote command. `'` is closed, escaped, and reopened.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a string so it survives spaces / shell metacharacters when
+// interpolated into a remote command. `'` is closed, escaped, and reopened.
+use crate::scp::quote_path as sh_quote;
 
 /// Split a POSIX path into (parent, last-component). "/foo" → ("", "foo"),
 /// "/a/b" → ("/a", "b"), "rel" → (".", "rel").

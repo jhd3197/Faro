@@ -35,15 +35,21 @@ export function AuthPromptModal() {
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
-    onAuthPrompt((e) => setQueue((q) => [...q, e])).then((u) => unsubs.push(u));
+    let cancelled = false;
+    // A listener resolving after unmount is dropped at once, not kept twice.
+    const keep = (u: () => void) => (cancelled ? u() : unsubs.push(u));
+    onAuthPrompt((e) => setQueue((q) => [...q, e])).then(keep);
     onAuthChanged((e) => {
       const pw = captured.current.get(e.profileId);
       if (pw) {
         captured.current.delete(e.profileId);
         setSavePrompt({ profileId: e.profileId, password: pw });
       }
-    }).then((u) => unsubs.push(u));
-    return () => unsubs.forEach((u) => u());
+    }).then(keep);
+    return () => {
+      cancelled = true;
+      unsubs.forEach((u) => u());
+    };
   }, []);
 
   const current = queue[0];

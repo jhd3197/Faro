@@ -100,9 +100,11 @@ export function AgentBridgeHost() {
   const approvals = useBridge((s) => s.approvals);
   const respond = useBridge((s) => s.respond);
   // Where the queue is already on screen inline (agent panel, Agent Bridge
-  // page), the blocking modal would only duplicate it.
+  // page), the blocking modal would only duplicate it. The drawer only counts
+  // while no dialog covers it — under Settings the card is out of sight and
+  // the request would quietly time out.
   const shownInline = useLayout(
-    (s) => s.agentDrawerOpen || s.dialog === "agentBridge"
+    (s) => s.dialog === "agentBridge" || (s.agentDrawerOpen && s.dialog === null)
   );
 
   useEffect(() => {

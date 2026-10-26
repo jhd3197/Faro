@@ -10,7 +10,7 @@ const FOCUSABLE = [
 ].join(",");
 
 interface Options {
-  /** Called on Escape. */
+  /** Called on Escape. For a security prompt, wire this to the *safe* action. */
   onClose?: () => void;
   /** Element to focus on open. Defaults to the first focusable, else the panel. */
   initialFocus?: RefObject<HTMLElement | null>;

@@ -79,6 +79,18 @@ import type {
 // Typed wrappers around the Tauri command surface. The string names must match
 // the #[tauri::command] handlers registered in src-tauri/src/commands.rs.
 
+/** The user's own OAuth app for a cloud drive. The secret goes straight to the
+ *  keychain on a successful authorization and is never read back. */
+export interface OAuthApp {
+  clientId?: string;
+  clientSecret?: string;
+}
+
+const oauthAppArgs = (app?: OAuthApp) => ({
+  clientId: app?.clientId?.trim() || null,
+  clientSecret: app?.clientSecret?.trim() || null,
+});
+
 export const ipc = {
   listProfiles: () => invoke<ConnectionProfile[]>("list_profiles"),
 
@@ -133,20 +145,24 @@ export const ipc = {
   /** Run the interactive Dropbox OAuth flow for a profile (opens the browser,
    *  catches the loopback redirect, stores tokens in the OS keychain). Resolves
    *  with the authorized account label. The editor saves the profile on success. */
-  dropboxAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("dropbox_authorize", { profileId }),
+  dropboxAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("dropbox_authorize", { profileId, ...oauthAppArgs(app) }),
 
   /** Run the interactive OneDrive OAuth flow for a profile (Microsoft Graph). */
-  onedriveAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("onedrive_authorize", { profileId }),
+  onedriveAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("onedrive_authorize", { profileId, ...oauthAppArgs(app) }),
 
   /** Run the interactive Google Drive OAuth flow for a profile. */
-  gdriveAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("gdrive_authorize", { profileId }),
+  gdriveAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("gdrive_authorize", { profileId, ...oauthAppArgs(app) }),
 
   /** Run the interactive Box OAuth flow for a profile. */
-  boxAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("box_authorize", { profileId }),
+  boxAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("box_authorize", { profileId, ...oauthAppArgs(app) }),
+
+  /** Which cloud drives have an OAuth app built into this release
+   *  (`protocol -> true`). The rest need the user's own app's Client ID. */
+  oauthBuiltinApps: () => invoke<Record<string, boolean>>("oauth_builtin_apps"),
 
   /** Run the interactive Dynamics 365 (delegated) OAuth flow for a profile —
    *  the OneDrive pattern with the org's `user_impersonation` scope. `host` is
@@ -288,6 +304,9 @@ export const ipc = {
     invoke<void>("cancel_transfer", { transferId }),
 
   listTransfers: () => invoke<Transfer[]>("list_transfers"),
+
+  transferForgetFinished: (transferIds: string[]) =>
+    invoke<void>("transfer_forget_finished", { transferIds }),
 
   transferPause: (transferId: string) =>
     invoke<void>("transfer_pause", { transferId }),
@@ -552,9 +571,6 @@ export const ipc = {
   /** Kick off a recursive size scan of `path` on a session; returns a scan id. */
   diskScanStart: (sessionId: SessionId, path: string) =>
     invoke<string>("diskscan_start", { sessionId, path }),
-  /** Lightweight status (live counts while scanning). */
-  diskScanStatus: (scanId: string) =>
-    invoke<ScanSnapshot>("diskscan_status", { scanId }),
   /** Full snapshot including the aggregated tree (present once done). */
   diskScanTree: (scanId: string) =>
     invoke<ScanSnapshot>("diskscan_tree", { scanId }),
@@ -574,9 +590,6 @@ export const ipc = {
     hash: boolean
   ) =>
     invoke<string>("diff_start", { sessionA, pathA, sessionB, pathB, hash }),
-  /** Lightweight status (live counts while comparing). */
-  diffStatus: (diffId: string) =>
-    invoke<DiffSnapshot>("diff_status", { diffId }),
   /** Full snapshot including the result (present once done). */
   diffResult: (diffId: string) =>
     invoke<DiffSnapshot>("diff_result", { diffId }),
@@ -588,9 +601,6 @@ export const ipc = {
    *  returns a dedupe id. `hash` groups by content instead of name+size. */
   dedupeStart: (sessionId: SessionId, path: string, hash: boolean) =>
     invoke<string>("dedupe_start", { sessionId, path, hash }),
-  /** Lightweight status (live counts while scanning). */
-  dedupeStatus: (dedupeId: string) =>
-    invoke<DedupeSnapshot>("dedupe_status", { dedupeId }),
   /** Full snapshot including the result (present once done). */
   dedupeResult: (dedupeId: string) =>
     invoke<DedupeSnapshot>("dedupe_result", { dedupeId }),
@@ -607,9 +617,6 @@ export const ipc = {
   /** Start a fleet search under `path` on a session; returns a search id. */
   searchStart: (sessionId: SessionId, path: string, query: SearchQuery) =>
     invoke<string>("search_start", { sessionId, path, query }),
-  /** Lightweight status (live counts while searching). */
-  searchStatus: (searchId: string) =>
-    invoke<SearchSnapshot>("search_status", { searchId }),
   /** Full snapshot including the hit list (present once done). */
   searchResult: (searchId: string) =>
     invoke<SearchSnapshot>("search_result", { searchId }),

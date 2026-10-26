@@ -116,6 +116,9 @@ export interface ConnectionProfile {
   // Id of another SFTP profile to connect through (ProxyJump), with its own
   // login. Distinct from the grant-only inline jumpHost above.
   jumpProfile?: string;
+  /** Cloud drives: client id of the user's own registered OAuth app. Absent =
+   *  the app built into this release, when there is one. */
+  oauthClientId?: string;
 }
 
 export type ProxyKind = "socks5" | "http";

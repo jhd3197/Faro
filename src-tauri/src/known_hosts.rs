@@ -32,10 +32,18 @@ pub fn check(host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
     let Ok(contents) = std::fs::read_to_string(&path) else {
         return HostKeyStatus::Unknown;
     };
+    check_contents(&contents, host, port, &key.public_key_base64())
+}
 
-    let key_b64 = key.public_key_base64();
+fn check_contents(contents: &str, host: &str, port: u16, key_b64: &str) -> HostKeyStatus {
     let needles = host_needles(host, port);
+    let names_host = |field: &str| {
+        field
+            .split(',')
+            .any(|h| needles.iter().any(|n| n.eq_ignore_ascii_case(h)))
+    };
 
+    let mut matched = false;
     let mut stored_fp: Option<String> = None;
     for line in contents.lines() {
         let line = line.trim();
@@ -43,31 +51,43 @@ pub fn check(host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
             continue;
         }
         let mut parts = line.split_whitespace();
-        let Some(hosts_field) = parts.next() else { continue };
-        let Some(_keytype) = parts.next() else { continue };
-        let Some(stored_b64) = parts.next() else { continue };
+        let Some(mut hosts_field) = parts.next() else { continue };
+        // `@revoked` names a key that must never be accepted for these hosts.
+        // `@cert-authority` (CA-signed host certs) isn't supported, so those
+        // lines neither match nor conflict.
+        let revoked = hosts_field == "@revoked";
+        if hosts_field.starts_with('@') {
+            if !revoked {
+                continue;
+            }
+            let Some(next) = parts.next() else { continue };
+            hosts_field = next;
+        }
+        let (Some(_keytype), Some(stored_b64)) = (parts.next(), parts.next()) else {
+            continue;
+        };
 
-        if hosts_field.starts_with("|1|") {
-            // Hashed host entry — out of scope for v0.3.
+        if hosts_field.starts_with("|1|") || !names_host(hosts_field) {
+            // Hashed host entries are out of scope for v0.3.
             continue;
         }
-
-        let hits = hosts_field
-            .split(',')
-            .any(|h| needles.iter().any(|n| n == h));
-        if !hits {
-            continue;
+        if revoked {
+            if stored_b64 == key_b64 {
+                return HostKeyStatus::Mismatch {
+                    stored_fingerprint: format!("{} (revoked)", fingerprint_b64(stored_b64)),
+                };
+            }
+        } else if stored_b64 == key_b64 {
+            matched = true;
+        } else if stored_fp.is_none() {
+            stored_fp = Some(fingerprint_b64(stored_b64));
         }
-
-        if stored_b64 == key_b64 {
-            return HostKeyStatus::Match;
-        }
-        stored_fp = Some(fingerprint_b64(stored_b64));
     }
 
-    match stored_fp {
-        Some(fp) => HostKeyStatus::Mismatch { stored_fingerprint: fp },
-        None => HostKeyStatus::Unknown,
+    match (matched, stored_fp) {
+        (true, _) => HostKeyStatus::Match,
+        (false, Some(fp)) => HostKeyStatus::Mismatch { stored_fingerprint: fp },
+        (false, None) => HostKeyStatus::Unknown,
     }
 }
 
@@ -91,7 +111,7 @@ pub fn append(host: &str, port: u16, key: &PublicKey) -> Result<()> {
     };
     let line = format!(
         "{host_field} {} {}\n",
-        key.name(),
+        crate::keys::type_token(key),
         key.public_key_base64()
     );
 
@@ -134,10 +154,54 @@ fn base64_no_pad(bytes: &[u8]) -> String {
     b64
 }
 
+/// The host-field spellings that mean `host:port`, as OpenSSH reads them: a
+/// bare `host` is port 22 only; any other port is `[host]:port`.
 fn host_needles(host: &str, port: u16) -> Vec<String> {
-    let mut v = vec![host.to_string()];
-    if port != 22 {
-        v.push(format!("[{host}]:{port}"));
+    if port == 22 {
+        vec![host.to_string(), format!("[{host}]:22")]
+    } else {
+        vec![format!("[{host}]:{port}")]
     }
-    v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const A: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIA";
+    const B: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIB";
+
+    #[test]
+    fn port_22_entry_does_not_match_other_ports() {
+        let kh = format!("example.com ssh-ed25519 {A}\n");
+        assert_eq!(check_contents(&kh, "example.com", 22, A), HostKeyStatus::Match);
+        assert_eq!(check_contents(&kh, "example.com", 2222, B), HostKeyStatus::Unknown);
+        let kh = format!("[example.com]:2222 ssh-ed25519 {A}\n");
+        assert_eq!(check_contents(&kh, "example.com", 2222, A), HostKeyStatus::Match);
+        assert_eq!(check_contents(&kh, "example.com", 22, A), HostKeyStatus::Unknown);
+    }
+
+    #[test]
+    fn host_match_ignores_case() {
+        let kh = format!("server.lan ssh-ed25519 {A}\n");
+        assert_eq!(check_contents(&kh, "Server.LAN", 22, A), HostKeyStatus::Match);
+        assert!(matches!(
+            check_contents(&kh, "SERVER.lan", 22, B),
+            HostKeyStatus::Mismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn revoked_key_is_never_accepted() {
+        let kh = format!("server.lan ssh-ed25519 {A}\n@revoked server.lan ssh-ed25519 {A}\n");
+        assert!(matches!(
+            check_contents(&kh, "server.lan", 22, A),
+            HostKeyStatus::Mismatch { .. }
+        ));
+        // A revoked line for another key doesn't block a good one.
+        let kh = format!("@revoked server.lan ssh-ed25519 {B}\nserver.lan ssh-ed25519 {A}\n");
+        assert_eq!(check_contents(&kh, "server.lan", 22, A), HostKeyStatus::Match);
+        let kh = format!("@cert-authority *.lan ssh-ed25519 {A}\n");
+        assert_eq!(check_contents(&kh, "server.lan", 22, A), HostKeyStatus::Unknown);
+    }
 }

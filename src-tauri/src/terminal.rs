@@ -67,6 +67,7 @@ impl PtyManager {
 
         tokio::spawn(async move {
             let mut channel = channel;
+            let (mut out_text, mut err_text) = (Utf8Carry::default(), Utf8Carry::default());
             loop {
                 tokio::select! {
                     biased;
@@ -91,7 +92,7 @@ impl PtyManager {
                         let Some(msg) = msg else { break };
                         match msg {
                             ChannelMsg::Data { ref data } => {
-                                let s = String::from_utf8_lossy(data).to_string();
+                                let s = out_text.push(data);
                                 let _ = app_for_task.emit(
                                     "terminal://data",
                                     TerminalDataEvent {
@@ -101,7 +102,7 @@ impl PtyManager {
                                 );
                             }
                             ChannelMsg::ExtendedData { ref data, .. } => {
-                                let s = String::from_utf8_lossy(data).to_string();
+                                let s = err_text.push(data);
                                 let _ = app_for_task.emit(
                                     "terminal://data",
                                     TerminalDataEvent {
@@ -167,5 +168,62 @@ impl PtyManager {
             let _ = h.tx.send(PtyCommand::Close).await;
         }
         Ok(())
+    }
+}
+
+/// Decodes a byte stream to text chunk by chunk, holding back a multi-byte
+/// character split across two SSH packets (htop's box drawing, CJK, "ñ")
+/// instead of turning each half into U+FFFD.
+#[derive(Default)]
+struct Utf8Carry {
+    pending: Vec<u8>,
+}
+
+impl Utf8Carry {
+    fn push(&mut self, data: &[u8]) -> String {
+        self.pending.extend_from_slice(data);
+        let mut out = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(s) => {
+                    out.push_str(s);
+                    self.pending.clear();
+                    return out;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    out.push_str(std::str::from_utf8(&self.pending[..valid]).unwrap_or_default());
+                    match e.error_len() {
+                        // An incomplete character at the end: keep it for the next chunk.
+                        None => {
+                            self.pending.drain(..valid);
+                            return out;
+                        }
+                        Some(bad) => {
+                            out.push('\u{FFFD}');
+                            self.pending.drain(..valid + bad);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Utf8Carry;
+
+    #[test]
+    fn split_characters_survive_packet_boundaries() {
+        let text = "a─b你ñ";
+        let bytes = text.as_bytes();
+        for cut in 0..=bytes.len() {
+            let mut c = Utf8Carry::default();
+            let joined = c.push(&bytes[..cut]) + &c.push(&bytes[cut..]);
+            assert_eq!(joined, text, "cut at {cut}");
+        }
+        let mut c = Utf8Carry::default();
+        assert_eq!(c.push(b"x\xffy"), "x\u{FFFD}y", "invalid bytes still replaced");
     }
 }
