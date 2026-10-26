@@ -184,6 +184,7 @@ async function main() {
     await D(() => window.__demo.useLayout.getState().closeDialog());
     await sleep(300);
     // ---- 6. Files: details view by default + text preview of a selection ----
+    await D(() => window.__demo.useBridge.getState().respond("r1", "deny"));
     await D(() => window.__demo.useLayout.getState().setAgentDrawerOpen(false));
     await sleep(300);
     const det = await D(() => window.__demo.useSettings.getState().paneViewMode);
@@ -204,7 +205,21 @@ async function main() {
     check("preview shows the file's lines", prev.text.includes("step 1 ok"), prev.text.slice(0, 80));
     await shot("6-file-preview");
 
-    // %%MORE%%
+    // ---- 7. Disk Usage opens inside the work area, folder-coloured ----
+    await D(() => {
+      const sid = window.__demo.useConnections.getState().activeSessionId;
+      return window.__demo.useDiskScan.getState().openFor(sid, "/var/www/api");
+    });
+    await sleep(1200);
+    const du = await D(() => ({
+      text: document.body.innerText,
+      rail: !!document.querySelector('[data-rail-scroll]'),
+      mode: window.__demo.useDiskScan.getState().colorMode,
+    }));
+    check("disk usage shows the space summary", du.text.includes("What's using the space"));
+    check("disk usage colours by folder by default", du.mode === "folder", du.mode);
+    check("rail stays visible beside disk usage", du.rail);
+    await shot("7-disk-usage");
     console.log("");
     if (failures === 0) console.log("✅ all redesign checks passed");
     else console.log(`❌ ${failures} check(s) failed`);

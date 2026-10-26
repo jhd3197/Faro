@@ -163,7 +163,6 @@ export default function App() {
       <Toaster />
       <AgentBridgeHost />
       <OverwriteDialogHost />
-      <DiskUsageHost />
       <DirectoryDiffHost />
       <FindDuplicatesHost />
       <FleetSearchHost />
@@ -178,6 +177,7 @@ export default function App() {
             {/* The Agent Bridge page covers the work area (panes stay mounted
                 underneath so their paths survive opening it). */}
             {dialog === "agentBridge" && <AgentBridgePage onClose={closeDialog} />}
+            <DiskUsageHost />
             <div className="min-w-0 flex-1 overflow-hidden">
               <FileUiBridge>
                 {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
