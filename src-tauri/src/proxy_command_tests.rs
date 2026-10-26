@@ -113,6 +113,9 @@ async fn wait_dead(pid: u32) {
 struct Server {
     /// Bytes received per channel, for the upload test.
     uploads: Arc<StdMutex<HashMap<ChannelId, (u64, u64)>>>,
+    /// Open session channels, so `blob` can write through the channel's own
+    /// flow-controlled writer.
+    channels: Arc<StdMutex<HashMap<ChannelId, Channel<Msg>>>>,
 }
 
 /// FNV-1a, folded over a stream of chunks.
@@ -137,7 +140,8 @@ impl russh::server::Handler for Server {
         })
     }
 
-    async fn channel_open_session(&mut self, _: Channel<Msg>, _: &mut ServerSession) -> Result<bool, Self::Error> {
+    async fn channel_open_session(&mut self, channel: Channel<Msg>, _: &mut ServerSession) -> Result<bool, Self::Error> {
+        self.channels.lock().unwrap().insert(channel.id(), channel);
         Ok(true)
     }
 
@@ -167,7 +171,13 @@ impl russh::server::Handler for Server {
         let handle = s.handle();
         if let Some(n) = cmd.strip_prefix("blob ") {
             let n: usize = n.parse().unwrap();
+            let channel = self.channels.lock().unwrap().remove(&ch).expect("exec on an open channel");
+            // Through the channel's writer, which waits for the client's
+            // window: `Handle::data` only queues, and a close sent behind a
+            // queue that outruns the window drops what's still queued.
             tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                let mut writer = channel.make_writer();
                 let mut sent = 0;
                 let mut seed = 7u64;
                 while sent < n {
@@ -178,14 +188,15 @@ impl russh::server::Handler for Server {
                             (seed >> 33) as u8
                         })
                         .collect();
-                    if handle.data(ch, CryptoVec::from_slice(&chunk)).await.is_err() {
+                    if writer.write_all(&chunk).await.is_err() {
                         return;
                     }
                     sent += len;
                 }
+                let _ = writer.flush().await;
                 let _ = handle.exit_status_request(ch, 0).await;
-                let _ = handle.eof(ch).await;
-                let _ = handle.close(ch).await;
+                let _ = channel.eof().await;
+                let _ = channel.close().await;
             });
         } else if cmd == "sink" {
             self.uploads.lock().unwrap().insert(ch, (0, FNV0));

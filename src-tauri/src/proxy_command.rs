@@ -229,11 +229,15 @@ pub fn expand(arg: &str, host: &str, port: u16, user: &str) -> Result<String> {
     Ok(out)
 }
 
+/// Both separators on every OS: a profile written on Windows (imported or
+/// synced) can name `C:\...\cloudflared.exe` on Linux or macOS.
 fn is_cloudflared(program: &str) -> bool {
-    Path::new(program)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s.eq_ignore_ascii_case("cloudflared"))
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let stem = match name.len().checked_sub(4) {
+        Some(i) if name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".exe") => &name[..i],
+        _ => name,
+    };
+    stem.eq_ignore_ascii_case("cloudflared")
 }
 
 /// Where to look for a bare program name besides PATH. A GUI app launched
@@ -802,6 +806,22 @@ mod tests {
         let mut path_spec = spec;
         path_spec.program = std::env::temp_dir().join("faro-nope").join("proxy.exe").display().to_string();
         assert!(resolve_program(&path_spec).unwrap_err().to_string().contains("doesn't exist"));
+    }
+
+    #[test]
+    fn cloudflared_is_recognised_on_any_os() {
+        for p in [
+            "cloudflared",
+            "CLOUDFLARED.EXE",
+            "/usr/local/bin/cloudflared",
+            r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
+            r"D:\tools/cloudflared.Exe",
+        ] {
+            assert!(is_cloudflared(p), "{p}");
+        }
+        for p in ["cloudflared2", "my-cloudflared", r"C:\cloudflared\proxy.exe", "ssh", "", "é", "日本.exe"] {
+            assert!(!is_cloudflared(p), "{p}");
+        }
     }
 
     #[test]
