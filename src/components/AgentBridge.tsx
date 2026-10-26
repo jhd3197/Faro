@@ -48,7 +48,7 @@ const APPROVAL_COPY: Record<string, { title: string; foot: string }> = {
   search: { title: "Agent wants to search the server", foot: "Searches through your authenticated Faro session." },
   skill: { title: "Agent wants to run a Skill across servers", foot: "Runs the skill's steps on every listed server through your authenticated Faro sessions." },
 };
-function approvalCopy(kind: string) {
+export function approvalCopy(kind: string) {
   return (
     APPROVAL_COPY[kind] ?? {
       title: "Agent wants to run an operation",
@@ -61,7 +61,7 @@ function approvalCopy(kind: string) {
 // the modal surfaces them as badges (risk obvious), not just prose. The full
 // summary is always shown verbatim above; these only re-emphasize it, so a
 // non-matching summary simply renders no badges.
-function summaryStats(
+export function summaryStats(
   kind: string,
   command: string
 ): { label: string; danger?: boolean }[] {
@@ -99,6 +99,11 @@ function summaryStats(
 export function AgentBridgeHost() {
   const approvals = useBridge((s) => s.approvals);
   const respond = useBridge((s) => s.respond);
+  // Where the queue is already on screen inline (agent panel, Agent Bridge
+  // page), the blocking modal would only duplicate it.
+  const shownInline = useLayout(
+    (s) => s.agentDrawerOpen || s.dialog === "agentBridge"
+  );
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -117,7 +122,7 @@ export function AgentBridgeHost() {
   }, []);
 
   const pending = approvals[0];
-  if (!pending) return null;
+  if (!pending || shownInline) return null;
   return (
     <ApprovalModal
       approval={pending}

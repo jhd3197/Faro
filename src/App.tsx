@@ -56,6 +56,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { KeyboardShortcutsDialog } from "./components/KeyboardShortcutsDialog";
 import { AgentBridge, AgentBridgeHost } from "./components/AgentBridge";
 import { AgentConsoleDock } from "./components/AgentConsole";
+import { AgentDrawer } from "./components/AgentDrawer";
 import { DiskUsageHost } from "./components/DiskUsage";
 import { DirectoryDiffHost } from "./components/DirectoryDiff";
 import { FindDuplicatesHost } from "./components/FindDuplicates";
@@ -77,6 +78,7 @@ export default function App() {
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
   const terminalVisible = !!activeSessionId && terminalOpen && supportsTerminal;
   const consoleOpen = useLayout((s) => s.consoleOpen);
+  const agentDrawerOpen = useLayout((s) => s.agentDrawerOpen);
   const browserLayout = useSettings((s) => s.browserLayout);
   const dialog = useLayout((s) => s.dialog);
   const closeDialog = useLayout((s) => s.closeDialog);
@@ -172,10 +174,13 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <ServerRail />
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex-1 overflow-hidden">
-            <FileUiBridge>
-              {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
-            </FileUiBridge>
+          <div className="flex flex-1 overflow-hidden">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <FileUiBridge>
+                {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
+              </FileUiBridge>
+            </div>
+            {agentDrawerOpen && <AgentDrawer />}
           </div>
           {consoleOpen && (
             <div className="h-64 border-t border-border">
@@ -254,6 +259,9 @@ function StatusBar({
   const [notifOpen, setNotifOpen] = useState(false);
 
   const bridgeRunning = useBridge((s) => s.status.running);
+  const waiting = useBridge((s) => s.approvals.length);
+  const agentDrawerOpen = useLayout((s) => s.agentDrawerOpen);
+  const toggleAgentDrawer = useLayout((s) => s.toggleAgentDrawer);
   const consoleRunning = useBridge((s) =>
     s.console.filter((e) => e.status === "running").length
   );
@@ -261,7 +269,6 @@ function StatusBar({
   const syncRunning = syncPairs.filter((p) => p.running).length;
   const syncActive = syncPairs.filter((p) => p.state === "syncing").length;
   const openDialog = useLayout((s) => s.openDialog);
-  const bridgeDialogOpen = useLayout((s) => s.dialog === "agentBridge");
   const consoleOpen = useLayout((s) => s.consoleOpen);
   const toggleConsole = useLayout((s) => s.toggleConsole);
   const browserLayout = useSettings((s) => s.browserLayout);
@@ -459,19 +466,21 @@ function StatusBar({
         Sync
       </PillButton>
       <PillButton
-        active={bridgeDialogOpen}
-        onClick={() => openDialog("agentBridge")}
+        active={agentDrawerOpen}
+        onClick={toggleAgentDrawer}
         icon={
           <Radio
             size={11}
-            className={bridgeRunning ? "text-success" : undefined}
+            className={bridgeRunning ? "text-accent" : undefined}
           />
         }
-        title={`Agent Bridge${
-          bridgeRunning ? " (running)" : ""
-        } — let a local AI agent run commands on your servers`}
+        badge={waiting > 0 ? waiting : undefined}
+        danger={waiting > 0}
+        title={`Agent panel${bridgeRunning ? " (bridge running)" : ""}${
+          waiting > 0 ? ` — ${waiting} waiting for you` : ""
+        }`}
       >
-        Bridge
+        {waiting > 0 ? "Agent waiting" : "Agent"}
       </PillButton>
       <PillButton
         active={consoleOpen}
@@ -562,6 +571,7 @@ function PillButton({
   active,
   disabled,
   badge,
+  danger,
   title,
 }: {
   children?: React.ReactNode;
@@ -570,6 +580,8 @@ function PillButton({
   active?: boolean;
   disabled?: boolean;
   badge?: number;
+  /** Something needs the user (agent approvals): danger-toned label + badge. */
+  danger?: boolean;
   title?: string;
 }) {
   return (
@@ -581,13 +593,19 @@ function PillButton({
         "flex items-center gap-1.5 rounded-md px-2 py-0.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
         active
           ? "bg-accent-soft text-accent"
-          : "text-text-muted hover:bg-bg-hover hover:text-text"
+          : "text-text-muted hover:bg-bg-hover hover:text-text",
+        danger && "text-danger"
       )}
     >
       {icon}
       {children}
       {badge !== undefined && (
-        <span className="ml-0.5 rounded-full bg-accent-strong px-1.5 py-0 text-[9px] font-semibold text-white">
+        <span
+          className={cn(
+            "ml-0.5 rounded-full px-1.5 py-0 text-[9px] font-semibold",
+            danger ? "bg-danger text-bg" : "bg-accent-strong text-white"
+          )}
+        >
           {badge}
         </span>
       )}
