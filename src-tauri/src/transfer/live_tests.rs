@@ -87,7 +87,7 @@ impl crate::session::HostKeyVerifier for AcceptAll {
     }
 }
 
-async fn sftp_session() -> Option<Arc<Session>> {
+pub(crate) async fn sftp_session() -> Option<Arc<Session>> {
     let v = env("FARO_LIVE_SFTP")?;
     let p = profile("sftp", &v[0], v[1].parse().unwrap(), &v[2], &v[3]);
     let conn = crate::session::ssh_connect(
@@ -100,7 +100,7 @@ async fn sftp_session() -> Option<Arc<Session>> {
     Some(Arc::new(Session::Ssh(Arc::new(SshSession::new(p, conn.handle)))))
 }
 
-async fn ftp_session() -> Option<Arc<Session>> {
+pub(crate) async fn ftp_session() -> Option<Arc<Session>> {
     let v = env("FARO_LIVE_FTP")?;
     let p = profile("ftp", &v[0], v[1].parse().unwrap(), &v[2], &v[3]);
     let s = crate::session::ftp::ftp_connect(&p, Arc::new(AcceptAll))

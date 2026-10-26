@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 #[cfg(test)]
-mod live_tests;
+pub(crate) mod live_tests;
 mod partfile;
 mod ranged;
 mod retry;

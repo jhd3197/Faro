@@ -118,6 +118,10 @@ impl EditManager {
 
         // Spawn the debounce + upload task. Lives as long as the watcher
         // sends events; exits cleanly when the watcher is dropped.
+        // What the remote file looked like when we fetched it. Each save first
+        // checks it's unchanged, so a teammate's or a deploy's edit made since
+        // isn't silently replaced.
+        let mut stamp = remote_stamp(&session, &remote_path).await;
         let upload_session = session.clone();
         let upload_remote = remote_path.clone();
         let upload_local = local_path.clone();
@@ -168,6 +172,19 @@ impl EditManager {
                 }
                 last_mtime = mtime;
 
+                let now = remote_stamp(&upload_session, &upload_remote).await;
+                if stamp.is_some() && now.is_some() && now != stamp {
+                    let _ = app_for_task.emit(
+                        "editor://error",
+                        EditErrorEvent {
+                            edit_id: edit_id_for_task.clone(),
+                            remote_path: upload_remote.clone(),
+                            message: "the file changed on the server since you opened it, so this save was not uploaded. Reopen it to get the new version.".into(),
+                        },
+                    );
+                    continue;
+                }
+
                 match upload_from(
                     &upload_session,
                     upload_local.to_string_lossy().as_ref(),
@@ -176,6 +193,7 @@ impl EditManager {
                 .await
                 {
                     Ok(bytes) => {
+                        stamp = remote_stamp(&upload_session, &upload_remote).await;
                         let _ = app_for_task.emit(
                             "editor://saved",
                             EditSavedEvent {
@@ -248,6 +266,26 @@ fn is_write_event(event: &Event) -> bool {
 /// The temp copy's name is only cosmetic (the upload goes to the remote path),
 /// and a custom editor is launched through `cmd /c`, so strip what `cmd` would
 /// read as syntax: a remote `notes&calc.exe` must not run `calc.exe`.
+/// `(size, modified, etag)` of `remote_path` from a listing of its parent —
+/// the one lookup every backend supports. `None` when it can't be listed, in
+/// which case saves aren't conflict-checked.
+async fn remote_stamp(
+    session: &Arc<Session>,
+    remote_path: &str,
+) -> Option<(u64, Option<i64>, Option<String>)> {
+    let trimmed = remote_path.trim_end_matches('/');
+    let (dir, name) = match trimmed.rfind('/') {
+        Some(0) => ("/", &trimmed[1..]),
+        Some(i) => (&trimmed[..i], &trimmed[i + 1..]),
+        None => (".", trimmed),
+    };
+    let entries = crate::commands::fs_for_session(session).list_dir(dir).await.ok()?;
+    entries
+        .into_iter()
+        .find(|e| e.name == name)
+        .map(|e| (e.size, e.modified, e.etag))
+}
+
 fn local_edit_name(name: &str) -> String {
     name.chars()
         .map(|c| if "&^%!()<>|\"".contains(c) { '_' } else { c })
@@ -764,5 +802,35 @@ mod tests {
         assert_eq!(local_edit_name("notes&calc.exe"), "notes_calc.exe");
         assert_eq!(local_edit_name("%PATH%|x"), "_PATH__x");
         assert_eq!(local_edit_name("site config.php"), "site config.php");
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    /// A remote write made after the file was opened changes its stamp, so the
+    /// next save is held back instead of overwriting it. Needs the servers from
+    /// `transfer::live_tests` (FARO_LIVE_SFTP / FARO_LIVE_FTP).
+    #[tokio::test]
+    #[ignore = "needs FARO_LIVE_SFTP / FARO_LIVE_FTP"]
+    async fn live_remote_change_is_detected() {
+        let sftp = crate::transfer::live_tests::sftp_session().await;
+        let ftp = crate::transfer::live_tests::ftp_session().await;
+        for session in [sftp, ftp].into_iter().flatten() {
+            let local = std::env::temp_dir().join(format!("faro-stamp-{}", Uuid::new_v4()));
+            let remote = format!("/home/faro/stamp-{}.txt", Uuid::new_v4().simple());
+            std::fs::write(&local, b"opened").unwrap();
+            upload_from(&session, local.to_str().unwrap(), &remote).await.unwrap();
+            let opened = remote_stamp(&session, &remote).await;
+            assert!(opened.is_some(), "stamp readable");
+            assert_eq!(remote_stamp(&session, &remote).await, opened, "unchanged file, same stamp");
+
+            std::fs::write(&local, b"a teammate changed this").unwrap();
+            upload_from(&session, local.to_str().unwrap(), &remote).await.unwrap();
+            assert_ne!(remote_stamp(&session, &remote).await, opened, "remote edit detected");
+            let _ = crate::commands::fs_for_session(&session).delete(&remote, false).await;
+            let _ = std::fs::remove_file(&local);
+        }
     }
 }
