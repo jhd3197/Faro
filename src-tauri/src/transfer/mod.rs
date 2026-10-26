@@ -511,6 +511,14 @@ fn join_remote(dir: &str, name: &str) -> String {
     format!("{dir}{}{name}", if windows_style { '\\' } else { '/' })
 }
 
+/// True when `seg` is exactly one ordinary file name on this OS, so joining it
+/// onto a local folder stays inside that folder. Remote listings are untrusted:
+/// a Linux name like `..\x` or `C:x` is one name there but a path here.
+pub(crate) fn is_plain_local_name(seg: &str) -> bool {
+    let mut parts = Path::new(seg).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
+}
+
 fn basename(path: &str) -> String {
     path.trim_end_matches(['/', '\\']).rsplit(|c| c == '/' || c == '\\')
         .next()
@@ -1478,7 +1486,11 @@ impl TransferManager {
     ) -> Result<String> {
         let size = remote_size(&session, &remote_path).await.unwrap_or(0);
 
-        let initial = PathBuf::from(&local_dir).join(basename(&remote_path));
+        let name = basename(&remote_path);
+        if !is_plain_local_name(&name) {
+            anyhow::bail!("unsafe file name from the server: {name:?}");
+        }
+        let initial = PathBuf::from(&local_dir).join(name);
         // Skip is decided now (no point downloading a file we'll drop) and
         // again at rename time; Rename shows its likely name now and picks a
         // free one at rename time; Overwrite only replaces the existing file
@@ -2577,6 +2589,9 @@ impl TransferManager {
         app: AppHandle,
     ) -> Result<Vec<String>> {
         let root_name = basename(&remote_root);
+        if !is_plain_local_name(&root_name) {
+            anyhow::bail!("unsafe folder name from the server: {root_name:?}");
+        }
         let local_root = PathBuf::from(&local_dir).join(&root_name);
         tokio::fs::create_dir_all(&local_root)
             .await
@@ -2612,6 +2627,15 @@ impl TransferManager {
                     .strip_prefix(&remote_root)
                     .unwrap_or(&remote_child)
                     .trim_start_matches('/');
+                if !rel.split('/').all(is_plain_local_name) {
+                    let err = anyhow::anyhow!("unsafe file name from the server: {rel:?}");
+                    let local = local_root.to_string_lossy().into_owned();
+                    ids.push(
+                        self.failed_row(TransferKind::Download, &remote_child, &local, &err, &app)
+                            .await,
+                    );
+                    continue;
+                }
                 let local_child = local_root.join(rel);
                 match entry.kind {
                     crate::remotefs::FileKind::Directory => {
@@ -4006,6 +4030,20 @@ async fn finalize(mgr: &Arc<TransferManager>, id: &str, result: Result<u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_local_name_rejects_paths_from_the_server() {
+        for ok in ["a.txt", "notes&x", "..a", "a b"] {
+            assert!(is_plain_local_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "a/b", "/etc"] {
+            assert!(!is_plain_local_name(bad), "{bad}");
+        }
+        #[cfg(windows)]
+        for bad in [r"..\evil", r"a\b", "C:x", r"C:\x"] {
+            assert!(!is_plain_local_name(bad), "{bad}");
+        }
+    }
 
     // ---------- TokenBucket (Phase 4) ----------
 

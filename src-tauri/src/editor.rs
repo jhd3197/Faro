@@ -83,9 +83,9 @@ impl EditManager {
         let name = remote_path
             .rsplit(|c| c == '/' || c == '\\')
             .next()
-            .filter(|s| !s.is_empty())
+            .filter(|s| crate::transfer::is_plain_local_name(s))
             .unwrap_or("file");
-        let local_path = base.join(name);
+        let local_path = base.join(local_edit_name(name));
 
         // Download the file into the tempfile.
         download_to(&session, &remote_path, &local_path)
@@ -245,6 +245,15 @@ fn is_write_event(event: &Event) -> bool {
     )
 }
 
+/// The temp copy's name is only cosmetic (the upload goes to the remote path),
+/// and a custom editor is launched through `cmd /c`, so strip what `cmd` would
+/// read as syntax: a remote `notes&calc.exe` must not run `calc.exe`.
+fn local_edit_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if "&^%!()<>|\"".contains(c) { '_' } else { c })
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 fn spawn_editor(path: &std::path::Path, editor: Option<&str>) -> Result<()> {
     if let Some(cmd) = editor.map(str::trim).filter(|c| !c.is_empty()) {
@@ -258,11 +267,10 @@ fn spawn_editor(path: &std::path::Path, editor: Option<&str>) -> Result<()> {
             .with_context(|| format!("spawn editor `{cmd}` for {}", path.display()))?;
         return Ok(());
     }
-    // `cmd /c start "" <path>` opens the file with its associated app.
-    // The empty `""` is the window title — required because `start` interprets
-    // a single quoted arg as the title, not the target.
-    std::process::Command::new("cmd")
-        .args(["/c", "start", ""])
+    // Open with the associated app via the shell's file handler, not
+    // `cmd /c start`, so the path is never parsed as a command line.
+    std::process::Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
         .arg(path)
         .no_console_window()
         .spawn()
@@ -746,3 +754,15 @@ pub(crate) async fn upload_from(
     Ok(size)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::local_edit_name;
+
+    #[test]
+    fn edit_name_drops_cmd_syntax() {
+        assert_eq!(local_edit_name("notes&calc.exe"), "notes_calc.exe");
+        assert_eq!(local_edit_name("%PATH%|x"), "_PATH__x");
+        assert_eq!(local_edit_name("site config.php"), "site config.php");
+    }
+}

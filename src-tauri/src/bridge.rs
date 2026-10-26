@@ -3483,12 +3483,13 @@ async fn write_via_upload(
     if !overwrite {
         ensure_absent(sess, remote_path).await?;
     }
-    let (_, name) = split_parent(remote_path);
     let dir = std::env::temp_dir()
         .join("faro-agent-writes")
         .join(Uuid::new_v4().to_string());
     std::fs::create_dir_all(&dir).context("create scratch dir for write")?;
-    let local = dir.join(if name.is_empty() { "file".into() } else { name });
+    // Fixed name: the agent's path only picks the remote destination, never a
+    // local one (`C:\...` or `..\` in it would escape the scratch dir).
+    let local = dir.join("file");
     let staged = std::fs::write(&local, bytes)
         .with_context(|| format!("stage {} bytes for write", bytes.len()));
     let result = match staged {
