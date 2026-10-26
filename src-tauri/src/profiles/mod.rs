@@ -163,6 +163,11 @@ pub struct ConnectionProfile {
     // `jump_profile` resolved against the store when the profile is read.
     #[serde(skip)]
     pub jump_via: Option<JumpVia>,
+    // Cloud drives (Dropbox/OneDrive/Google Drive/Box): the client id of the
+    // user's own registered OAuth app. Absent = the app built into Faro, if
+    // the release has one. Its optional client secret lives in the keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
 }
 
 /// Longest bastion chain a profile may connect through.

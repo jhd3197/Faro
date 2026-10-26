@@ -438,6 +438,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            oauth_client_id: None,
         };
         let sess = Arc::new(http_connect(&profile).await.expect("connect"));
         let fs = HttpFs::new(sess.clone());

@@ -36,6 +36,7 @@ fn env_or(key: &str, default: &str) -> String {
 pub fn box_config() -> OAuthConfig {
     OAuthConfig {
         client_id: env_or("FARO_BOX_CLIENT_ID", BOX_CLIENT_ID),
+        client_secret: None,
         auth_url: env_or("FARO_BOX_AUTH_URL", DEFAULT_AUTH_URL),
         token_url: env_or("FARO_BOX_TOKEN_URL", DEFAULT_TOKEN_URL),
         // Box scopes are configured on the app, not requested per-flow.
@@ -251,7 +252,12 @@ pub async fn box_connect(profile: &ConnectionProfile) -> Result<BoxSession> {
         client,
         api_base: env_or("FARO_BOX_API_BASE", DEFAULT_API_BASE),
         upload_base: env_or("FARO_BOX_UPLOAD_BASE", DEFAULT_UPLOAD_BASE),
-        token: RefreshingToken::new(BOX_SERVICE, &profile.id, box_config(), tokens),
+        token: RefreshingToken::new(
+            BOX_SERVICE,
+            &profile.id,
+            oauth::with_profile_app(box_config(), &profile.id, profile.oauth_client_id.as_deref()),
+            tokens,
+        ),
         cache: StdMutex::new(HashMap::new()),
     })
 }

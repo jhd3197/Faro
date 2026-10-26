@@ -34,6 +34,7 @@ fn env_or(key: &str, default: &str) -> String {
 pub fn dropbox_config() -> OAuthConfig {
     OAuthConfig {
         client_id: env_or("FARO_DROPBOX_APP_KEY", DROPBOX_APP_KEY),
+        client_secret: None,
         auth_url: env_or("FARO_DROPBOX_AUTH_URL", DEFAULT_AUTH_URL),
         token_url: env_or("FARO_DROPBOX_TOKEN_URL", DEFAULT_TOKEN_URL),
         scopes: vec![
@@ -217,7 +218,7 @@ pub async fn dropbox_connect(profile: &ConnectionProfile) -> Result<DropboxSessi
         client,
         api_base: env_or("FARO_DROPBOX_API_BASE", DEFAULT_API_BASE),
         content_base: env_or("FARO_DROPBOX_CONTENT_BASE", DEFAULT_CONTENT_BASE),
-        config: dropbox_config(),
+        config: oauth::with_profile_app(dropbox_config(), &profile.id, profile.oauth_client_id.as_deref()),
         tokens: Mutex::new(tokens),
     })
 }

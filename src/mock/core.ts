@@ -114,6 +114,16 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return [];
     case "api_key_status":
       return false;
+    case "oauth_builtin_apps":
+      return { dropbox: false, onedrive: false, gdrive: false, box: false };
+    case "dropbox_authorize":
+    case "onedrive_authorize":
+    case "gdrive_authorize":
+    case "box_authorize":
+      if (!a.clientId) {
+        throw "this Faro build has no built-in app for this provider";
+      }
+      return { accountLabel: "demo@example.com" };
 
     // ---- sessions ----
     case "connect":

@@ -446,6 +446,7 @@ pub fn run() {
             commands::agent_public_key,
             commands::pair_agent,
             commands::dropbox_authorize,
+            commands::oauth_builtin_apps,
             commands::onedrive_authorize,
             commands::gdrive_authorize,
             commands::box_authorize,

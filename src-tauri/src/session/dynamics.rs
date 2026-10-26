@@ -85,6 +85,7 @@ pub fn org_host(profile: &ConnectionProfile) -> Result<String> {
 pub fn dynamics_config(host: &str) -> OAuthConfig {
     OAuthConfig {
         client_id: env_or("FARO_DYNAMICS_CLIENT_ID", DYNAMICS_CLIENT_ID),
+        client_secret: None,
         auth_url: env_or(
             "FARO_DYNAMICS_AUTH_URL",
             "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",

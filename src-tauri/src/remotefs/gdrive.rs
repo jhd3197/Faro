@@ -284,6 +284,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            oauth_client_id: None,
         };
         let session = Arc::new(gdrive_connect(&profile).await.expect("connect"));
 

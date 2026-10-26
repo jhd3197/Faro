@@ -237,6 +237,7 @@ impl AgentSession {
                 proxy: None,
                 jump_profile: None,
                 jump_via: None,
+                oauth_client_id: None,
             },
             server_key: String::new(),
             channel: Mutex::new(Some(channel)),

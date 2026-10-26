@@ -79,6 +79,18 @@ import type {
 // Typed wrappers around the Tauri command surface. The string names must match
 // the #[tauri::command] handlers registered in src-tauri/src/commands.rs.
 
+/** The user's own OAuth app for a cloud drive. The secret goes straight to the
+ *  keychain on a successful authorization and is never read back. */
+export interface OAuthApp {
+  clientId?: string;
+  clientSecret?: string;
+}
+
+const oauthAppArgs = (app?: OAuthApp) => ({
+  clientId: app?.clientId?.trim() || null,
+  clientSecret: app?.clientSecret?.trim() || null,
+});
+
 export const ipc = {
   listProfiles: () => invoke<ConnectionProfile[]>("list_profiles"),
 
@@ -133,20 +145,24 @@ export const ipc = {
   /** Run the interactive Dropbox OAuth flow for a profile (opens the browser,
    *  catches the loopback redirect, stores tokens in the OS keychain). Resolves
    *  with the authorized account label. The editor saves the profile on success. */
-  dropboxAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("dropbox_authorize", { profileId }),
+  dropboxAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("dropbox_authorize", { profileId, ...oauthAppArgs(app) }),
 
   /** Run the interactive OneDrive OAuth flow for a profile (Microsoft Graph). */
-  onedriveAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("onedrive_authorize", { profileId }),
+  onedriveAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("onedrive_authorize", { profileId, ...oauthAppArgs(app) }),
 
   /** Run the interactive Google Drive OAuth flow for a profile. */
-  gdriveAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("gdrive_authorize", { profileId }),
+  gdriveAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("gdrive_authorize", { profileId, ...oauthAppArgs(app) }),
 
   /** Run the interactive Box OAuth flow for a profile. */
-  boxAuthorize: (profileId: string) =>
-    invoke<{ accountLabel: string }>("box_authorize", { profileId }),
+  boxAuthorize: (profileId: string, app?: OAuthApp) =>
+    invoke<{ accountLabel: string }>("box_authorize", { profileId, ...oauthAppArgs(app) }),
+
+  /** Which cloud drives have an OAuth app built into this release
+   *  (`protocol -> true`). The rest need the user's own app's Client ID. */
+  oauthBuiltinApps: () => invoke<Record<string, boolean>>("oauth_builtin_apps"),
 
   /** Run the interactive Dynamics 365 (delegated) OAuth flow for a profile —
    *  the OneDrive pattern with the org's `user_impersonation` scope. `host` is

@@ -26,6 +26,10 @@ pub const REDIRECT_PORT: u16 = 53682;
 #[derive(Clone)]
 pub struct OAuthConfig {
     pub client_id: String,
+    /// Only for a user's own app whose provider insists on one at the token
+    /// endpoint (Google desktop clients, Box). Faro's built-in apps are
+    /// public PKCE clients and never carry a secret.
+    pub client_secret: Option<String>,
     pub auth_url: String,
     pub token_url: String,
     pub scopes: Vec<String>,
@@ -81,6 +85,37 @@ pub fn pkce_challenge(verifier: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
+/// Keychain purpose holding the client secret of a profile's own OAuth app.
+pub fn app_secret_purpose(profile_id: &str) -> String {
+    format!("oauth-app-secret:{profile_id}")
+}
+
+/// Point a provider config at the profile's own registered app when it names
+/// one, picking up that app's secret from the keychain. Without a custom id
+/// the built-in app (or its env override) stays in place.
+pub fn with_profile_app(
+    mut config: OAuthConfig,
+    profile_id: &str,
+    client_id: Option<&str>,
+) -> OAuthConfig {
+    if let Some(id) = client_id.map(str::trim).filter(|s| !s.is_empty()) {
+        config.client_id = id.to_string();
+        config.client_secret = crate::credentials::get_secret(&app_secret_purpose(profile_id))
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty());
+    }
+    config
+}
+
+/// Token-endpoint form fields shared by exchange and refresh.
+fn client_fields<'a>(config: &'a OAuthConfig, fields: &mut Vec<(&'a str, &'a str)>) {
+    fields.push(("client_id", &config.client_id));
+    if let Some(secret) = &config.client_secret {
+        fields.push(("client_secret", secret));
+    }
+}
+
 fn redirect_uri() -> String {
     format!("http://localhost:{REDIRECT_PORT}/")
 }
@@ -111,8 +146,8 @@ pub fn authorize_url(config: &OAuthConfig, challenge: &str) -> Result<Url> {
 pub async fn authorize_loopback(config: &OAuthConfig) -> Result<(TokenSet, serde_json::Value)> {
     if config.client_id.is_empty() {
         return Err(anyhow!(
-            "no OAuth client id configured — register the app and set its key \
-             (see the provider setup note)"
+            "this Faro build has no built-in app for this provider — register \
+             your own app and enter its Client ID in the connection editor"
         ));
     }
     let (verifier, challenge) = pkce_pair();
@@ -212,15 +247,17 @@ pub async fn exchange_code(
     verifier: &str,
 ) -> Result<serde_json::Value> {
     let client = reqwest::Client::new();
+    let redirect = redirect_uri();
+    let mut form = vec![
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("code_verifier", verifier),
+        ("redirect_uri", redirect.as_str()),
+    ];
+    client_fields(config, &mut form);
     let resp = client
         .post(&config.token_url)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("code_verifier", verifier),
-            ("client_id", &config.client_id),
-            ("redirect_uri", &redirect_uri()),
-        ])
+        .form(&form)
         .send()
         .await
         .context("token exchange request")?;
@@ -236,13 +273,11 @@ pub async fn exchange_code(
 /// new access token, so the caller keeps the existing refresh token.
 pub async fn refresh(config: &OAuthConfig, refresh_token: &str) -> Result<TokenSet> {
     let client = reqwest::Client::new();
+    let mut form = vec![("grant_type", "refresh_token"), ("refresh_token", refresh_token)];
+    client_fields(config, &mut form);
     let resp = client
         .post(&config.token_url)
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token),
-            ("client_id", &config.client_id),
-        ])
+        .form(&form)
         .send()
         .await
         .context("token refresh request")?;
@@ -377,9 +412,92 @@ mod tests {
     }
 
     #[test]
+    fn profile_app_overrides_only_when_named() {
+        let base = OAuthConfig {
+            client_id: String::new(),
+            client_secret: None,
+            auth_url: "https://example.com/a".into(),
+            token_url: "https://example.com/t".into(),
+            scopes: vec![],
+            extra_auth_params: vec![],
+        };
+        let pid = format!("oauth-test-{}", uuid::Uuid::new_v4());
+        assert_eq!(with_profile_app(base.clone(), &pid, None).client_id, "");
+        assert_eq!(with_profile_app(base.clone(), &pid, Some("  ")).client_id, "");
+        let own = with_profile_app(base, &pid, Some(" my-app "));
+        assert_eq!(own.client_id, "my-app");
+        assert!(own.client_secret.is_none(), "no stored secret for a fresh profile");
+
+        let mut with_secret = own.clone();
+        with_secret.client_secret = Some("s3cret".into());
+        let mut form = vec![];
+        client_fields(&with_secret, &mut form);
+        assert_eq!(form, [("client_id", "my-app"), ("client_secret", "s3cret")]);
+        let mut form = vec![];
+        client_fields(&own, &mut form);
+        assert_eq!(form, [("client_id", "my-app")]);
+    }
+
+    /// Serve one token-endpoint request on a loopback port, returning the
+    /// form body it received.
+    async fn capture_token_request() -> (String, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let body = loop {
+                let n = sock.read(&mut chunk).await.unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let len = head.lines()
+                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap()))
+                        .unwrap_or(0);
+                    if body.len() >= len { break body.to_string(); }
+                }
+            };
+            let json = r#"{"access_token":"A","refresh_token":"R","expires_in":3600}"#;
+            let resp = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{json}", json.len());
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            body
+        });
+        (url, task)
+    }
+
+    #[tokio::test]
+    async fn own_app_secret_reaches_the_token_endpoint() {
+        let (url, task) = capture_token_request().await;
+        let cfg = OAuthConfig {
+            client_id: "own-app".into(),
+            client_secret: Some("s3cret".into()),
+            auth_url: "https://example.com/a".into(),
+            token_url: url,
+            scopes: vec![],
+            extra_auth_params: vec![],
+        };
+        exchange_code(&cfg, "CODE", "VERIFIER").await.unwrap();
+        let body = task.await.unwrap();
+        assert!(body.contains("client_id=own-app"), "{body}");
+        assert!(body.contains("client_secret=s3cret"), "{body}");
+        assert!(body.contains("code_verifier=VERIFIER"), "{body}");
+
+        // A public client (built-in app) never sends a secret on refresh.
+        let (url, task) = capture_token_request().await;
+        let public = OAuthConfig { client_secret: None, token_url: url, ..cfg };
+        refresh(&public, "R0").await.unwrap();
+        let body = task.await.unwrap();
+        assert!(body.contains("refresh_token=R0") && body.contains("client_id=own-app"), "{body}");
+        assert!(!body.contains("client_secret"), "{body}");
+    }
+
+    #[test]
     fn authorize_url_has_pkce_and_redirect() {
         let cfg = OAuthConfig {
             client_id: "abc123".into(),
+            client_secret: None,
             auth_url: "https://example.com/oauth2/authorize".into(),
             token_url: "https://example.com/oauth2/token".into(),
             scopes: vec!["files.read".into(), "files.write".into()],

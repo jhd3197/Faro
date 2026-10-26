@@ -33,6 +33,7 @@ fn env_or(key: &str, default: &str) -> String {
 pub fn onedrive_config() -> OAuthConfig {
     OAuthConfig {
         client_id: env_or("FARO_ONEDRIVE_CLIENT_ID", ONEDRIVE_CLIENT_ID),
+        client_secret: None,
         auth_url: env_or("FARO_ONEDRIVE_AUTH_URL", DEFAULT_AUTH_URL),
         token_url: env_or("FARO_ONEDRIVE_TOKEN_URL", DEFAULT_TOKEN_URL),
         scopes: vec![
@@ -166,6 +167,11 @@ pub async fn onedrive_connect(profile: &ConnectionProfile) -> Result<OneDriveSes
         profile: profile.clone(),
         client,
         graph_base: env_or("FARO_ONEDRIVE_GRAPH_BASE", DEFAULT_GRAPH_BASE),
-        token: RefreshingToken::new(ONEDRIVE_SERVICE, &profile.id, onedrive_config(), tokens),
+        token: RefreshingToken::new(
+            ONEDRIVE_SERVICE,
+            &profile.id,
+            oauth::with_profile_app(onedrive_config(), &profile.id, profile.oauth_client_id.as_deref()),
+            tokens,
+        ),
     })
 }

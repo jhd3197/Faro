@@ -47,7 +47,7 @@ import { BRAND_ICONS } from "@/lib/brandIconData";
 import { monogram } from "@/lib/format";
 import { IconPicker } from "./IconPicker";
 import { generatePassword } from "@/lib/password";
-import { ipc } from "@/lib/ipc";
+import { ipc, type OAuthApp } from "@/lib/ipc";
 import { messageOf } from "@/lib/errors";
 import { CopyTextButton } from "@/components/ui/CopyText";
 import { toast } from "@/stores/toastStore";
@@ -298,6 +298,32 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       !!seed?.account
   );
   const [cloudAccount, setCloudAccount] = useState<string>(seed?.account ?? "");
+  // A cloud drive with no app built into this release needs the user's own
+  // registered app. Its secret (Google, Box) goes to the keychain on success.
+  const [oauthClientId, setOauthClientId] = useState(seed?.oauthClientId ?? "");
+  const [oauthSecret, setOauthSecret] = useState("");
+  const [oauthSecretSaved, setOauthSecretSaved] = useState(false);
+  const [builtinApps, setBuiltinApps] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let cancelled = false;
+    ipc
+      .oauthBuiltinApps()
+      .then((apps) => {
+        if (!cancelled) setBuiltinApps(apps);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (isCloudOAuth) {
+      ipc
+        .apiKeyStatus(`oauth-app-secret:${id}`)
+        .then(setOauthSecretSaved)
+        .catch(() => {});
+    }
+  }, [isCloudOAuth, id, cloudAuthed]);
 
   // Shopify: the Admin credential lives in the OS keychain
   // (`shopify:{profile_id}`) — never in profiles.json. The editor only ever
@@ -526,6 +552,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       // A jump host brings its own proxy settings.
       proxy: protocol === "sftp" && jumpProfile ? undefined : buildProxy(),
       jumpProfile: protocol === "sftp" && jumpProfile ? jumpProfile : undefined,
+      oauthClientId: isCloudOAuth ? oauthClientId.trim() || undefined : undefined,
     };
   };
 
@@ -746,6 +773,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                     onClick={() => onProtocolChange(p)}
                     protocol={p}
                     label={PROTOCOL_LABEL[p]}
+                    note={builtinApps[p] === false ? "Own app" : undefined}
                   />
                 ))}
               </div>
@@ -943,12 +971,20 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             onAuthorized={(label) => {
               setCloudAuthed(true);
               setCloudAccount(label);
+              setOauthSecret("");
               if (!name) setName(label || PROTOCOL_LABEL[protocol]);
             }}
             onReset={() => {
               setCloudAuthed(false);
               setCloudAccount("");
             }}
+            setup={OAUTH_APP_SETUP[protocol]}
+            builtin={builtinApps[protocol]}
+            clientId={oauthClientId}
+            setClientId={setOauthClientId}
+            clientSecret={oauthSecret}
+            setClientSecret={setOauthSecret}
+            secretSaved={oauthSecretSaved}
           />
         ) : isAgent ? (
           <AgentSection
@@ -1952,6 +1988,61 @@ function AzureSection({
 /// OAuth cloud connect (Dropbox / OneDrive / …). Like agent pairing: authorizing
 /// runs a browser flow and stores tokens in the OS keychain keyed by the profile
 /// id, then the editor persists the profile. No password lives in Faro.
+/** How to register your own app with each cloud drive, for builds without a
+ *  built-in one. Faro listens on this fixed loopback redirect. */
+const OAUTH_REDIRECT_URI = "http://localhost:53682/";
+
+interface OAuthAppSetup {
+  console: string;
+  steps: string[];
+  /** The provider rejects the token exchange without the app's secret. */
+  needsSecret: boolean;
+}
+
+const OAUTH_APP_SETUP: Partial<Record<Protocol, OAuthAppSetup>> = {
+  dropbox: {
+    console: "https://www.dropbox.com/developers/apps",
+    steps: [
+      "Create app → Scoped access → Full Dropbox (or App folder).",
+      `Settings → OAuth 2 → Redirect URIs: add ${OAUTH_REDIRECT_URI}`,
+      "Permissions: tick account_info.read, files.metadata.read, files.content.read and files.content.write, then Submit.",
+      "Copy the App key into Client ID below. No secret is needed.",
+    ],
+    needsSecret: false,
+  },
+  onedrive: {
+    console: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+    steps: [
+      "New registration. Supported account types: include personal Microsoft accounts if you use OneDrive personal.",
+      `Authentication → Add a platform → Mobile and desktop applications → custom redirect URI ${OAUTH_REDIRECT_URI}`,
+      "Authentication → Allow public client flows: Yes.",
+      "API permissions → Microsoft Graph (delegated): Files.ReadWrite, offline_access, User.Read.",
+      "Copy the Application (client) ID into Client ID below. No secret is needed.",
+    ],
+    needsSecret: false,
+  },
+  gdrive: {
+    console: "https://console.cloud.google.com/apis/credentials",
+    steps: [
+      "Enable the Google Drive API for your project.",
+      "OAuth consent screen: External, and add your own Google account as a test user.",
+      "Credentials → Create credentials → OAuth client ID → Desktop app.",
+      "Copy the Client ID and Client secret below. Google requires the secret for desktop apps.",
+    ],
+    needsSecret: true,
+  },
+  box: {
+    console: "https://app.box.com/developers/console",
+    steps: [
+      "Create Platform App → Custom App → User Authentication (OAuth 2.0).",
+      `Configuration → OAuth 2.0 Redirect URI: ${OAUTH_REDIRECT_URI}`,
+      "Application Scopes: tick Write all files and folders stored in Box.",
+      "Copy the Client ID and Client Secret below. Box requires the secret.",
+    ],
+    needsSecret: true,
+  },
+};
+
 function OAuthConnectSection({
   label,
   authorize: runAuthorize,
@@ -1960,21 +2051,54 @@ function OAuthConnectSection({
   account,
   onAuthorized,
   onReset,
+  setup,
+  builtin,
+  clientId = "",
+  setClientId = () => {},
+  clientSecret = "",
+  setClientSecret = () => {},
+  secretSaved = false,
 }: {
   label: string;
-  authorize: (profileId: string) => Promise<{ accountLabel: string }>;
+  authorize: (profileId: string, app?: OAuthApp) => Promise<{ accountLabel: string }>;
   profileId: string;
   authed: boolean;
   account: string;
   onAuthorized: (label: string) => void;
   onReset: () => void;
+  setup?: OAuthAppSetup;
+  /** Whether this build ships an app for the provider; undefined while loading. */
+  builtin?: boolean;
+  clientId?: string;
+  setClientId?: (v: string) => void;
+  clientSecret?: string;
+  setClientSecret?: (v: string) => void;
+  secretSaved?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  // No built-in app: the user's own is required. With one, it's an opt-in.
+  const [ownApp, setOwnApp] = useState(!!clientId.trim());
+  // Sections without a setup guide (Dynamics) keep their own app handling.
+  const usingOwnApp = !!setup && (builtin === false || ownApp);
+  const appsLoading = !!setup && builtin === undefined;
+  const needsClientId = usingOwnApp && !clientId.trim();
+  const missingSecret =
+    usingOwnApp && !!setup?.needsSecret && !clientSecret.trim() && !secretSaved;
+
+  // Tokens belong to the app that issued them: a different app means
+  // authorizing again.
+  const changeClientId = (v: string) => {
+    setClientId(v);
+    if (authed) onReset();
+  };
 
   const authorize = async () => {
     setBusy(true);
     try {
-      const res = await runAuthorize(profileId);
+      const res = await runAuthorize(
+        profileId,
+        usingOwnApp ? { clientId, clientSecret } : undefined
+      );
       onAuthorized(res.accountLabel);
       toast.success(
         `Connected to ${label}`,
@@ -1995,6 +2119,69 @@ function OAuthConnectSection({
         password.
       </Hint>
 
+      {builtin === false && (
+        <Hint tone="warn">
+          This build of Faro has no built-in {label} app, so you need to
+          register your own (free, about five minutes) and paste its Client ID
+          here.
+        </Hint>
+      )}
+
+      {builtin === true && (
+        <label className="mb-3 flex items-center gap-2 text-xs text-text-muted">
+          <input
+            type="checkbox"
+            checked={ownApp}
+            onChange={(e) => {
+              setOwnApp(e.target.checked);
+              if (!e.target.checked) changeClientId("");
+            }}
+          />
+          Use my own {label} app
+        </label>
+      )}
+
+      {usingOwnApp && setup && (
+        <>
+          <div className="mb-3 rounded-md border border-border bg-bg-subtle px-2.5 py-2 text-[11.5px] leading-relaxed text-text-muted">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-medium text-text">Register a {label} app</span>
+              <button
+                type="button"
+                onClick={() => ipc.openExternalUrl(setup.console).catch(() => {})}
+                className="text-[11px] text-accent underline hover:text-text"
+              >
+                Open developer console
+              </button>
+            </div>
+            <ol className="list-decimal space-y-0.5 pl-4">
+              {setup.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </div>
+          <Field label="Client ID">
+            <input
+              value={clientId}
+              onChange={(e) => changeClientId(e.target.value)}
+              placeholder={label === "Dropbox" ? "App key" : "Client ID"}
+              spellCheck={false}
+              autoComplete="off"
+              className={inputCls}
+            />
+          </Field>
+          <Field label={setup.needsSecret ? "Client secret" : "Client secret (optional)"}>
+            <PasswordInput value={clientSecret} onChange={setClientSecret} generate={false} />
+          </Field>
+          {secretSaved && (
+            <Hint>
+              A secret is already in your OS keychain; leave the field blank to
+              keep it.
+            </Hint>
+          )}
+        </>
+      )}
+
       {authed ? (
         <div className="mb-3 flex items-center justify-between rounded-md border border-success/30 bg-success/10 px-2.5 py-2">
           <span className="flex items-center gap-1.5 text-xs text-text">
@@ -2013,7 +2200,14 @@ function OAuthConnectSection({
         <button
           type="button"
           onClick={authorize}
-          disabled={busy}
+          disabled={busy || appsLoading || needsClientId || missingSecret}
+          title={
+            needsClientId
+              ? "Enter your app's Client ID first"
+              : missingSecret
+                ? `${label} needs your app's client secret`
+                : undefined
+          }
           className="btn-accent mb-3 flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Box size={14} />}
@@ -2825,11 +3019,14 @@ function ProtocolButton({
   onClick,
   protocol,
   label,
+  note,
 }: {
   active: boolean;
   onClick: () => void;
   protocol: Protocol;
   label: string;
+  /** Small trailing tag, e.g. "Own app" for a cloud drive with no built-in app. */
+  note?: string;
 }) {
   return (
     <button
@@ -2856,6 +3053,14 @@ function ProtocolButton({
         <BrandIcon icon={protocolIcon(protocol)} size={15} />
       </span>
       <span className="truncate">{label}</span>
+      {note && (
+        <span
+          title="This build has no built-in app for this provider: bring your own app's Client ID"
+          className="ml-auto shrink-0 rounded border border-border px-1 text-[9.5px] font-normal text-text-dim"
+        >
+          {note}
+        </span>
+      )}
     </button>
   );
 }
