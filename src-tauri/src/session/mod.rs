@@ -1969,6 +1969,17 @@ impl SessionManager {
             .cloned()
     }
 
+    /// Ids of every open session of the saved connection `profile_id`.
+    pub async fn ids_for_profile(&self, profile_id: &str) -> Vec<String> {
+        self.sessions
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, s)| s.profile().id == profile_id)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Convenience accessor when the caller specifically needs an SSH session
     /// (e.g. opening a PTY). Returns None if the session is FTP or missing.
     pub async fn get_ssh(&self, id: &str) -> Option<Arc<SshSession>> {

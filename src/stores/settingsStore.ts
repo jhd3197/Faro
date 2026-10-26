@@ -134,6 +134,8 @@ interface SettingsState {
   railExpanded: boolean;
   /** Rail groups the user has folded shut (by group name). */
   railCollapsedGroups: string[];
+  /** Single-pane browser: show a text preview of the selected file. */
+  filePreview: boolean;
 
   // Terminal
   terminalFontSize: number;
@@ -179,6 +181,7 @@ interface SettingsState {
   setRemoteImagePreviews: (v: RemoteImagePreviews) => void;
   setRailExpanded: (v: boolean) => void;
   toggleRailGroup: (name: string) => void;
+  setFilePreview: (v: boolean) => void;
   setTerminalFontSize: (n: number) => void;
   setTerminalFontFamily: (s: string) => void;
   setTerminalTheme: (t: TerminalTheme) => void;
@@ -235,6 +238,7 @@ type Persisted = Omit<
   | "setRemoteImagePreviews"
   | "setRailExpanded"
   | "toggleRailGroup"
+  | "setFilePreview"
   | "setTerminalFontSize"
   | "setTerminalFontFamily"
   | "setTerminalTheme"
@@ -268,12 +272,13 @@ const DEFAULTS: Persisted = {
   showHiddenFiles: true,
   sortField: "name",
   sortDirection: "asc",
-  paneViewMode: "grid",
+  paneViewMode: "details",
   paneDensity: "comfortable",
   browserLayout: "single",
   remoteImagePreviews: "off",
   railExpanded: false,
   railCollapsedGroups: [],
+  filePreview: true,
   terminalFontSize: 13,
   terminalFontFamily:
     '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
@@ -387,6 +392,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setBrowserLayout: (l) => mutate(set, get, "browserLayout", l),
   setRemoteImagePreviews: (v) => mutate(set, get, "remoteImagePreviews", v),
   setRailExpanded: (v) => mutate(set, get, "railExpanded", v),
+  setFilePreview: (v) => mutate(set, get, "filePreview", v),
   toggleRailGroup: (name) => {
     const cur = get().railCollapsedGroups;
     mutate(

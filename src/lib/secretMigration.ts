@@ -30,6 +30,9 @@ const DEFAULT_BUMPS: DefaultBump[] = [
   // .ssh/ are the files that matter — and over FTP they were missing from the
   // listing entirely, so "hidden" read as "not there".
   { rev: 1, key: "showHiddenFiles", from: false, to: true },
+  // r2: details view by default. Sizes, dates and modes are what a server
+  // listing is for; the icon grid hid all three behind a click.
+  { rev: 2, key: "paneViewMode", from: "grid", to: "details" },
 ];
 
 const CURRENT_REVISION = DEFAULT_BUMPS.reduce((max, b) => Math.max(max, b.rev), 0);

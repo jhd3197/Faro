@@ -18,7 +18,14 @@ interface Cell {
   w: number;
   h: number;
   depth: number;
+  /** Index of the top-level item this cell sits under (folder colouring). */
+  top: number;
+  /** A big top-level folder reserves a label strip above its children. */
+  strip: boolean;
 }
+
+/** Height of the name/size strip on large top-level folders. */
+const STRIP_H = 20;
 
 const MAX_DEPTH = 6;
 const PAD = 2;
@@ -79,16 +86,28 @@ function buildCells(
   w: number,
   h: number,
   depth: number,
-  cells: Cell[]
+  cells: Cell[],
+  top = -1,
+  topIndex?: Map<string, number>
 ) {
-  cells.push({ node, x, y, w, h, depth });
-  if (depth >= MAX_DEPTH) return;
   const kids = (node.children ?? []).filter((c) => c.size > 0);
+  // Top-level folders big enough to read get a label strip; their children
+  // tile below it.
+  const strip = depth === 1 && kids.length > 0 && w > 110 && h > 70;
+  cells.push({ node, x, y, w, h, depth, top, strip });
+  if (depth >= MAX_DEPTH) return;
   if (kids.length === 0) return;
+  // Top-level order (largest first) drives the folder palette.
+  if (depth === 0) {
+    topIndex = new Map();
+    [...kids]
+      .sort((a, b) => b.size - a.size)
+      .forEach((k, i) => topIndex!.set(k.path, i));
+  }
   const ix = x + PAD;
-  const iy = y + PAD;
+  const iy = y + PAD + (strip ? STRIP_H : 0);
   const iw = w - PAD * 2;
-  const ih = h - PAD * 2;
+  const ih = h - PAD * 2 - (strip ? STRIP_H : 0);
   if (iw < MIN_SIDE * 2 || ih < MIN_SIDE * 2) return;
   const rects: { node: DuNode; x: number; y: number; w: number; h: number }[] = [];
   splitLayout(
@@ -100,17 +119,23 @@ function buildCells(
     rects
   );
   for (const r of rects) {
+    const t = depth === 0 ? topIndex!.get(r.node.path) ?? 0 : top;
     if (r.w < MIN_SIDE || r.h < MIN_SIDE) {
-      cells.push({ node: r.node, x: r.x, y: r.y, w: r.w, h: r.h, depth: depth + 1 });
+      cells.push({ node: r.node, x: r.x, y: r.y, w: r.w, h: r.h, depth: depth + 1, top: t, strip: false });
     } else {
-      buildCells(r.node, r.x, r.y, r.w, r.h, depth + 1, cells);
+      buildCells(r.node, r.x, r.y, r.w, r.h, depth + 1, cells, t, topIndex);
     }
   }
 }
 
-// Distinct, pleasant hues for the type palette. Files hash their extension onto
-// this ring; directories are drawn as translucent frames, not fills.
+// Distinct hues for the type palette. Files hash their extension onto this
+// ring; directories are drawn as frames, not fills. Kept muted (low chroma) so
+// the map reads as structure, not confetti.
 const TYPE_HUES = [210, 145, 35, 275, 0, 190, 55, 320, 95, 235, 15, 165];
+
+// Folder palette, largest top-level item first: slate blue, teal, ochre, plum,
+// sage, rust, steel, mauve. Everything past the eighth shares a neutral grey.
+export const FOLDER_HUES = [214, 172, 38, 268, 110, 14, 198, 320];
 
 function extHue(name: string): number {
   const dot = name.lastIndexOf(".");
@@ -132,7 +157,7 @@ function rgbVar(name: string): string {
 
 /** Dark vs light per the active theme's background luminance (works across all
  *  the named `data-theme` palettes, not just "dark"/"light"). */
-function isDarkTheme(): boolean {
+export function isDarkTheme(): boolean {
   const v = getComputedStyle(document.documentElement)
     .getPropertyValue("--bg")
     .trim();
@@ -141,16 +166,69 @@ function isDarkTheme(): boolean {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
 }
 
+/** Fill for a top-level item's colour family. `shade` steps lighter with
+ *  depth so nested folders stay distinguishable inside their family. */
+export function folderColor(top: number, shade: number, dark: boolean): string {
+  if (top < 0 || top >= FOLDER_HUES.length) {
+    const l = dark ? 24 + shade * 3 : 80 - shade * 3;
+    return `hsl(220 8% ${l}%)`;
+  }
+  const l = dark ? Math.min(46, 26 + shade * 5) : Math.max(52, 78 - shade * 5);
+  return `hsl(${FOLDER_HUES[top]} 30% ${l}%)`;
+}
+
 function cellFill(cell: Cell, colorMode: ColorMode, dark: boolean): string {
   if (colorMode === "depth") {
     const light = dark
       ? Math.min(60, 22 + cell.depth * 7)
       : Math.max(45, 82 - cell.depth * 7);
-    return `hsl(210 45% ${light}%)`;
+    return `hsl(210 35% ${light}%)`;
   }
+  if (colorMode === "folder") return folderColor(cell.top, cell.depth, dark);
   const hue = extHue(cell.node.name);
-  const l = dark ? 52 : 62;
-  return `hsl(${hue} 55% ${l}%)`;
+  const l = dark ? 44 : 62;
+  return `hsl(${hue} 34% ${l}%)`;
+}
+
+const LABEL_FONT = '500 12px "IBM Plex Sans", "Segoe UI", sans-serif';
+const SIZE_FONT = '400 11px "JetBrains Mono", Consolas, monospace';
+
+/** Name (+ size where there's room) inside a tile, clipped to it. */
+function drawLabel(
+  ctx: CanvasRenderingContext2D,
+  cell: Cell,
+  y: number,
+  ink: string,
+  inkDim: string
+) {
+  const maxW = cell.w - 12;
+  if (maxW < 36) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(cell.x, cell.y, cell.w, cell.h);
+  ctx.clip();
+  ctx.textBaseline = "top";
+  ctx.font = LABEL_FONT;
+  ctx.fillStyle = ink;
+  let name = cell.node.name;
+  if (ctx.measureText(name).width > maxW) {
+    while (name.length > 1 && ctx.measureText(name + "…").width > maxW) name = name.slice(0, -1);
+    name += "…";
+  }
+  ctx.fillText(name, cell.x + 6, y);
+  const nameW = ctx.measureText(name).width;
+  const size = fmtSize(cell.node.size);
+  ctx.font = SIZE_FONT;
+  ctx.fillStyle = inkDim;
+  if (cell.strip) {
+    // Strip: size sits on the same line, after the name.
+    if (nameW + 10 + ctx.measureText(size).width < maxW) {
+      ctx.fillText(size, cell.x + 16 + nameW, y + 1);
+    }
+  } else if (cell.h > 36) {
+    ctx.fillText(size, cell.x + 6, y + 16);
+  }
+  ctx.restore();
 }
 
 export function DiskTreemap({
@@ -235,6 +313,12 @@ export function DiskTreemap({
         ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
         continue;
       }
+      // Folder colouring frames a top-level directory in its family's
+      // darkest shade, so it reads as one coloured block.
+      if (!isLeaf && colorMode === "folder" && cell.depth === 1) {
+        ctx.fillStyle = folderColor(cell.top, 0, dark);
+        ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+      }
       if (isLeaf) {
         ctx.fillStyle = cellFill(cell, colorMode, dark);
         ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
@@ -243,6 +327,20 @@ export function DiskTreemap({
         ctx.lineWidth = 0.5;
         ctx.strokeRect(cell.x + 0.25, cell.y + 0.25, cell.w - 0.5, cell.h - 0.5);
       }
+    }
+
+    // Labels: top-level strips, then any leaf big enough to carry a name.
+    const ink = rgbVar("--text");
+    const inkDim = rgbVar("--text-muted");
+    for (const cell of cells) {
+      if (cell.depth === 0) continue;
+      const isLeaf =
+        cell.node.kind !== "directory" ||
+        !cell.node.children ||
+        cell.node.children.length === 0 ||
+        cell.depth >= MAX_DEPTH;
+      if (cell.strip) drawLabel(ctx, cell, cell.y + PAD + 4, ink, inkDim);
+      else if (isLeaf && cell.w > 64 && cell.h > 22) drawLabel(ctx, cell, cell.y + 5, ink, inkDim);
     }
 
     // Highlight the hovered cell.

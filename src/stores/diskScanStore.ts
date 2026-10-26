@@ -12,7 +12,9 @@ import type {
 } from "@/lib/types";
 
 // How the treemap colours its cells.
-export type ColorMode = "type" | "depth";
+/** folder: one muted hue per top-level item (what is eating the space);
+ *  type: by file extension; depth: nesting level. */
+export type ColorMode = "folder" | "type" | "depth";
 
 interface DiskScanStoreState {
   /** Whether the Disk Usage explorer overlay is open. */
@@ -128,7 +130,7 @@ export const useDiskScan = create<DiskScanStoreState>((set, get) => ({
   note: null,
   tree: null,
   crumbs: [],
-  colorMode: "type",
+  colorMode: "folder",
   unlisten: null,
 
   openFor: async (sessionId, path) => {

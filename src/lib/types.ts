@@ -928,6 +928,22 @@ export interface ApprovalPolicy {
   allowSudo: boolean;
 }
 
+/** How much the agent may do for one class of operation on one server. */
+export type AccessLevel = "off" | "ask" | "auto";
+
+/** Per-server agent access from the access matrix (keyed by profile id). */
+export interface ProfileAccess {
+  /** list, read, search. */
+  read: AccessLevel;
+  /** Uploads, downloads, deletes, renames, syncs. */
+  write: AccessLevel;
+  /** Shell commands. */
+  exec: AccessLevel;
+  /** off: sudo prompts are never answered · ask: sudo always prompts ·
+   *  auto: sudo follows `exec`. */
+  sudo: AccessLevel;
+}
+
 export interface BridgeStatus {
   running: boolean;
   /** Master on/off switch (persisted, default off). When false nothing listens. */
@@ -937,6 +953,10 @@ export interface BridgeStatus {
   token: string | null;
   enabledSessions: string[];
   policy: ApprovalPolicy;
+  /** Profiles granted access (persisted), including offline ones. */
+  enabledProfiles: string[];
+  /** Explicit per-server levels; absent profiles use the policy defaults. */
+  profileAccess: Record<string, ProfileAccess>;
 }
 
 export interface BridgeContext {

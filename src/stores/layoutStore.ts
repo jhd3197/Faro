@@ -30,6 +30,12 @@ interface LayoutState {
   setConsoleOpen: (open: boolean) => void;
   toggleConsole: () => void;
 
+  // The agent panel docked on the right of the file browser (pending
+  // approvals, access for the focused server, live activity).
+  agentDrawerOpen: boolean;
+  setAgentDrawerOpen: (open: boolean) => void;
+  toggleAgentDrawer: () => void;
+
   dialog: AppDialog | null;
   openDialog: (d: AppDialog) => void;
   closeDialog: () => void;
@@ -74,6 +80,10 @@ export const useLayout = create<LayoutState>((set) => ({
   consoleOpen: false,
   setConsoleOpen: (open) => set({ consoleOpen: open }),
   toggleConsole: () => set((s) => ({ consoleOpen: !s.consoleOpen })),
+
+  agentDrawerOpen: false,
+  setAgentDrawerOpen: (open) => set({ agentDrawerOpen: open }),
+  toggleAgentDrawer: () => set((s) => ({ agentDrawerOpen: !s.agentDrawerOpen })),
 
   dialog: null,
   openDialog: (d) => set({ dialog: d }),

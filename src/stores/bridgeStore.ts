@@ -13,6 +13,7 @@ import type {
   BridgeApproval,
   ApprovalDecision,
   ApprovalPolicy,
+  ProfileAccess,
   AgentConsoleEntry,
   SavedCommand,
 } from "@/lib/types";
@@ -29,6 +30,8 @@ const EMPTY: BridgeStatus = {
   token: null,
   enabledSessions: [],
   policy: { allowAll: false, autoRead: false, autoSafeExec: false, allowSudo: false },
+  enabledProfiles: [],
+  profileAccess: {},
 };
 
 interface BridgeStoreState {
@@ -46,6 +49,8 @@ interface BridgeStoreState {
   setEnabled: (enabled: boolean) => Promise<void>;
   setSessionAccess: (sessionId: string, enabled: boolean) => Promise<void>;
   setPolicy: (policy: ApprovalPolicy) => Promise<void>;
+  /** Set one server's levels (works offline; all-off revokes the grant). */
+  setProfileAccess: (profileId: string, access: ProfileAccess) => Promise<void>;
   respond: (requestId: string, decision: ApprovalDecision) => Promise<void>;
   clearConsole: () => void;
   // History (in-memory activity log, last 200).
@@ -208,6 +213,28 @@ export const useBridge = create<BridgeStoreState>((set, get) => ({
       set({ status });
     } catch (e) {
       toast.error("Couldn't update auto-approve policy", String(e));
+      void get().refresh();
+    }
+  },
+
+  setProfileAccess: async (profileId, access) => {
+    // Optimistic, like setPolicy: the matrix cell flips immediately.
+    set((s) => {
+      const granted = [access.read, access.write, access.exec].some(
+        (l) => l !== "off"
+      );
+      const profileAccess = { ...s.status.profileAccess };
+      if (granted) profileAccess[profileId] = access;
+      else delete profileAccess[profileId];
+      const enabledProfiles = granted
+        ? Array.from(new Set([...s.status.enabledProfiles, profileId]))
+        : s.status.enabledProfiles.filter((id) => id !== profileId);
+      return { status: { ...s.status, profileAccess, enabledProfiles } };
+    });
+    try {
+      set({ status: await ipc.bridgeSetProfileAccess(profileId, access) });
+    } catch (e) {
+      toast.error("Couldn't update agent access", String(e));
       void get().refresh();
     }
   },

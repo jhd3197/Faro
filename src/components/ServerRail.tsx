@@ -51,6 +51,8 @@ import { ServerSites, leaveSiteNavigation } from "./ServerSites";
 import { useSites } from "@/stores/sitesStore";
 import { toastError } from "@/lib/errors";
 import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
+import { effectiveAccess, accessSummary } from "@/lib/agentAccess";
+import type { ProfileAccess } from "@/lib/types";
 
 type RowState = "focused" | "connected" | "connecting" | "error" | "idle";
 
@@ -60,7 +62,7 @@ const GROUP_ORDER: Protocol[] = ["sftp", "ftps", "ftp", "s3", "azure", "gcs", "w
 
 const fallbackColor = "rgb(var(--accent))";
 
-function profileAddress(p: ConnectionProfile): string {
+export function profileAddress(p: ConnectionProfile): string {
   if (p.protocol === "s3") return `s3://${p.bucket ?? "?"}`;
   if (p.protocol === "azure") return `az://${p.account ?? "?"}/${p.bucket ?? "?"}`;
   if (p.protocol === "gcs") return `gs://${p.bucket ?? "?"}`;
@@ -135,6 +137,8 @@ export function ServerRail() {
 
   const enabledSessions = useBridge((s) => s.status.enabledSessions);
   const bridgeRunning = useBridge((s) => s.status.running);
+  const bridgeStatus = useBridge((s) => s.status);
+  const approvals = useBridge((s) => s.approvals);
   const setSessionAccess = useBridge((s) => s.setSessionAccess);
   const startBridge = useBridge((s) => s.start);
   const stopBridge = useBridge((s) => s.stop);
@@ -255,6 +259,24 @@ export function ServerRail() {
     }
     return set;
   }, [enabledSessions, sessions]);
+
+  // Agent state per server: the levels it was granted (null = no access) and
+  // how many approvals are waiting on it — the rail's amber dot and red badge.
+  const agentOf = (id: string): ProfileAccess | null =>
+    bridgeStatus.enabledProfiles.includes(id)
+      ? effectiveAccess(bridgeStatus, id)
+      : null;
+  const grantedCount = bridgeStatus.enabledProfiles.filter((id) =>
+    profiles.some((p) => p.id === id)
+  ).length;
+  const pendingByProfile = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of approvals) {
+      const pid = sessions.find((s) => s.sessionId === a.sessionId)?.profileId;
+      if (pid) m.set(pid, (m.get(pid) ?? 0) + 1);
+    }
+    return m;
+  }, [approvals, sessions]);
 
   // Manual drag-and-drop order first (sortOrder), then the learnable default
   // (protocol group, name) for profiles that have never been dragged.
@@ -569,20 +591,6 @@ export function ServerRail() {
   };
 
   // ---- Agent Bridge section ----
-  const bridgeSessions = useMemo(
-    () =>
-      enabledSessions
-        .map((sid) => {
-          const sess = sessions.find((s) => s.sessionId === sid);
-          const profile = sess
-            ? profiles.find((p) => p.id === sess.profileId)
-            : undefined;
-          return profile ? { sid, profile } : null;
-        })
-        .filter((x): x is { sid: string; profile: ConnectionProfile } => !!x),
-    [enabledSessions, sessions, profiles]
-  );
-
   const masterBridgeMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     openMenuAt(e, [
@@ -595,27 +603,6 @@ export function ServerRail() {
       bridgeRunning
         ? { label: "Stop bridge", icon: <Power size={14} />, onClick: stopBridge }
         : { label: "Start bridge", icon: <Power size={14} />, onClick: startBridge },
-    ]);
-  };
-
-  const bridgeSessionMenu = (
-    e: React.MouseEvent,
-    sid: string
-  ) => {
-    e.preventDefault();
-    openMenuAt(e, [
-      {
-        label: "Open bridge panel",
-        icon: <Shield size={14} />,
-        onClick: () => openDialog("agentBridge"),
-        separatorAfter: true,
-      },
-      {
-        label: "Disable agent access",
-        icon: <X size={14} />,
-        destructive: true,
-        onClick: () => setSessionAccess(sid, false),
-      },
     ]);
   };
 
@@ -632,6 +619,8 @@ export function ServerRail() {
       profile={p}
       state={rowState(p)}
       bridged={bridgedIds.has(p.id)}
+      agent={agentOf(p.id)}
+      pending={pendingByProfile.get(p.id) ?? 0}
       expanded={expanded}
       dragging={dragId === p.id}
       onClick={(e) => onBubbleClick(e, p)}
@@ -741,10 +730,26 @@ export function ServerRail() {
               {sections.groups.map(([name, items]) => {
                 const collapsed = collapsedGroups.includes(name);
                 return (
-                  <Fragment key={name}>
+                  // An open folder sits in a tinted strip (Discord-style) so its
+                  // members read as one unit; a closed one is a single tile.
+                  <div
+                    key={name}
+                    className={cn(
+                      "flex flex-col items-center gap-1.5",
+                      collapsed
+                        ? "w-full"
+                        : cn(
+                            "rounded-2xl bg-bg-panel pb-1 ring-1 ring-border-subtle",
+                            expanded ? "w-[calc(100%-0.75rem)]" : "w-[58px]"
+                          )
+                    )}
+                  >
                     <RailGroupHeader
                       name={name}
                       count={items.length}
+                      members={items}
+                      agentAny={items.some((p) => bridgeStatus.enabledProfiles.includes(p.id))}
+                      pending={items.reduce((n, p) => n + (pendingByProfile.get(p.id) ?? 0), 0)}
                       collapsed={collapsed}
                       expanded={expanded}
                       isDropTarget={
@@ -763,7 +768,7 @@ export function ServerRail() {
                         target={{ kind: "sectionEnd", group: name }}
                       />
                     )}
-                  </Fragment>
+                  </div>
                 );
               })}
             </>
@@ -781,7 +786,20 @@ export function ServerRail() {
           >
             <RailRow
               expanded={expanded}
-              tooltip={`Agent Bridge — ${bridgeRunning ? "running" : "stopped"}`}
+              tooltip={
+                <span className="flex flex-col gap-0.5 text-left">
+                  <span className="font-semibold text-text">Agent Bridge</span>
+                  <span className="text-[10px] text-text-dim">
+                    {bridgeRunning ? "running" : "off"} · {grantedCount} server
+                    {grantedCount === 1 ? "" : "s"} with access
+                  </span>
+                  {approvals.length > 0 && (
+                    <span className="text-[10px] text-danger">
+                      {approvals.length} waiting for you
+                    </span>
+                  )}
+                </span>
+              }
               onClick={() => openDialog("agentBridge")}
               onContextMenu={masterBridgeMenu}
               ariaLabel="Agent Bridge"
@@ -789,34 +807,29 @@ export function ServerRail() {
                 <span
                   className={cn(
                     "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-bg-subtle transition-colors group-hover:bg-bg-hover",
-                    bridgeRunning ? "text-success" : "text-text-dim group-hover:text-text"
+                    bridgeRunning ? "text-accent" : "text-text-dim group-hover:text-text"
                   )}
                 >
                   <Radio size={19} />
-                  <StatusDot kind={bridgeRunning ? "connected" : "idle"} />
+                  {approvals.length > 0 ? (
+                    <PendingBadge count={approvals.length} />
+                  ) : (
+                    <StatusDot kind={bridgeRunning ? "connected" : "idle"} />
+                  )}
                 </span>
               }
               label={
                 <span className="flex flex-col text-left">
                   <span className="text-[13px] font-medium text-text">Agent Bridge</span>
-                  <span className="text-[10px] text-text-dim">
-                    {bridgeRunning ? "running" : "stopped"}
+                  <span className="truncate text-[10px] text-text-dim">
+                    {bridgeRunning
+                      ? `${grantedCount} server${grantedCount === 1 ? "" : "s"} · running`
+                      : "off"}
                   </span>
                 </span>
               }
             />
           </div>
-
-          {bridgeSessions.map(({ sid, profile }) => (
-            <BridgeBubble
-              key={sid}
-              profile={profile}
-              focused={sid === activeSessionId}
-              expanded={expanded}
-              onClick={() => setActiveSession(sid)}
-              onContextMenu={(e) => bridgeSessionMenu(e, sid)}
-            />
-          ))}
         </div>
       </div>
 
@@ -987,6 +1000,8 @@ function RailBubble({
   profile: p,
   state,
   bridged,
+  agent,
+  pending,
   expanded,
   dragging,
   onClick,
@@ -996,6 +1011,10 @@ function RailBubble({
   profile: ConnectionProfile;
   state: RowState;
   bridged: boolean;
+  /** Levels granted to the agent on this server; null = no access. */
+  agent: ProfileAccess | null;
+  /** Agent requests waiting for approval on this server. */
+  pending: number;
   expanded: boolean;
   dragging: boolean;
   onClick: (e: React.MouseEvent) => void;
@@ -1032,37 +1051,46 @@ function RailBubble({
         plaintext && !isError && "ring-1 ring-warning/50"
       )}
     >
-      {customBrand ? (
-        <span style={{ color }}>
-          <BrandIcon icon={customBrand} size={20} />
-        </span>
-      ) : (
-        <span style={{ color }} className={customText ? "text-[16px]" : undefined}>
-          {customText ?? monogram(p.name)}
-        </span>
-      )}
+      {/* Saved-but-offline servers dim their glyph so the open ones read at a
+          glance down a long rail. */}
+      <span
+        className={cn(
+          "flex items-center justify-center transition-opacity",
+          !connected && !connecting && !isError && "opacity-55 group-hover:opacity-90"
+        )}
+      >
+        {customBrand ? (
+          <span style={{ color }}>
+            <BrandIcon icon={customBrand} size={20} />
+          </span>
+        ) : (
+          <span style={{ color }} className={customText ? "text-[16px]" : undefined}>
+            {customText ?? monogram(p.name)}
+          </span>
+        )}
+      </span>
       {/* Protocol brand mark — a small top-left chip that says "S3 / Azure / SSH
           / a Faro agent" at a glance. The colour monogram stays the connection's
           primary identity; this only adds recognizability, never replaces it. */}
       <span className="absolute -left-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-bg text-text-muted ring-1 ring-border">
         <BrandIcon icon={protocolIcon(p.protocol)} size={11} />
       </span>
-      <StatusDot
-        kind={
-          connected
-            ? "connected"
-            : connecting
-              ? "connecting"
-              : isError
-                ? "error"
-                : "idle"
-        }
-      />
-      {bridged && (
-        <span className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-bg text-success">
-          <Shield size={9} />
-        </span>
+      {pending > 0 ? (
+        <PendingBadge count={pending} />
+      ) : (
+        <StatusDot
+          kind={
+            connected
+              ? "connected"
+              : connecting
+                ? "connecting"
+                : isError
+                  ? "error"
+                  : "idle"
+          }
+        />
       )}
+      {agent && <AgentDot />}
     </span>
   );
 
@@ -1100,8 +1128,18 @@ function RailBubble({
             {route && <span className="text-[10px] text-text-dim">{route}</span>}
             <span className="text-[10px] text-text-dim">
               {PROTOCOL_LABEL[p.protocol]}
-              {bridged ? " · bridged" : ""}
+              {bridged ? " · agent connected" : ""}
             </span>
+            {agent && (
+              <span className="mt-0.5 border-t border-border pt-1 text-[10px] text-accent">
+                Agent: {accessSummary(agent)}
+              </span>
+            )}
+            {pending > 0 && (
+              <span className="text-[10px] text-danger">
+                {pending} request{pending === 1 ? "" : "s"} waiting for you
+              </span>
+            )}
           </span>
         }
         bubble={bubble}
@@ -1158,6 +1196,9 @@ function DropStrip({
 function RailGroupHeader({
   name,
   count,
+  members,
+  agentAny,
+  pending,
   collapsed,
   expanded,
   isDropTarget,
@@ -1166,17 +1207,83 @@ function RailGroupHeader({
 }: {
   name: string;
   count: number;
+  members: ConnectionProfile[];
+  /** Any member is open to the agent → amber dot on the closed folder tile. */
+  agentAny: boolean;
+  /** Approvals waiting across the members → red count on the folder tile. */
+  pending: number;
   collapsed: boolean;
   expanded: boolean;
   isDropTarget: boolean;
   onToggle: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
+  const label = `${name} group, ${count} server${count === 1 ? "" : "s"}`;
+  if (collapsed) {
+    // Closed folder: one 44px tile with a 2×2 grid of member colours, same
+    // height in both rail modes (see RailRow's note).
+    const tile = (
+      <span
+        className={cn(
+          "relative grid h-11 w-11 shrink-0 grid-cols-2 gap-[3px] rounded-xl bg-bg-subtle p-[7px] transition-colors group-hover:bg-bg-hover",
+          isDropTarget && "ring-2 ring-accent"
+        )}
+      >
+        {[0, 1, 2, 3].map((i) => (
+          <span
+            key={i}
+            className="rounded-[3px]"
+            style={{
+              background: members[i]
+                ? members[i].color || fallbackColor
+                : "transparent",
+              opacity: members[i] ? 0.9 : 0,
+            }}
+          />
+        ))}
+        {pending > 0 ? <PendingBadge count={pending} /> : null}
+        {agentAny && <AgentDot />}
+      </span>
+    );
+    return (
+      <div
+        data-rail-group={name}
+        className={cn(
+          "group relative flex w-full items-center",
+          expanded ? "justify-start pr-2" : "justify-center"
+        )}
+      >
+        <RailRow
+          expanded={expanded}
+          onClick={onToggle}
+          onContextMenu={onContextMenu}
+          ariaLabel={label}
+          tooltip={
+            <span className="flex flex-col gap-0.5 text-left">
+              <span className="font-semibold text-text">{name}</span>
+              <span className="text-[10px] text-text-dim">
+                {count} server{count === 1 ? "" : "s"} · click to open
+              </span>
+            </span>
+          }
+          bubble={tile}
+          label={
+            <span className="flex flex-col">
+              <span className="truncate text-[13px] font-medium text-text">{name}</span>
+              <span className="text-[10px] text-text-dim">
+                {count} server{count === 1 ? "" : "s"}
+              </span>
+            </span>
+          }
+        />
+      </div>
+    );
+  }
   const btn = (
     <button
       onClick={onToggle}
       onContextMenu={onContextMenu}
-      aria-label={`${name} group, ${count} server${count === 1 ? "" : "s"}`}
+      aria-label={label}
       aria-expanded={!collapsed}
       className={cn(
         "flex h-6 items-center rounded-md text-text-dim transition-colors hover:bg-bg-hover hover:text-text",
@@ -1294,66 +1401,28 @@ function GroupNameDialog({
   );
 }
 
-// A bridged session, shown in the Agent Bridge section. Deliberately distinct
-// from a connection bubble (squarer, green ring, shield) so it never reads as a
-// plain server.
-function BridgeBubble({
-  profile: p,
-  focused,
-  expanded,
-  onClick,
-  onContextMenu,
-}: {
-  profile: ConnectionProfile;
-  focused: boolean;
-  expanded: boolean;
-  onClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
-}) {
-  const bubble = (
-    <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-bg-subtle text-[12px] font-bold leading-none ring-1 ring-success transition-colors group-hover:bg-bg-hover">
-      <span className="text-success">{monogram(p.name)}</span>
-      <span className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-bg text-success">
-        <Shield size={9} />
-      </span>
+// Amber corner dot (top-right): the agent has access to this server.
+function AgentDot() {
+  return (
+    <span
+      aria-hidden
+      className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-bg"
+    >
+      <span className="h-2 w-2 rounded-full bg-accent" />
     </span>
   );
+}
+
+// Red count (bottom-right, over the status dot): agent requests waiting on
+// the user. Same slot as the status dot so a busy rail never stacks badges.
+function PendingBadge({ count }: { count: number }) {
   return (
-    <div
-      className={cn(
-        "group relative flex w-full items-center",
-        expanded ? "justify-start pr-2" : "justify-center"
-      )}
+    <span
+      aria-label={`${count} waiting for approval`}
+      className="absolute -bottom-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold leading-none text-bg ring-2 ring-bg"
     >
-      <span
-        aria-hidden
-        className={cn(
-          "absolute left-0 top-1/2 w-1 -translate-y-1/2 rounded-r-full bg-success transition-all duration-150 motion-reduce:transition-none",
-          focused ? "h-6" : "h-2 group-hover:h-4"
-        )}
-      />
-      <RailRow
-        expanded={expanded}
-        onClick={onClick}
-        onContextMenu={onContextMenu}
-        ariaLabel={`${p.name} (bridged)`}
-        tooltip={
-          <span className="flex flex-col gap-0.5 text-left">
-            <span className="font-semibold text-text">{p.name}</span>
-            <span className="text-[10px] text-success">· bridged</span>
-          </span>
-        }
-        bubble={bubble}
-        label={
-          <span className="flex flex-col">
-            <span className="truncate text-[13px] font-medium text-text">
-              {p.name}
-            </span>
-            <span className="text-[10px] text-success">bridged</span>
-          </span>
-        }
-      />
-    </div>
+      {count}
+    </span>
   );
 }
 

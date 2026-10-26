@@ -213,7 +213,7 @@ export function TitleBar() {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-bg-panel px-2"
+      className="relative flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-bg-panel px-2"
     >
       {frameStyle === "macos" && <TrafficLights {...controls} />}
       <Logo />
@@ -230,6 +230,22 @@ export function TitleBar() {
       <MenuBar menus={menus} />
 
       <div className="flex-1" data-tauri-drag-region />
+
+      {/* Command palette entry, centred on the window (not the leftover
+          space) so it sits still as menus/controls change width. Hidden on
+          narrow windows where it would collide with the menu bar. */}
+      <button
+        onClick={togglePalette}
+        className="absolute left-1/2 hidden h-6 w-[22rem] max-w-[34vw] -translate-x-1/2 items-center gap-2 rounded-md border border-border bg-bg px-2 text-[12px] text-text-dim hover:border-text-dim/50 hover:text-text-muted md:flex"
+        title="Command palette"
+      >
+        <Search size={12} className="shrink-0" />
+        <span className="truncate">Go to server, path or command</span>
+        <span className="flex-1" />
+        <kbd className="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-text-dim">
+          {formatCombo("mod+k")}
+        </kbd>
+      </button>
 
       {/* Light/dark now lives in Settings → Appearance (Mode); the View menu
           item + Ctrl+Shift+T still toggle it for quick access. */}

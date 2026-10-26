@@ -42,6 +42,7 @@ import type {
   BridgeApproval,
   ApprovalDecision,
   ApprovalPolicy,
+  ProfileAccess,
   AgentExecStart,
   AgentOutput,
   SavedCommand,
@@ -218,6 +219,9 @@ export const ipc = {
   // Base64 of a small local file, for image thumbnails in the grid view.
   readFilePreview: (sessionId: SessionId, path: string) =>
     invoke<string>("read_file_preview", { sessionId, path }),
+  /** First `maxBytes` (capped at 256 KiB) of a file, base64 — any backend. */
+  readFileHead: (sessionId: SessionId, path: string, maxBytes: number) =>
+    invoke<string>("read_file_head", { sessionId, path, maxBytes }),
 
   // Base64 of a Rust-decoded+downscaled thumbnail for a remote (or local) image
   // (Plan 13 Phase 1). `signal` is the file's change token (an object-store ETag
@@ -439,6 +443,8 @@ export const ipc = {
     invoke<BridgeStatus>("bridge_set_session_access", { sessionId, enabled }),
   bridgeSetPolicy: (policy: ApprovalPolicy) =>
     invoke<BridgeStatus>("bridge_set_policy", { policy }),
+  bridgeSetProfileAccess: (profileId: string, access: ProfileAccess) =>
+    invoke<BridgeStatus>("bridge_set_profile_access", { profileId, access }),
   bridgeSetActiveSession: (sessionId: SessionId | null) =>
     invoke<void>("bridge_set_active_session", { sessionId }),
   bridgeRegisterMcp: (url: string, token: string) =>

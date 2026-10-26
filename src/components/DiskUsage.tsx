@@ -26,7 +26,7 @@ import {
   type MenuItem,
 } from "@faro/file-ui";
 import { cn } from "@/lib/cn";
-import { DiskTreemap } from "./DiskTreemap";
+import { DiskTreemap, folderColor, isDarkTheme } from "./DiskTreemap";
 
 /** Parent directory of a POSIX/Windows path (its own root when at top). */
 function parentDir(p: string): string {
@@ -137,8 +137,9 @@ function DiskUsage() {
   const current = resolveNode(tree, crumbs);
   const scanning = state === "scanning";
 
-  return createPortal(
-    <div className="anim-modal fixed inset-0 z-modal flex flex-col bg-bg">
+  // Opens inside the work area (the rail stays usable), not over the window.
+  return (
+    <div className="absolute inset-0 z-[6] flex flex-col bg-bg">
       {/* Header */}
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-bg-panel px-3 py-2">
         <HardDrive size={15} className="shrink-0 text-accent" />
@@ -192,16 +193,38 @@ function DiskUsage() {
           </span>
         )}
 
-        <button
-          onClick={() =>
-            setColorMode(colorMode === "type" ? "depth" : "type")
-          }
-          className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text"
-          title="Toggle treemap colouring (by file type / by depth)"
+        <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-text-dim">
+          <Palette size={12} /> Colour
+        </span>
+        <div
+          role="radiogroup"
+          aria-label="Treemap colouring"
+          className="flex h-6 shrink-0 overflow-hidden rounded-md border border-border text-[11px]"
         >
-          <Palette size={12} />
-          {colorMode === "type" ? "By type" : "By depth"}
-        </button>
+          {(
+            [
+              ["folder", "Folder"],
+              ["type", "Type"],
+              ["depth", "Depth"],
+            ] as const
+          ).map(([m, label], i) => (
+            <button
+              key={m}
+              role="radio"
+              aria-checked={colorMode === m}
+              onClick={() => setColorMode(m)}
+              className={cn(
+                "px-2.5 [&:active]:scale-100",
+                i > 0 && "border-l border-border",
+                colorMode === m
+                  ? "bg-bg-hover font-medium text-text"
+                  : "text-text-dim hover:text-text"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
         {scanning ? (
           <button
@@ -333,8 +356,7 @@ function DiskUsage() {
           }}
         />
       )}
-    </div>,
-    document.body
+    </div>
   );
 }
 
@@ -352,9 +374,45 @@ function RankedList({
   const children = node?.children ?? [];
   const parentSize = node?.size ?? 0;
   const shown = children.slice(0, MAX_ROWS);
+  // Composition: the three biggest items + everything else, coloured like
+  // their treemap families (largest first, matching FOLDER_HUES order).
+  const bySize = [...children].sort((a, b) => b.size - a.size);
+  const top3 = bySize.slice(0, 3);
+  const rest = bySize.slice(3);
+  const restSize = rest.reduce((n, c) => n + c.size, 0);
+  const dark = isDarkTheme();
+  const parts = [
+    ...top3.map((c, i) => ({ label: c.name, size: c.size, color: folderColor(i, 1, dark) })),
+    ...(restSize > 0
+      ? [{ label: `${rest.length} other${rest.length === 1 ? "" : "s"}`, size: restSize, color: folderColor(99, 2, dark) }]
+      : []),
+  ];
 
   return (
     <div className="flex w-80 shrink-0 flex-col bg-bg-panel">
+      {parentSize > 0 && parts.length > 0 && (
+        <div className="flex shrink-0 flex-col gap-2 border-b border-border px-3 pb-3 pt-2.5">
+          <span className="text-[12px] font-semibold">What's using the space</span>
+          <div className="flex h-2 gap-[2px] overflow-hidden rounded-sm">
+            {parts.map((pt) => (
+              <span
+                key={pt.label}
+                title={`${pt.label} · ${fmtSize(pt.size)}`}
+                style={{ width: `${Math.max(1.5, (pt.size / parentSize) * 100)}%`, background: pt.color }}
+              />
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px] text-text-muted">
+            {parts.map((pt) => (
+              <span key={pt.label} className="flex min-w-0 items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: pt.color }} />
+                <span className="min-w-0 flex-1 truncate">{pt.label}</span>
+                <span className="shrink-0 font-mono text-[11px] text-text">{fmtSize(pt.size)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="flex shrink-0 items-center justify-between border-b border-border bg-bg-subtle px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
         <span>Biggest items</span>
         <span>{children.length.toLocaleString()}</span>
@@ -396,7 +454,7 @@ function RankedList({
                     className="shrink-0"
                   />
                 ) : (
-                  <Folder size={14} className="shrink-0 text-accent" />
+                  <Folder size={14} className="shrink-0 text-text-dim" />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2">
@@ -406,9 +464,9 @@ function RankedList({
                     </span>
                   </div>
                   {/* Percentage-of-parent bar */}
-                  <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-bg-subtle">
+                  <div className="mt-1 h-[3px] w-full overflow-hidden rounded-full bg-bg-subtle">
                     <div
-                      className="h-full rounded-full bg-accent"
+                      className="h-full rounded-full bg-text-dim/70"
                       style={{ width: `${Math.max(1, pct)}%` }}
                     />
                   </div>

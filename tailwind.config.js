@@ -48,6 +48,7 @@ export default {
       },
       fontFamily: {
         sans: [
+          '"IBM Plex Sans"',
           "Inter",
           "-apple-system",
           "BlinkMacSystemFont",
