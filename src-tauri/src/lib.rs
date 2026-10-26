@@ -13,7 +13,7 @@ pub mod bridge;
 pub mod commands;
 mod agent_host;
 mod app_updater;
-mod cli_updater;
+pub mod cli_updater;
 pub mod credentials;
 pub mod db;
 mod deeplink;
@@ -473,23 +473,19 @@ pub fn run() {
             virtualfs::virtualfs_status,
             virtualfs::virtualfs_free_up_space,
             diskscan::diskscan_start,
-            diskscan::diskscan_status,
             diskscan::diskscan_tree,
             diskscan::diskscan_cancel,
             diskscan::diskscan_forget,
             diff::diff_start,
-            diff::diff_status,
             diff::diff_result,
             diff::diff_cancel,
             diff::diff_forget,
             dedupe::dedupe_start,
-            dedupe::dedupe_status,
             dedupe::dedupe_result,
             dedupe::dedupe_cancel,
             dedupe::dedupe_forget,
             dedupe::dedupe_delete,
             search::search_start,
-            search::search_status,
             search::search_result,
             search::search_cancel,
             search::search_forget,

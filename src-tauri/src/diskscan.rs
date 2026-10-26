@@ -672,18 +672,6 @@ pub async fn diskscan_start(
     Ok(mgr.start(session_id, path, session, fs, app).await)
 }
 
-#[tauri::command]
-pub async fn diskscan_status(
-    scan_id: String,
-    state: State<'_, AppState>,
-) -> Result<ScanSnapshot, String> {
-    state
-        .diskscan
-        .snapshot(&scan_id)
-        .await
-        .ok_or_else(|| format!("scan {scan_id} not found"))
-}
-
 /// Full snapshot including the aggregated `tree` (present once the scan is done).
 #[tauri::command]
 pub async fn diskscan_tree(

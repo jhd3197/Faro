@@ -328,7 +328,6 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // id, and the store immediately reads diskScanTree, which reports "done".
     case "diskscan_start":
       return "scan-1";
-    case "diskscan_status":
     case "diskscan_tree":
       return data.diskScanSnapshot;
     case "diskscan_cancel":

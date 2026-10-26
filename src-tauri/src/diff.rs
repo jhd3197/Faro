@@ -775,15 +775,6 @@ pub async fn diff_start(
         .await)
 }
 
-#[tauri::command]
-pub async fn diff_status(diff_id: String, state: State<'_, AppState>) -> Result<DiffSnapshot, String> {
-    state
-        .diff
-        .snapshot(&diff_id)
-        .await
-        .ok_or_else(|| format!("diff {diff_id} not found"))
-}
-
 /// Full snapshot including the `result` (present once the diff is done).
 #[tauri::command]
 pub async fn diff_result(diff_id: String, state: State<'_, AppState>) -> Result<DiffSnapshot, String> {

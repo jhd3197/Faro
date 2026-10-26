@@ -1449,15 +1449,6 @@ pub async fn search_start(
     Ok(mgr.start(session_id, path, query, fs, session, app).await)
 }
 
-#[tauri::command]
-pub async fn search_status(search_id: String, state: State<'_, AppState>) -> Result<SearchSnapshot, String> {
-    state
-        .search
-        .snapshot(&search_id, false)
-        .await
-        .ok_or_else(|| format!("search {search_id} not found"))
-}
-
 /// Full snapshot including the `hits` (present once the search is done).
 #[tauri::command]
 pub async fn search_result(search_id: String, state: State<'_, AppState>) -> Result<SearchSnapshot, String> {

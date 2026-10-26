@@ -555,9 +555,6 @@ export const ipc = {
   /** Kick off a recursive size scan of `path` on a session; returns a scan id. */
   diskScanStart: (sessionId: SessionId, path: string) =>
     invoke<string>("diskscan_start", { sessionId, path }),
-  /** Lightweight status (live counts while scanning). */
-  diskScanStatus: (scanId: string) =>
-    invoke<ScanSnapshot>("diskscan_status", { scanId }),
   /** Full snapshot including the aggregated tree (present once done). */
   diskScanTree: (scanId: string) =>
     invoke<ScanSnapshot>("diskscan_tree", { scanId }),
@@ -577,9 +574,6 @@ export const ipc = {
     hash: boolean
   ) =>
     invoke<string>("diff_start", { sessionA, pathA, sessionB, pathB, hash }),
-  /** Lightweight status (live counts while comparing). */
-  diffStatus: (diffId: string) =>
-    invoke<DiffSnapshot>("diff_status", { diffId }),
   /** Full snapshot including the result (present once done). */
   diffResult: (diffId: string) =>
     invoke<DiffSnapshot>("diff_result", { diffId }),
@@ -591,9 +585,6 @@ export const ipc = {
    *  returns a dedupe id. `hash` groups by content instead of name+size. */
   dedupeStart: (sessionId: SessionId, path: string, hash: boolean) =>
     invoke<string>("dedupe_start", { sessionId, path, hash }),
-  /** Lightweight status (live counts while scanning). */
-  dedupeStatus: (dedupeId: string) =>
-    invoke<DedupeSnapshot>("dedupe_status", { dedupeId }),
   /** Full snapshot including the result (present once done). */
   dedupeResult: (dedupeId: string) =>
     invoke<DedupeSnapshot>("dedupe_result", { dedupeId }),
@@ -610,9 +601,6 @@ export const ipc = {
   /** Start a fleet search under `path` on a session; returns a search id. */
   searchStart: (sessionId: SessionId, path: string, query: SearchQuery) =>
     invoke<string>("search_start", { sessionId, path, query }),
-  /** Lightweight status (live counts while searching). */
-  searchStatus: (searchId: string) =>
-    invoke<SearchSnapshot>("search_status", { searchId }),
   /** Full snapshot including the hit list (present once done). */
   searchResult: (searchId: string) =>
     invoke<SearchSnapshot>("search_result", { searchId }),

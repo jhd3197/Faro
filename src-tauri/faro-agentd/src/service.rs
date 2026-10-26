@@ -16,7 +16,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
-const SERVICE_NAME: &str = "faro-agentd";
+#[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "com.juandenis.faro-agentd";
 const TASK_NAME: &str = "FaroAgent";
 

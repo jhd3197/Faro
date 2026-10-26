@@ -188,19 +188,7 @@ fn locate_cli() -> Option<PathBuf> {
         }
     }
     // 2) On PATH.
-    let finder = if cfg!(windows) { "where" } else { "which" };
-    let out = std::process::Command::new(finder)
-        .arg("faro-cli")
-        .no_console_window()
-        .output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|l| l.trim())
-        .find(|l| !l.is_empty())
-        .map(PathBuf::from)
+    crate::path_integration::which_faro_cli()
 }
 
 /// `<cli> self-update` — the CLI does the GitHub download + in-place swap.
@@ -226,7 +214,8 @@ async fn run_self_update(path: &std::path::Path) -> Result<String, String> {
 }
 
 /// The release asset name matching this OS/arch (mirrors the release workflow).
-fn target_asset_name() -> Result<&'static str, String> {
+/// Shared with `faro-cli self-update`.
+pub fn target_asset_name() -> Result<&'static str, String> {
     Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => "faro-cli-windows-x86_64.exe",
         ("linux", "x86_64") => "faro-cli-linux-x86_64",
@@ -274,8 +263,8 @@ async fn install_missing(app: &AppHandle) -> Result<String, String> {
 }
 
 /// Parse `MAJOR.MINOR.PATCH` (ignoring pre-release/build metadata) into a
-/// comparable tuple; None if it isn't semver-shaped.
-fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
+/// comparable tuple; None if it isn't semver-shaped. Shared with faro-cli.
+pub fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
     let core = s.trim().split(['-', '+']).next().unwrap_or(s);
     let mut it = core.split('.');
     let major = it.next()?.parse().ok()?;

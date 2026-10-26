@@ -822,28 +822,7 @@ async fn open_session(profile: &ConnectionProfile) -> Result<Session> {
 }
 
 fn fs_for(session: &Session) -> Box<dyn RemoteFs> {
-    match session {
-        Session::Ssh(ssh) => Box::new(faro_lib::remotefs::sftp::SftpFs::new(ssh.clone())),
-        Session::Ftp(ftp) => Box::new(faro_lib::remotefs::ftp::FtpFs::new(ftp.clone())),
-        Session::Object(obj) => {
-            Box::new(faro_lib::remotefs::object::ObjectFs::new(obj.clone()))
-        }
-        Session::Webdav(dav) => Box::new(faro_lib::remotefs::webdav::WebdavFs::new(dav.clone())),
-        Session::Http(http) => Box::new(faro_lib::remotefs::http::HttpFs::new(http.clone())),
-        Session::Dropbox(dbx) => Box::new(faro_lib::remotefs::dropbox::DropboxFs::new(dbx.clone())),
-        Session::OneDrive(od) => Box::new(faro_lib::remotefs::onedrive::OneDriveFs::new(od.clone())),
-        Session::GDrive(gd) => Box::new(faro_lib::remotefs::gdrive::GDriveFs::new(gd.clone())),
-        Session::Box(bx) => Box::new(faro_lib::remotefs::boxdrive::BoxFs::new(bx.clone())),
-        Session::Shopify(sh) => Box::new(faro_lib::remotefs::shopify::ShopifyFs::new(sh.clone())),
-        Session::HubSpot(hs) => Box::new(faro_lib::remotefs::hubspot::HubSpotFs::new(hs.clone())),
-        Session::Dynamics(dynm) => {
-            Box::new(faro_lib::remotefs::dynamics::DynamicsFs::new(dynm.clone()))
-        }
-        Session::WordPress(wp) => {
-            Box::new(faro_lib::remotefs::wordpress::WordPressFs::new(wp.clone()))
-        }
-        Session::Agent(agent) => Box::new(faro_lib::remotefs::agent::AgentFs::new(agent.clone())),
-    }
+    faro_lib::commands::fs_for_session(session)
 }
 
 // ---- Host-key verifier for the CLI -------------------------------------
@@ -1888,15 +1867,8 @@ const RELEASE_REPO: &str = "jhd3197/Faro";
 /// The release asset name matching this OS/arch — mirrors the `faro-cli` matrix
 /// in `.github/workflows/release.yml` and the daemon installer's naming.
 fn target_asset_name() -> Result<&'static str> {
-    Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => "faro-cli-windows-x86_64.exe",
-        ("linux", "x86_64") => "faro-cli-linux-x86_64",
-        ("macos", "x86_64") => "faro-cli-macos-x86_64",
-        ("macos", "aarch64") => "faro-cli-macos-arm64",
-        (os, arch) => bail!(
-            "no prebuilt faro-cli for {os}/{arch}; build from source (cargo build -p faro-cli)"
-        ),
-    })
+    faro_lib::cli_updater::target_asset_name()
+        .map_err(|e| anyhow!("{e}; build from source (cargo build -p faro-cli)"))
 }
 
 /// Ask GitHub for the latest release tag, normalised to a bare version
@@ -2091,18 +2063,7 @@ fn cli_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Parse a `MAJOR.MINOR.PATCH` version into a comparable tuple, ignoring any
-/// pre-release/build metadata (`-rc1`, `+meta`). Returns None if it doesn't look
-/// like a semver, so an unparseable value simply suppresses the staleness check
-/// rather than firing a bogus warning.
-fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
-    let core = s.trim().split(['-', '+']).next().unwrap_or(s);
-    let mut it = core.split('.');
-    let major = it.next()?.parse().ok()?;
-    let minor = it.next().unwrap_or("0").parse().ok()?;
-    let patch = it.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor, patch))
-}
+use faro_lib::cli_updater::parse_semver;
 
 /// Print a one-line stderr warning when this CLI is OLDER than the running Faro
 /// app (Plan 10 Phase 0a). The app and `faro-cli` ship as separate downloads, so

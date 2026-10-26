@@ -1190,8 +1190,8 @@ pub async fn fs_for_public(
     fs_for(session_id, state).await
 }
 
-pub fn fs_for_session(session: &Arc<Session>) -> Box<dyn RemoteFs> {
-    match &**session {
+pub fn fs_for_session(session: &Session) -> Box<dyn RemoteFs> {
+    match session {
         Session::Ssh(ssh) => Box::new(crate::remotefs::sftp::SftpFs::new(ssh.clone())),
         Session::Ftp(ftp) => Box::new(crate::remotefs::ftp::FtpFs::new(ftp.clone())),
         Session::Object(obj) => {
