@@ -221,6 +221,14 @@ pub fn generate_ed25519_in_memory(comment: &str) -> Result<(String, String)> {
     Ok((pub_line, pem.to_string()))
 }
 
+/// OpenSSH-style `SHA256:…` fingerprint of a public-key line, or None if it
+/// doesn't parse.
+pub fn openssh_fingerprint(pub_line: &str) -> Option<String> {
+    ssh_key::PublicKey::from_openssh(pub_line.trim())
+        .ok()
+        .map(|k| k.fingerprint(HashAlg::Sha256).to_string())
+}
+
 /// Derive the public-key line + fingerprint for an *existing* private key path,
 /// so the user can copy it without regenerating. Needs the passphrase if the key
 /// is encrypted.
@@ -371,6 +379,9 @@ mod tests {
     #[test]
     fn in_memory_ed25519_roundtrips_through_russh() {
         let (pub_line, pem) = generate_ed25519_in_memory("faro-grant").expect("keygen");
+        let fp = openssh_fingerprint(&pub_line).expect("fingerprint");
+        assert!(fp.starts_with("SHA256:") && fp.len() == 50, "{fp}");
+        assert!(openssh_fingerprint("not a key").is_none());
         assert!(pub_line.starts_with("ssh-ed25519 "));
         assert!(pub_line.ends_with(" faro-grant"));
         assert!(pem.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));

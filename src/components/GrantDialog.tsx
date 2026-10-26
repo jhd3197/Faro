@@ -64,14 +64,24 @@ export function GrantDialog({ onClose }: Props) {
       onClose();
       await useConnections.getState().loadProfiles();
       const imported = res.imported.length;
-      toast.success(
-        `Imported ${imported} ${imported === 1 ? "connection" : "connections"} into "${res.group}"`,
-        res.failed.length > 0
-          ? `${res.failed.length} failed: ${res.failed
-              .map((f) => `${f.name} (${f.error})`)
-              .join(", ")}`
-          : undefined
-      );
+      const summary = `Imported ${imported} ${imported === 1 ? "connection" : "connections"} into "${res.group}"`;
+      if (res.pendingApproval) {
+        // The issuer holds the key until an admin approves this device; give
+        // the user the fingerprint to read back to them.
+        toast.info(
+          `${summary}. Waiting for approval`,
+          `They start working once the owner approves this device. Key fingerprint: ${res.fingerprint}`
+        );
+      } else {
+        toast.success(
+          summary,
+          res.failed.length > 0
+            ? `${res.failed.length} failed: ${res.failed
+                .map((f) => `${f.name} (${f.error})`)
+                .join(", ")}`
+            : undefined
+        );
+      }
     } catch (e) {
       setPhase({ state: "ready", manifest, acceptError: messageOf(e) });
     }

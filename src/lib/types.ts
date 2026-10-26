@@ -324,6 +324,11 @@ export interface GrantImportResult {
   group: string;
   imported: ConnectionProfile[];
   failed: { name: string; error: string }[];
+  /** `SHA256:…` fingerprint of the key Faro generated for this grant. */
+  fingerprint: string;
+  /** The issuer must approve this device before the connections work. */
+  pendingApproval: boolean;
+  message?: string | null;
 }
 
 // ---- Importers ----
