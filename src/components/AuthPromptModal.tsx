@@ -5,6 +5,7 @@ import {
   onAuthPrompt,
   onAuthChanged,
   onAuthNotice,
+  onCloudflaredStatus,
 } from "@/lib/ipc";
 import { useDialog } from "@/hooks/useDialog";
 import { useConnections } from "@/stores/connectionsStore";
@@ -47,21 +48,32 @@ export function AuthPromptModal() {
       const key = e.url ?? e.message;
       if (shown.has(key)) return;
       shown.add(key);
-      useToasts.getState().push({
-        variant: "info",
-        title: e.message,
-        message: e.host
-          ? `Connecting to ${e.host} waits until you've signed in.`
-          : "The reconnect waits until you've signed in.",
-        action: e.url ? { label: "Open sign-in page", url: e.url } : undefined,
-        duration: 60_000,
-      });
+      // A sign-in to finish (with its URL), or the news that it finished.
+      useToasts.getState().push(
+        e.url
+          ? {
+              variant: "info",
+              title: e.message,
+              message: e.host
+                ? `Connecting to ${e.host} waits until you've signed in.`
+                : "Faro carries on once you've signed in.",
+              action: { label: "Open sign-in page", url: e.url },
+              duration: 60_000,
+            }
+          : { variant: "success", title: e.message }
+      );
     }).then(keep);
     onAuthChanged((e) => {
       const pw = captured.current.get(e.profileId);
       if (pw) {
         captured.current.delete(e.profileId);
         setSavePrompt({ profileId: e.profileId, password: pw });
+      }
+    }).then(keep);
+    // Faro's own cloudflared has a newer official release.
+    onCloudflaredStatus((s) => {
+      if (s.updateAvailable && s.latest) {
+        toast.info(`cloudflared ${s.latest} is available`, "Update it in Settings → Cloudflare.");
       }
     }).then(keep);
     return () => {

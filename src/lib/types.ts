@@ -255,6 +255,29 @@ export interface AgentHostStatus {
  *  CliUpdateMode. `ask` prompts, `auto` updates silently, `off` never checks. */
 export type CliUpdateMode = "ask" | "auto" | "off";
 
+/** Which cloudflared Faro runs (mirrors Rust's cloudflared::BinaryStatus). */
+export interface CloudflaredStatus {
+  source: "custom" | "managed" | "path" | "missing";
+  path?: string;
+  version?: string;
+  customPath?: string;
+  managedPath: string;
+  latest?: string;
+  updateAvailable: boolean;
+  message?: string;
+}
+
+/** Cloudflare Access sign-in for one hostname (cloudflared::AccessStatus). */
+export interface AccessStatus {
+  hostname: string;
+  state: "loggedIn" | "loggedOut" | "expired" | "notProtected" | "unknown";
+  /** Signed-in email, or the service token's name. */
+  identity?: string;
+  /** Unix seconds. */
+  expiresAt?: number;
+  message?: string;
+}
+
 /** CLI version-drift status (mirrors Rust's CliStatus). */
 export interface CliStatus {
   mode: CliUpdateMode;

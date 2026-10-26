@@ -45,6 +45,7 @@ import {
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
 import { BrandIcon, protocolIcon } from "@/lib/brandIcons";
+import { AccessSignIn, InstallCloudflared } from "./CloudflareSettings";
 import { BRAND_ICONS } from "@/lib/brandIconData";
 import { monogram } from "@/lib/format";
 import { IconPicker } from "./IconPicker";
@@ -3312,6 +3313,12 @@ function NetworkSection({
           )}
           {!viaJump && cmdKind === "cloudflare" && (
             <>
+              <InstallCloudflared />
+              {(proxyCmd.hostname.trim() || host.trim()) && (
+                <div className="mb-3 rounded-md border border-border px-2.5 py-2" data-testid="editor-access-signin">
+                  <AccessSignIn hostname={proxyCmd.hostname.trim() || host.trim()} compact />
+                </div>
+              )}
               <div className="flex gap-3">
                 <Field label="Service token ID (optional)" className="min-w-0 flex-1">
                   <input
