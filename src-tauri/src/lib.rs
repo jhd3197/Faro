@@ -20,6 +20,7 @@ mod deeplink;
 pub mod dedupe;
 pub mod diff;
 pub mod error;
+pub mod fsutil;
 mod diskscan;
 mod editor;
 mod foldersync;

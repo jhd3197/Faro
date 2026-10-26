@@ -138,12 +138,33 @@ pub(crate) async fn plan_indexed(
             SyncDirection::RemoteToLocal => (&remote_tree, &local_tree, local_root),
         };
 
+        // An empty source under Mirror means "delete everything" — almost always a
+        // failed build or a wrong path, never what anyone meant. Refuse for every
+        // caller (CLI, sync dialog, agent, folder sync).
+        if matches!(strategy, SyncStrategy::Mirror)
+            && source.files.is_empty()
+            && !dest.files.is_empty()
+        {
+            anyhow::bail!(
+                "the source folder has no files, so mirroring would delete all {} files at the destination; refusing",
+                dest.files.len()
+            );
+        }
+
         let mut copies: Vec<SyncFile> = Vec::new();
         let mut total_bytes: u64 = 0;
         for (rel, src) in &source.files {
+            let synced_unchanged = || {
+                index
+                    .and_then(|ix| ix.get(rel))
+                    .is_some_and(|row| !source_changed(source_signal, src, row))
+            };
             let reason = match dest.files.get(rel) {
                 None => Some(SyncReason::Missing),
                 Some(d) if src.size != d.size => Some(SyncReason::SizeChanged),
+                // Copied at this size and untouched since: a destination clock
+                // behind ours must not make it look "newer" on every pass.
+                Some(_) if synced_unchanged() => None,
                 Some(d) if src.modified > d.modified && src.modified > 0 && d.modified > 0 => {
                     Some(SyncReason::Newer)
                 }
@@ -168,8 +189,13 @@ pub(crate) async fn plan_indexed(
 
         let mut deletes: Vec<SyncDelete> = Vec::new();
         if matches!(strategy, SyncStrategy::Mirror) {
+            // Skip deletes that differ from a source path only by case: on a
+            // case-insensitive side (Windows, IIS FTP) that's the same file the
+            // copy just wrote, so deleting it would remove the renamed file.
+            let source_folded: std::collections::HashSet<String> =
+                source.files.keys().map(|k| k.to_lowercase()).collect();
             for (rel, d) in &dest.files {
-                if !source.files.contains_key(rel) {
+                if !source.files.contains_key(rel) && !source_folded.contains(&rel.to_lowercase()) {
                     deletes.push(SyncDelete {
                         relative: rel.clone(),
                         path: d.absolute.clone(),
@@ -402,5 +428,49 @@ mod index_tests {
             ..row
         };
         assert!(!source_changed(ChangeSignal::Etag, &cur, &row_same));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remotefs::{local::LocalFs, ChangeSignal};
+
+    #[test]
+    fn synced_file_is_not_newer_just_because_the_far_clock_is_behind() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async {
+            let base = std::env::temp_dir().join(format!("faro-sync-skew-{}", uuid::Uuid::new_v4()));
+            let (src, dst) = (base.join("src"), base.join("dst"));
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::create_dir_all(&dst).unwrap();
+            std::fs::write(src.join("a.txt"), b"same").unwrap();
+            std::fs::write(dst.join("a.txt"), b"same").unwrap();
+            let behind = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+            std::fs::File::options().write(true).open(dst.join("a.txt")).unwrap().set_modified(behind).unwrap();
+
+            let fs = LocalFs;
+            let (s, d) = (src.to_str().unwrap(), dst.to_str().unwrap());
+            let run = |index| {
+                let fs = &fs;
+                async move {
+                    plan_indexed(fs, fs, s, d, SyncDirection::LocalToRemote, SyncStrategy::Additive, index, ChangeSignal::MtimeSize)
+                        .await
+                        .unwrap()
+                }
+            };
+            let (plan, tree) = run(None).await;
+            assert_eq!(plan.copies.len(), 1, "no index: newer mtime copies");
+
+            let e = &tree.files["a.txt"];
+            let mut ix = std::collections::HashMap::new();
+            ix.insert(
+                "a.txt".to_string(),
+                crate::db::SyncStateRow { size: e.size, mtime: e.modified, remote_signal: None, last_synced_ms: 0 },
+            );
+            let (plan, _) = run(Some(&ix)).await;
+            assert!(plan.copies.is_empty(), "synced and unchanged: no re-copy");
+            let _ = std::fs::remove_dir_all(&base);
+        });
     }
 }

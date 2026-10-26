@@ -1134,6 +1134,12 @@ async fn cmd_sync(
         if plan.copies.len() > 50 {
             eprintln!("  …and {} more", plan.copies.len() - 50);
         }
+        for d in plan.deletes.iter().take(50) {
+            eprintln!("  delete  {}  {}", fmt_bytes(d.size), d.relative);
+        }
+        if plan.deletes.len() > 50 {
+            eprintln!("  …and {} more deletes", plan.deletes.len() - 50);
+        }
         return Ok(());
     }
 

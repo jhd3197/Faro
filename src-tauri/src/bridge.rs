@@ -490,14 +490,7 @@ impl BridgeState {
             .context("resolving app_data_dir")?;
         std::fs::create_dir_all(&dir).ok();
         let path = dir.join("bridge.json");
-        let mut cfg: PersistedConfig = if path.exists() {
-            std::fs::read(&path)
-                .ok()
-                .and_then(|b| serde_json::from_slice(&b).ok())
-                .unwrap_or_default()
-        } else {
-            PersistedConfig::default()
-        };
+        let mut cfg: PersistedConfig = crate::fsutil::read_json_or_quarantine(&path);
         // One-time migration: seed each existing saved command as a single-step,
         // approved Skill so the shipped saved-commands survive into the Skills
         // store. Non-destructive — the saved commands themselves are left intact
@@ -508,7 +501,7 @@ impl BridgeState {
             }
             cfg.skills_migrated = true;
             if let Ok(bytes) = serde_json::to_vec_pretty(&cfg) {
-                let _ = std::fs::write(&path, bytes);
+                let _ = crate::fsutil::write_atomic(&path, &bytes);
             }
         }
         Ok(Self {
@@ -538,7 +531,7 @@ impl BridgeState {
             skills_migrated: *self.skills_migrated.lock().await,
         };
         if let Ok(bytes) = serde_json::to_vec_pretty(&cfg) {
-            let _ = std::fs::write(path, bytes);
+            let _ = crate::fsutil::write_atomic(path, &bytes);
         }
     }
 

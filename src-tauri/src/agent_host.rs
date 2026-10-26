@@ -64,10 +64,7 @@ impl AgentHost {
         let dir = app.path().app_data_dir().context("resolving app_data_dir")?;
         std::fs::create_dir_all(&dir).ok();
         let settings_path = dir.join("agent-host.json");
-        let settings: HostSettings = std::fs::read(&settings_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let settings: HostSettings = crate::fsutil::read_json_or_quarantine(&settings_path);
         Ok(Self {
             settings_path,
             settings: Mutex::new(settings),
@@ -88,7 +85,7 @@ impl AgentHost {
 
     async fn persist(&self) -> Result<()> {
         let settings = self.settings.lock().await.clone();
-        std::fs::write(&self.settings_path, serde_json::to_vec_pretty(&settings)?)
+        crate::fsutil::write_atomic(&self.settings_path, &serde_json::to_vec_pretty(&settings)?)
             .with_context(|| format!("write {}", self.settings_path.display()))?;
         Ok(())
     }

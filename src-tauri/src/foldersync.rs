@@ -21,7 +21,7 @@
 //! `auto_start_if_enabled` / per-pair `start` / `stop` / `status`, and
 //! `foldersync://changed` events so the UI can refresh.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -181,10 +181,7 @@ impl FolderSync {
         let dir = app.path().app_data_dir().context("resolving app_data_dir")?;
         std::fs::create_dir_all(&dir).ok();
         let settings_path = dir.join("foldersync.json");
-        let settings: Settings = std::fs::read(&settings_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let settings: Settings = crate::fsutil::read_json_or_quarantine(&settings_path);
         Ok(Self {
             settings_path,
             settings: Mutex::new(settings),
@@ -194,7 +191,7 @@ impl FolderSync {
 
     async fn persist(&self) -> Result<()> {
         let settings = self.settings.lock().await.clone();
-        std::fs::write(&self.settings_path, serde_json::to_vec_pretty(&settings)?)
+        crate::fsutil::write_atomic(&self.settings_path, &serde_json::to_vec_pretty(&settings)?)
             .with_context(|| format!("write {}", self.settings_path.display()))?;
         Ok(())
     }
@@ -512,40 +509,61 @@ async fn reconcile_inner(
     .await
     .context("planning sync")?;
 
-    // For Mirror, learn whether the source root currently has any entries
-    // *before* trusting the diff's delete set (see `apply_safety`). Skip the
-    // extra listing for Additive, which never deletes.
-    let source_available = if matches!(pair.strategy, SyncStrategy::Mirror) {
-        let (src_fs, src_root): (&dyn crate::remotefs::RemoteFs, &str) = match pair.direction {
-            SyncDirection::LocalToRemote => (local_fs.as_ref(), pair.local_root.as_str()),
-            SyncDirection::RemoteToLocal => (remote_fs.as_ref(), pair.remote_root.as_str()),
-        };
-        matches!(src_fs.list_dir(src_root).await, Ok(e) if !e.is_empty())
-    } else {
-        true
-    };
-
-    let warning = apply_safety(&mut plan, pair, source_available);
+    // (An empty source under Mirror is refused by the planner itself.)
+    let warning = apply_safety(&mut plan, pair);
 
     if plan.copies.is_empty() && plan.deletes.is_empty() && plan.directories.is_empty() {
         // Nothing to transfer — but still snapshot the source so a first run
         // seeds the index (later same-size edits become detectable) and a delete
         // prunes its row.
-        snapshot_index(&state.db, &pair.id, &source_tree, &index);
+        snapshot_index(&state.db, &pair.id, &source_tree, &index, &HashSet::new());
         return Ok(warning);
     }
 
+    let copies: Vec<String> = plan.copies.iter().map(|c| c.relative.clone()).collect();
     let ids = crate::commands::execute_sync_plan(session, plan, &state.transfers, app)
         .await
         .context("executing sync")?;
 
-    wait_for_transfers(state, ids).await;
+    // Copies that didn't finish keep their old index row, so the next pass
+    // still sees them as changed — otherwise a failed same-size edit would be
+    // recorded as synced and never sent again.
+    let unfinished = wait_for_transfers(state, &ids).await;
+    let not_synced: HashSet<String> = if unfinished.is_empty() {
+        HashSet::new()
+    } else {
+        copy_paths_for(state, &ids, &copies, &unfinished).await
+    };
 
     // Record what the source looks like now, so the next reconcile compares
     // against reality rather than re-uploading (resume) and catches in-place
     // edits the live size/mtime diff would miss.
-    snapshot_index(&state.db, &pair.id, &source_tree, &index);
+    snapshot_index(&state.db, &pair.id, &source_tree, &index, &not_synced);
     Ok(warning)
+}
+
+/// The relative paths (from `copies`) whose transfer is in `unfinished`. A
+/// transfer row's source path ends with its relative path, which is how the
+/// two are matched; when in doubt every copy counts as unfinished (the cost is
+/// one re-check next pass, never a lost edit).
+async fn copy_paths_for(
+    state: &AppState,
+    ids: &[String],
+    copies: &[String],
+    unfinished: &HashSet<String>,
+) -> HashSet<String> {
+    let mut sources = Vec::new();
+    for id in ids.iter().filter(|id| unfinished.contains(*id)) {
+        match state.transfers.snapshot(id).await {
+            Some(t) => sources.push(t.source.replace('\\', "/")),
+            None => return copies.iter().cloned().collect(),
+        }
+    }
+    copies
+        .iter()
+        .filter(|rel| sources.iter().any(|src| src.ends_with(&format!("/{rel}"))))
+        .cloned()
+        .collect()
 }
 
 /// Persist the current source tree into `sync_state`: upsert a row per file and
@@ -557,9 +575,13 @@ fn snapshot_index(
     pair_id: &str,
     source_tree: &crate::scan::ScanTree,
     before: &std::collections::HashMap<String, crate::db::SyncStateRow>,
+    not_synced: &HashSet<String>,
 ) {
     let now = now_ms();
     for (rel, e) in &source_tree.files {
+        if not_synced.contains(rel) {
+            continue;
+        }
         if let Err(err) =
             db.upsert_sync_state(pair_id, rel, e.size, e.modified, e.etag.as_deref(), now)
         {
@@ -647,23 +669,29 @@ async fn ensure_session(
 }
 
 /// Block until every queued transfer reaches a terminal state (or the cap).
-async fn wait_for_transfers(state: &AppState, ids: Vec<String>) {
-    if ids.is_empty() {
-        return;
-    }
+/// Returns the ids that did not end Done or Skipped (failed, canceled, or
+/// still running at the cap).
+async fn wait_for_transfers(state: &AppState, ids: &[String]) -> HashSet<String> {
     let start = std::time::Instant::now();
     loop {
         let mut remaining = 0u32;
-        for id in &ids {
+        let mut unfinished = HashSet::new();
+        for id in ids {
             if let Some(t) = state.transfers.snapshot(id).await {
                 match t.status {
-                    TransferStatus::Queued | TransferStatus::Transferring | TransferStatus::Paused => remaining += 1,
-                    _ => {}
+                    TransferStatus::Queued | TransferStatus::Transferring | TransferStatus::Paused => {
+                        remaining += 1;
+                        unfinished.insert(id.clone());
+                    }
+                    TransferStatus::Done | TransferStatus::Skipped => {}
+                    _ => {
+                        unfinished.insert(id.clone());
+                    }
                 }
             }
         }
         if remaining == 0 || start.elapsed() > TRANSFER_WAIT_CAP {
-            return;
+            return unfinished;
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
@@ -686,15 +714,11 @@ async fn set_state(
 
 // ---------- safety: exclude patterns + Mirror-delete guard ----------
 
-/// Apply exclude patterns and the Mirror-delete guard to a freshly-planned
-/// `SyncPlan`, in place. Returns `Some(warning)` when the guard withheld
+/// Apply exclude patterns and the Mirror-delete cap to a freshly-planned
+/// `SyncPlan`, in place. Returns `Some(warning)` when the cap withheld
 /// deletes (the uploads still stand — only the destructive half is gated).
-///
-/// `source_available` is whether the source root currently lists any entries.
-/// An empty or unreadable source is the classic footgun — an unmounted drive,
-/// a deleted folder, a typo'd path — where the diff sees "nothing on the
-/// source" and a naive Mirror would wipe the entire destination. We refuse.
-fn apply_safety(plan: &mut SyncPlan, pair: &SyncPair, source_available: bool) -> Option<String> {
+/// An empty or unreadable source never gets here: the planner refuses it.
+fn apply_safety(plan: &mut SyncPlan, pair: &SyncPair) -> Option<String> {
     // Excludes: drop matching files from BOTH copies and deletes, so an excluded
     // path is neither uploaded nor (under Mirror) deleted on the far side.
     if !pair.exclude.is_empty() {
@@ -710,14 +734,6 @@ fn apply_safety(plan: &mut SyncPlan, pair: &SyncPair, source_available: bool) ->
 
     if !matches!(pair.strategy, SyncStrategy::Mirror) || plan.deletes.is_empty() {
         return None;
-    }
-
-    if !source_available {
-        let n = plan.deletes.len();
-        plan.deletes.clear();
-        return Some(format!(
-            "Mirror guard: skipped deleting {n} destination file(s) — the source folder is empty or unreadable (is it mounted?)."
-        ));
     }
 
     if pair.mirror_delete_cap != 0 && plan.deletes.len() as u32 > pair.mirror_delete_cap {
@@ -958,8 +974,8 @@ mod tests {
 
             // 1) Excludes filter copies + protect excluded deletes.
             let mut p = plan_dirs(&src, &dst).await;
-            let w = apply_safety(&mut p, &pair(excl, 100), true);
-            assert!(w.is_none(), "under cap, available source → no warning");
+            let w = apply_safety(&mut p, &pair(excl, 100));
+            assert!(w.is_none(), "under cap → no warning");
             let copies: Vec<&str> = p.copies.iter().map(|c| c.relative.as_str()).collect();
             assert!(copies.contains(&"sub/b.txt"));
             assert!(!copies.iter().any(|r| r.contains("node_modules")));
@@ -973,16 +989,35 @@ mod tests {
 
             // 2) Delete cap trips → deletes withheld, warning surfaced.
             let mut p = plan_dirs(&src, &dst).await;
-            let w = apply_safety(&mut p, &pair(excl, 1), true);
+            let w = apply_safety(&mut p, &pair(excl, 1));
             assert!(w.unwrap().contains("safety cap"));
             assert!(p.deletes.is_empty(), "over-cap deletes are withheld");
             assert!(!p.copies.is_empty(), "uploads still proceed past the guard");
 
-            // 3) Empty/unreadable source → never wipe the destination.
-            let mut p = plan_dirs(&src, &dst).await;
-            let w = apply_safety(&mut p, &pair(excl, 100), false);
-            assert!(w.unwrap().contains("empty or unreadable"));
-            assert!(p.deletes.is_empty());
+            // 3) Empty source (only an empty subfolder) → the planner refuses
+            //    to mirror, so nothing at the destination is deleted.
+            let empty = scratch("empty");
+            std::fs::create_dir_all(empty.join("sub")).unwrap();
+            let fs = crate::remotefs::local::LocalFs;
+            let err = sync::plan(
+                &fs,
+                &fs,
+                empty.to_str().unwrap(),
+                dst.to_str().unwrap(),
+                SyncDirection::LocalToRemote,
+                SyncStrategy::Mirror,
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("refusing"), "{err:#}");
+            let _ = std::fs::remove_dir_all(&empty);
+
+            // 4) A case-only rename never deletes the renamed file's old
+            //    spelling (same file on a case-insensitive side).
+            write(&src, "Logo.png", "new");
+            write(&dst, "logo.png", "old");
+            let p = plan_dirs(&src, &dst).await;
+            assert!(!p.deletes.iter().any(|d| d.relative == "logo.png"));
 
             let _ = std::fs::remove_dir_all(&src);
             let _ = std::fs::remove_dir_all(&dst);
