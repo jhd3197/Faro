@@ -289,6 +289,9 @@ export const ipc = {
 
   listTransfers: () => invoke<Transfer[]>("list_transfers"),
 
+  transferForgetFinished: (transferIds: string[]) =>
+    invoke<void>("transfer_forget_finished", { transferIds }),
+
   transferPause: (transferId: string) =>
     invoke<void>("transfer_pause", { transferId }),
 

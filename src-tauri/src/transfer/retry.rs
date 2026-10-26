@@ -160,7 +160,8 @@ pub fn http_status(code: u16) -> Verdict {
     }
 }
 
-fn is_no_space(e: &std::io::Error) -> bool {
+/// ERROR_DISK_FULL / ERROR_HANDLE_DISK_FULL on Windows, ENOSPC elsewhere.
+pub(super) fn is_no_space(e: &std::io::Error) -> bool {
     #[cfg(windows)]
     return matches!(e.raw_os_error(), Some(112) | Some(39));
     #[cfg(unix)]

@@ -209,6 +209,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- transfers ----
     case "list_transfers":
       return transfers.listTransfers();
+    case "transfer_forget_finished":
+      return;
     case "start_download": {
       const dir = a.remotePath.replace(/\/[^/]*$/, "") || "/";
       const name = a.remotePath.split("/").pop();

@@ -1056,6 +1056,15 @@ pub async fn list_transfers(
 }
 
 #[tauri::command]
+pub async fn transfer_forget_finished(
+    transfer_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.transfers.forget_finished(&transfer_ids).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn start_directory_download(
     session_id: String,
     remote_dir: String,

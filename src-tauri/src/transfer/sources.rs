@@ -644,8 +644,11 @@ impl RangeSource for HttpSource {
                 if self.etag.is_some() {
                     return Err(anyhow::Error::new(RemoteChanged));
                 }
+                // Remember "no ranges" and restart from byte 0 (the caller
+                // does that once for RemoteChanged) instead of failing every
+                // retry at this offset.
                 self.ranges.store(RANGES_NO, Ordering::Relaxed);
-                anyhow::bail!("download {}: server ignored the byte range", self.path);
+                return Err(anyhow::Error::new(RemoteChanged));
             }
         }
         pump(resp.bytes_stream(), sink, &self.path).await

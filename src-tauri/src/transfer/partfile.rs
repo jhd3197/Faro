@@ -284,7 +284,7 @@ impl Writer {
                         h.sha.update(&buf[..n]);
                         h.upto += n as u64;
                     }
-                    Some(hex(&h.sha.finalize()))
+                    Some(super::verify::hex(&h.sha.finalize()))
                 }
             };
             Ok(Finished { len, sha256 })
@@ -361,23 +361,11 @@ async fn run_writer(file: Arc<File>, mut rx: mpsc::Receiver<Msg>, err: ErrSlot, 
 }
 
 fn describe_io(e: std::io::Error) -> String {
-    if is_disk_full(&e) {
+    if super::retry::is_no_space(&e) {
         format!("not enough disk space: {e}")
     } else {
         e.to_string()
     }
-}
-
-fn is_disk_full(e: &std::io::Error) -> bool {
-    // ERROR_DISK_FULL / ERROR_HANDLE_DISK_FULL on Windows, ENOSPC elsewhere.
-    #[cfg(windows)]
-    return matches!(e.raw_os_error(), Some(112) | Some(39));
-    #[cfg(unix)]
-    return e.raw_os_error() == Some(libc::ENOSPC);
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Fail fast with a clear message when the volume can't hold `need` more
@@ -565,7 +553,7 @@ mod tests {
         let done = part.finish().await.unwrap();
         assert_eq!(done.len, data.len() as u64);
         assert_eq!(std::fs::read(&path).unwrap(), data);
-        assert_eq!(done.sha256.unwrap(), hex(&Sha256::digest(&data)));
+        assert_eq!(done.sha256.unwrap(), super::super::verify::hex(&Sha256::digest(&data)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -586,7 +574,7 @@ mod tests {
             .unwrap();
         let done = part.finish().await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), data);
-        assert_eq!(done.sha256.unwrap(), hex(&Sha256::digest(&data)));
+        assert_eq!(done.sha256.unwrap(), super::super::verify::hex(&Sha256::digest(&data)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

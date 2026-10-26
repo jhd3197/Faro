@@ -144,6 +144,17 @@ impl Range {
     /// Owner: claim up to `want` bytes at the current position. Returns the
     /// offset and how many bytes may be written (0 once the range is done or
     /// was cut short).
+    /// Drop any claim past `done`: a read killed while waiting on the writer
+    /// leaves bytes claimed but never written, and the next attempt must
+    /// start from what actually reached the file.
+    fn rewind_claim(&self) {
+        let done = self.done();
+        let mut b = self.bounds.lock().expect("range lock");
+        if b.claimed > done {
+            b.claimed = done;
+        }
+    }
+
     fn claim(&self, want: u64) -> (u64, u64) {
         let mut b = self.bounds.lock().expect("range lock");
         let n = want.min(b.end.saturating_sub(b.claimed));
@@ -421,7 +432,9 @@ pub async fn segmented_download(
                     let idle = r.idle();
                     if idle >= cfg.stall_kill {
                         r.touch();
-                        r.kill.notify_one();
+                        // notify_waiters, not notify_one: a range idle in its
+                        // retry backoff must not bank a kill for its next try.
+                        r.kill.notify_waiters();
                     } else if idle >= cfg.stall_warn {
                         any_stalled = true;
                     }
@@ -451,7 +464,7 @@ pub async fn segmented_download(
                         if now.duration_since(at) >= cfg.slow_window {
                             if median > 0 && sp < median / 10 && !r.is_complete() {
                                 tracing::info!("restarting slow range {}..{}", r.done(), r.end());
-                                r.kill.notify_one();
+                                r.kill.notify_waiters();
                             }
                             slow_marks.insert(key, (now, r.done()));
                         }
@@ -549,6 +562,7 @@ async fn run_range(
 ) -> (Arc<Range>, Result<()>) {
     let mut budget = Budget::new();
     let res = loop {
+        range.rewind_claim();
         let at = range.done();
         let end = range.end();
         if at >= end {
