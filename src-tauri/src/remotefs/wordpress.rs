@@ -580,6 +580,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            proxy_command: None,
             oauth_client_id: None,
         };
         let key = credential_key(&profile.id);

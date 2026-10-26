@@ -846,6 +846,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            proxy_command: None,
             oauth_client_id: None,
         };
 
@@ -1107,6 +1108,7 @@ mod tests {
             proxy: None,
             jump_profile: None,
             jump_via: None,
+            proxy_command: None,
             oauth_client_id: None,
         };
 

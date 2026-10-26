@@ -34,6 +34,7 @@ mod preview;
 mod proc;
 pub mod profiles;
 pub mod proxy;
+pub mod proxy_command;
 pub mod remotefs;
 pub mod scan;
 pub mod scp;
@@ -199,6 +200,14 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // A Cloudflare Access sign-in opened by a silent reconnect (sync,
+            // Agent Bridge, a long transfer) still reaches the UI.
+            let notices = handle.clone();
+            proxy_command::set_notice_hook(move |message, url| {
+                use tauri::Emitter;
+                let _ = notices.emit("auth://notice", serde_json::json!({ "message": message, "url": url }));
+            });
 
             // Apply a pending encrypted-backup restore (Plan 12 Phase 4) before
             // anything opens profiles.json / faro.db, so a restore staged by a
