@@ -2,8 +2,8 @@ name: release
 
 # Push to main → downloadable release.
 #
-# Every push to main cuts the next patch version: we bump the manifests, tag
-# it, and build the Faro desktop app (macOS universal, Windows, Linux) plus the
+# Every push to main cuts the next patch version (or the manifest version, when
+# dev raised it past the last tag): we bump the manifests, tag it, and build the Faro desktop app (macOS universal, Windows, Linux) plus the
 # standalone `faro-cli` for all three platforms, attaching every artifact to a
 # public GitHub Release anyone can download. You can also trigger it by hand
 # from the Actions tab and pin an explicit version.
@@ -62,6 +62,12 @@ jobs:
             else
               v="${last#v}"; IFS=. read -r MA MI PA <<< "$v"
               version="${MA}.${MI}.$((PA + 1))"
+              # A manifest raised past the last tag (a minor/major bump made
+              # on dev) ships as written instead of being patch-bumped.
+              manifest="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+              if [ "$(printf '%s\n%s\n' "$v" "$manifest" | sort -V | tail -1)" != "$v" ]; then
+                version="$manifest"
+              fi
             fi
           fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid release version'; exit 1; }

@@ -36,7 +36,7 @@ import { formatCombo } from "@/lib/shortcuts";
 import { cn } from "@/lib/cn";
 import { openExternal } from "@/lib/openExternal";
 
-const APP_VERSION = "v1.3";
+const APP_VERSION = "v1.4";
 const REPO_URL = "https://github.com/jhd3197/faro";
 
 /// Single custom title bar — replaces the OS chrome + the old app header.
