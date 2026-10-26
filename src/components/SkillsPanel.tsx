@@ -94,10 +94,15 @@ export function SkillsHost() {
   const init = useSkills((s) => s.init);
   useEffect(() => {
     let cleanup: (() => void) | undefined;
+    let cancelled = false;
     init().then((fn) => {
-      cleanup = fn;
+      if (cancelled) fn();
+      else cleanup = fn;
     });
-    return () => cleanup?.();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
   }, [init]);
   return open ? <SkillsPanel /> : null;
 }

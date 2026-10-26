@@ -14,6 +14,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { ipc, onTerminalData, onTerminalExit } from "./ipc";
+import { openExternal } from "./openExternal";
 import { attachSuggestions, type SuggestHandle } from "./termSuggest";
 import { registerTerminalPane } from "./termInput";
 import { isTerminalChord } from "./terminalChords";
@@ -105,7 +106,8 @@ export function acquirePane(
   const fit = new FitAddon();
   const serialize = new SerializeAddon();
   term.loadAddon(fit);
-  term.loadAddon(new WebLinksAddon());
+  // The addon's default handler uses window.open, which goes nowhere in Tauri.
+  term.loadAddon(new WebLinksAddon((_e, uri) => openExternal(uri)));
   term.loadAddon(serialize);
 
   // The xterm renders into this cached node; React only re-parents it. Opening

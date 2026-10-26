@@ -121,6 +121,13 @@ test('file pane partial listings and navigation', { timeout: 90000 }, async (t) 
       await clickTitle('Up (Backspace)');
       await resolve(await pending('./www'), []);
       assert.equal(await currentPath(), './www');
+      // On POSIX a backslash is part of a name: `/srv/x\y` is one folder, and
+      // Up goes to `/srv`, not `/srv/x`.
+      await resolve(await navigate('/srv/x\\y'), []);
+      assert.equal(await page.$$eval('button[title="/srv/x"]', b => b.length), 0, 'no fake crumb');
+      await clickTitle('Up (Backspace)');
+      await resolve(await pending('/srv'), []);
+      assert.equal(await currentPath(), '/srv');
       await resolve(await navigate('/'), []);
       assert.equal(await page.$eval('button[title="/"]', b => b.disabled), true);
     });

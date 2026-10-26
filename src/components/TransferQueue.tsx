@@ -15,6 +15,7 @@ import { useTransfers } from "@/stores/transfersStore";
 import type { Transfer } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { fmtEta, fmtRate } from "@/lib/format";
+import { toastError } from "@/lib/errors";
 
 export function TransferQueue() {
   const {
@@ -38,12 +39,18 @@ export function TransferQueue() {
   } = useTransfers();
 
   useEffect(() => {
+    // Listeners first, so a failed initial load can't leave the queue deaf
+    // for the whole session; the cancelled flag drops a listener that
+    // resolves after unmount (StrictMode) instead of leaking a duplicate.
     let unsub: (() => void) | undefined;
-    (async () => {
-      await loadInitial();
-      unsub = await initListeners();
-    })();
+    let cancelled = false;
+    initListeners().then((u) => {
+      if (cancelled) u();
+      else unsub = u;
+    });
+    loadInitial().catch((e) => toastError(e, "Load transfers"));
     return () => {
+      cancelled = true;
       unsub?.();
     };
   }, [initListeners, loadInitial]);

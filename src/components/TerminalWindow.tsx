@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, Copy as CopySquares, X, TerminalSquare } from "lucide-react";
 import { ipc, onTerminalData, onTerminalExit } from "@/lib/ipc";
+import { openExternal } from "@/lib/openExternal";
 import { attachSuggestions } from "@/lib/termSuggest";
 import { popoutBufferKey } from "@/lib/popout";
 import { useSettings, TERMINAL_THEMES } from "@/stores/settingsStore";
@@ -51,7 +52,7 @@ export function TerminalWindow() {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new WebLinksAddon((_e, uri) => openExternal(uri)));
     term.open(containerRef.current);
     fit.fit();
     termRef.current = term;
