@@ -32,6 +32,11 @@ const XX_FIRST_FRAME: u32 = 32;
 const XXPSK3_FIRST_FRAME: u32 = 48;
 /// How long `dispatch` waits for a first frame before dropping a silent peer.
 const SNIFF_TIMEOUT: Duration = Duration::from_secs(10);
+/// Failed pairing handshakes before the window closes. The code has 10^6
+/// values; without a cap a LAN peer could just try them all in the window.
+const MAX_PAIRING_FAILURES: u32 = 10;
+/// Longest one pairing handshake may hold the pairing gate.
+const PAIRING_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// An open pairing window: while unexpired, pairing handshakes that prove
 /// `code` are accepted and pinned.
@@ -54,6 +59,12 @@ pub struct Daemon {
     jobs: Arc<JobStore>,
     /// Invoked the moment a controller is pinned: `(name, public_key_b64)`.
     on_paired: Arc<dyn Fn(&str, &str) + Send + Sync>,
+    /// Pairing handshakes run one at a time, so the failure cap counts every
+    /// guess (parallel attempts can't race past it).
+    pairing_gate: Arc<Mutex<u32>>,
+    /// Bumped by [`Daemon::disconnect_all`]; every request loop watches it
+    /// and hangs up when it changes.
+    epoch: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 impl Daemon {
@@ -65,7 +76,15 @@ impl Daemon {
             pairing: Arc::new(Mutex::new(None)),
             jobs: Arc::new(JobStore::new()),
             on_paired: Arc::new(|_, _| {}),
+            pairing_gate: Arc::new(Mutex::new(0)),
+            epoch: Arc::new(tokio::sync::watch::channel(0).0),
         }
+    }
+
+    /// Hang up every connected controller (Remote control turned off). New
+    /// connections are the listener's business; this only ends live ones.
+    pub fn disconnect_all(&self) {
+        self.epoch.send_modify(|e| *e += 1);
     }
 
     /// Replace the paired-notification hook (builder-style). The CLI prints a
@@ -77,6 +96,7 @@ impl Daemon {
 
     /// Open (or replace) the pairing window: `code` is accepted for `ttl`.
     pub async fn open_pairing(&self, code: String, ttl: Duration) {
+        *self.pairing_gate.lock().await = 0;
         *self.pairing.lock().await = Some(PairingWindow {
             code,
             expires_at: Instant::now() + ttl,
@@ -137,9 +157,32 @@ async fn dispatch(stream: TcpStream, daemon: Daemon) -> Result<()> {
                 // fabricated failure would only leak timing about the window.
                 anyhow::bail!("pairing attempt refused — no pairing window is open");
             };
-            let (mut channel, name, key) = pair_handshake(stream, &daemon, &code).await?;
+            let (mut channel, name, key) = {
+                let mut failures = daemon.pairing_gate.lock().await;
+                // The window may have closed while we waited for the gate.
+                if daemon.pairing_code().await.as_deref() != Some(code.as_str()) {
+                    anyhow::bail!("pairing attempt refused — the pairing window closed");
+                }
+                let attempt = tokio::time::timeout(
+                    PAIRING_HANDSHAKE_TIMEOUT,
+                    pair_handshake(stream, &daemon, &code),
+                )
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("pairing handshake timed out")));
+                match attempt {
+                    Ok(paired) => paired,
+                    Err(e) => {
+                        *failures += 1;
+                        if *failures >= MAX_PAIRING_FAILURES {
+                            daemon.close_pairing().await;
+                            tracing::warn!("closed the pairing window after {} failed attempts", *failures);
+                        }
+                        return Err(e);
+                    }
+                }
+            };
             (daemon.on_paired)(&name, &key);
-            request_loop(&mut channel, &daemon, &name).await;
+            request_loop(&mut channel, &daemon, &name, &key).await;
             Ok(())
         }
         XX_FIRST_FRAME => handle_paired(stream, daemon).await,
@@ -203,22 +246,43 @@ pub async fn handle_paired(stream: TcpStream, daemon: Daemon) -> Result<()> {
     }
     tracing::info!(peer = %peer_name, client = %hello.client_name, "controller connected");
 
-    request_loop(&mut channel, &daemon, &peer_name).await;
+    request_loop(&mut channel, &daemon, &peer_name, &peer_key).await;
     Ok(())
 }
 
-/// Answer a peer's requests under the daemon's live policy until it hangs up.
-/// Shared by the paired path and the post-pairing tail of a pairing connection.
-async fn request_loop<S>(channel: &mut SecureChannel<S>, daemon: &Daemon, peer_name: &str)
-where
+/// Answer a peer's requests under the daemon's live policy until it hangs up,
+/// is revoked, or the daemon disconnects everyone. Shared by the paired path
+/// and the post-pairing tail of a pairing connection.
+async fn request_loop<S>(
+    channel: &mut SecureChannel<S>,
+    daemon: &Daemon,
+    peer_name: &str,
+    peer_key: &str,
+) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let mut epoch = daemon.epoch.subscribe();
     loop {
-        let req: Request = match channel.recv().await {
-            Ok(r) => r,
-            Err(_) => break, // peer hung up
+        let req: Request = tokio::select! {
+            r = channel.recv() => match r {
+                Ok(r) => r,
+                Err(_) => break, // peer hung up
+            },
+            _ = epoch.changed() => {
+                tracing::info!(peer = %peer_name, "disconnected: remote control stopped");
+                break;
+            }
         };
-        let policy = daemon.config.lock().await.policy;
+        let policy = {
+            let cfg = daemon.config.lock().await;
+            // Revoked while connected: stop serving this channel now.
+            if !cfg.is_paired(peer_key) {
+                let _ = channel.send(&Response::denied("this controller's pairing was revoked")).await;
+                tracing::info!(peer = %peer_name, "disconnected: pairing revoked");
+                break;
+            }
+            cfg.policy
+        };
         let summary = describe(&req);
         let resp = ops::handle(req, policy, &daemon.jobs).await;
         log_op(peer_name, &summary, &resp);
@@ -280,7 +344,7 @@ pub async fn pair_connection(
     code: &str,
 ) -> Result<(String, String)> {
     let (mut channel, name, key) = pair_handshake(stream, &daemon, code).await?;
-    request_loop(&mut channel, &daemon, &name).await;
+    request_loop(&mut channel, &daemon, &name, &key).await;
     Ok((name, key))
 }
 

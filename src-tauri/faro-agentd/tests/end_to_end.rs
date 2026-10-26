@@ -348,6 +348,76 @@ async fn pairing_refused_without_window() {
     assert!(matches!(ch.recv::<Response>().await.unwrap(), Response::Pong));
 }
 
+/// Wrong pairing codes close the window after the cap, so the 6-digit code
+/// can't be brute-forced while it's open.
+#[tokio::test]
+async fn pairing_window_closes_after_repeated_wrong_codes() {
+    let (daemon, _server_id, _dir) = make_daemon(Config::default());
+    daemon
+        .open_pairing("246802".into(), std::time::Duration::from_secs(60))
+        .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let srv = daemon.clone();
+    tokio::spawn(async move {
+        let _ = faro_agentd::serve(listener, srv).await;
+    });
+
+    let guesser = Identity::generate().unwrap();
+    let sk = guesser.private_bytes().unwrap();
+    for guess in 0..10u32 {
+        let psk = faro_agent_proto::pairing::psk_from_code(&format!("{guess:06}"));
+        let stream = TcpStream::connect(addr).await.unwrap();
+        // XXpsk3 mixes the PSK into the last message, so the initiator can't
+        // tell a wrong code — the daemon can, and hangs up.
+        if let Ok(mut ch) =
+            SecureChannel::establish(stream, Role::Initiator, &sk, Auth::Pairing { psk }).await
+        {
+            assert!(ch.recv::<Response>().await.is_err(), "wrong code must not pair");
+        }
+    }
+    // Let the daemon finish counting the last failure.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(daemon.pairing_code().await.is_none(), "window closes after 10 bad codes");
+}
+
+/// Revoking a peer, or turning remote control off, cuts a live connection.
+#[tokio::test]
+async fn revoke_and_disconnect_end_live_connections() {
+    let (daemon, server_id, _dir) = make_daemon(Config::default());
+    let server_pub = server_id.public_bytes().unwrap();
+    let client_id = Identity::generate().unwrap();
+    daemon
+        .config
+        .lock()
+        .await
+        .upsert_peer("test-controller", client_id.public_b64());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let srv = daemon.clone();
+    tokio::spawn(async move {
+        let _ = faro_agentd::serve(listener, srv).await;
+    });
+
+    // Turning remote control off hangs up an idle, connected controller.
+    let mut ch = connect_paired(addr, &client_id, server_pub.clone()).await;
+    ch.send(&Request::Ping).await.unwrap();
+    assert!(matches!(ch.recv::<Response>().await.unwrap(), Response::Pong));
+    daemon.disconnect_all();
+    assert!(ch.recv::<Response>().await.is_err(), "connection closed by disconnect_all");
+
+    // Revoking the peer refuses its very next request on a live channel.
+    let mut ch = connect_paired(addr, &client_id, server_pub).await;
+    ch.send(&Request::Ping).await.unwrap();
+    assert!(matches!(ch.recv::<Response>().await.unwrap(), Response::Pong));
+    daemon.config.lock().await.peers.clear();
+    ch.send(&Request::Ping).await.unwrap();
+    assert!(matches!(
+        ch.recv::<Response>().await.unwrap(),
+        Response::Error { denied: true, .. }
+    ));
+}
+
 /// An expired window refuses pairing without any background timer.
 #[tokio::test]
 async fn pairing_window_expires() {

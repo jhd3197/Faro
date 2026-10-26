@@ -146,6 +146,9 @@ impl AgentHost {
     async fn stop(&self) {
         if let Some(r) = self.running.lock().await.take() {
             r.accept_task.abort();
+            // Aborting the accept loop leaves live connections running; off
+            // must mean off for a controller that is connected right now.
+            r.daemon.disconnect_all();
             // Dropping `advert` unregisters the mDNS record.
         }
         self.window_seq.fetch_add(1, Ordering::SeqCst);
