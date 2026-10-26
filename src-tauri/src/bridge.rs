@@ -6473,6 +6473,42 @@ async fn write_jsonrpc_error(
 mod tests {
     use super::*;
 
+    #[test]
+    fn default_access_mirrors_the_old_policy_switches() {
+        use AccessLevel::*;
+        let none = ApprovalPolicy::default();
+        assert_eq!(
+            default_access(&none),
+            ProfileAccess { read: Ask, write: Ask, exec: Ask, sudo: Off }
+        );
+        let reads = ApprovalPolicy { auto_read: true, allow_sudo: true, ..Default::default() };
+        assert_eq!(
+            default_access(&reads),
+            ProfileAccess { read: Auto, write: Ask, exec: Ask, sudo: Ask }
+        );
+        let all = ApprovalPolicy { allow_all: true, ..Default::default() };
+        let a = default_access(&all);
+        assert_eq!((a.read, a.write, a.exec), (Auto, Auto, Auto));
+    }
+
+    #[test]
+    fn grant_needs_a_non_sudo_capability() {
+        use AccessLevel::*;
+        let sudo_only = ProfileAccess { read: Off, write: Off, exec: Off, sudo: Auto };
+        assert!(!sudo_only.grants_any());
+        let read = ProfileAccess { read: Ask, ..sudo_only };
+        assert!(read.grants_any());
+    }
+
+    #[test]
+    fn profile_access_round_trips_lowercase_json() {
+        let a: ProfileAccess =
+            serde_json::from_str(r#"{"read":"auto","write":"ask","exec":"off","sudo":"off"}"#)
+                .unwrap();
+        assert_eq!(a.read, AccessLevel::Auto);
+        assert_eq!(serde_json::to_value(a).unwrap()["write"], "ask");
+    }
+
     // Plan 10 Phase 1: the CLI base64-encodes a script's raw bytes; the bridge
     // decodes them back. Prove that hop is byte-exact for a heredoc + nested
     // quotes + trailing-newline script (the content that breaks a command line).
