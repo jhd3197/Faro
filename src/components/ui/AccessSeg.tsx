@@ -18,7 +18,8 @@ export function AccessSeg({
   disabled = false,
   className,
 }: {
-  value: AccessLevel;
+  /** null = no current value (bulk "set all" controls). */
+  value: AccessLevel | null;
   onChange: (v: AccessLevel) => void;
   /** Accessible name, e.g. "Run commands on api-prod". */
   label: string;
@@ -45,7 +46,7 @@ export function AccessSeg({
             type="button"
             role="radio"
             aria-checked={on}
-            tabIndex={on ? 0 : -1}
+            tabIndex={on || (value === null && i === 0) ? 0 : -1}
             onClick={() => !on && onChange(l.value)}
             onKeyDown={(e) => {
               // Arrow keys move between levels, like a native radio group.

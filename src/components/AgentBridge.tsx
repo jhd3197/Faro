@@ -504,12 +504,15 @@ Notes:
 `;
 }
 
-function mcpAddCmd(url: string, token: string): string {
+export function mcpAddCmd(url: string, token: string): string {
   return `claude mcp add --transport http faro ${url}/mcp --header "Authorization: Bearer ${token}"`;
 }
 
-// The Agent Bridge control panel (opened as a modal).
-export function AgentBridge({ onClose }: { onClose: () => void }) {
+// The Agent Bridge setup tab (endpoint, agent hookup, defaults, commands).
+/// The Agent Bridge page's "Setup" tab: endpoint, agent hookup, the defaults a
+/// newly granted server starts from, saved commands, skills and history.
+/// Per-server access lives in the access matrix (AgentBridgePage).
+export function AgentBridgeSetup({ onClose }: { onClose: () => void }) {
   const status = useBridge((s) => s.status);
   const activity = useBridge((s) => s.activity);
   const start = useBridge((s) => s.start);
@@ -550,10 +553,6 @@ export function AgentBridge({ onClose }: { onClose: () => void }) {
     setPolicy({ ...policy, ...patch });
 
   const [showToken, setShowToken] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const titleId = useId();
-  useDialog(panelRef, { onClose });
-
   useEffect(() => {
     refresh();
     loadCommands();
@@ -571,72 +570,13 @@ export function AgentBridge({ onClose }: { onClose: () => void }) {
     status.enabled && status.running && anyGranted && !!setupServerName;
 
   return (
-    <div
-      className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        onClick={(e) => e.stopPropagation()}
-        className="anim-modal flex max-h-[88vh] w-[52rem] max-w-[94vw] flex-col rounded-xl border border-border bg-bg-panel shadow-elev-3"
-      >
-        <div className="flex items-center gap-2 border-b border-border px-5 py-3.5">
-          <Radio size={15} className="text-accent" />
-          <span id={titleId} className="text-[15px] font-semibold tracking-tight">
-            Agent Bridge
-          </span>
-          {status.running && (
-            <span className="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
-              <span className="h-1.5 w-1.5 rounded-full bg-success" /> running
-            </span>
-          )}
-          <div className="flex-1" />
-          <button
-            onClick={() => {
-              setConsoleOpen(true);
-              onClose();
-            }}
-            className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text"
-          >
-            <TerminalIcon size={12} /> Live console
-          </button>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 text-text-muted hover:bg-bg-hover hover:text-text"
-          >
-            <X size={14} />
-          </button>
-        </div>
-
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          {/* Master switch — default off; off means nothing is exposed. */}
-          <Card title="Agent Bridge">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium">
-                  {status.enabled
-                    ? "On — AI access available"
-                    : "Off — nothing exposed"}
-                </div>
-                <div className="text-[11px] leading-snug text-text-dim">
-                  Off means no token and no localhost server exist — nothing is
-                  exposed. Turn it on only when you want AI help; even then, each
-                  connection stays private until you grant it access below.
-                </div>
-              </div>
-              <Toggle checked={status.enabled} onChange={(v) => setEnabled(v)} />
-            </div>
-          </Card>
-
-          <p className="text-xs leading-relaxed text-text-muted">
-            Let a local AI agent (Claude Code, Cursor…) operate on your connected
-            servers through Faro — run commands, browse, read, search and transfer
-            files, with no agent install on the server and no credentials shared.
-            Faro brokers its authenticated session over a localhost endpoint and
-            asks you to approve each request (unless you relax that below).
+    <div className="space-y-4">
+          <p className="max-w-3xl text-xs leading-relaxed text-text-muted">
+            Let a local AI agent (Claude Code, Cursor…) operate on your servers
+            through Faro — run commands, browse, read, search and transfer
+            files, with no agent install on the server and no credentials
+            shared. Faro brokers its authenticated session over a localhost
+            endpoint; what it may do on each server is set on the Access tab.
           </p>
 
           <div
@@ -694,75 +634,12 @@ export function AgentBridge({ onClose }: { onClose: () => void }) {
             )}
           </Card>
 
-          {/* Access */}
-          <Card title="Server access">
-            {liveSessions.length === 0 ? (
-              <div className="text-xs text-text-dim">
-                Connect to a server first, then grant the agent access to it here.
-                Each connection gets its own toggle — bridge as many at once as
-                you like.
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {liveSessions.map(({ sessionId, profile }) => {
-                  const p = profile!;
-                  const isSsh = p.protocol === "sftp";
-                  const isAgent = p.protocol === "faro-agent";
-                  const canExec = isSsh || isAgent;
-                  const isObject = p.protocol === "s3" || p.protocol === "azure" || p.protocol === "gcs";
-                  return (
-                    <div
-                      key={sessionId}
-                      className="flex items-center gap-3 rounded-md bg-bg/60 px-2.5 py-2"
-                    >
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ background: p.color || "rgb(var(--accent))" }}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 text-sm">
-                          <span className="truncate font-medium">{p.name}</span>
-                          {sessionId === activeSessionId && (
-                            <span className="shrink-0 rounded-sm bg-accent-soft px-1 text-[9px] font-medium uppercase tracking-wider text-accent">
-                              active
-                            </span>
-                          )}
-                        </div>
-                        <div className="truncate font-mono text-[11px] text-text-dim">
-                          {isObject
-                            ? `${p.protocol}://${p.bucket ?? "?"}`
-                            : isAgent
-                              ? p.host
-                              : `${p.username}@${p.host}`}
-                        </div>
-                        {isAgent ? (
-                          <div className="mt-0.5 text-[11px] text-text-dim">
-                            Full machine — the agent can run commands here.
-                          </div>
-                        ) : (
-                          !canExec && (
-                            <div className="mt-0.5 text-[11px] text-text-dim">
-                              File ops only — exec needs an SSH or Faro Agent session.
-                            </div>
-                          )
-                        )}
-                      </div>
-                      <Toggle
-                        checked={status.enabledSessions.includes(sessionId)}
-                        onChange={(v) => setSessionAccess(sessionId, v)}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-
           {/* Auto-approve */}
-          <Card title="Auto-approve">
+          <Card title="Defaults for newly granted servers">
             <div className="mb-2.5 text-xs text-text-muted">
-              By default Faro asks before every agent request. Loosen that here —
-              applies to all enabled sessions.
+              A server you grant without setting its levels on the Access tab
+              starts from these. "Auto-approve safe shell commands" also lifts
+              read-only commands on any server whose Run commands is Ask.
             </div>
             <div className="space-y-2.5">
               <PolicyRow
@@ -931,25 +808,6 @@ export function AgentBridge({ onClose }: { onClose: () => void }) {
             onClear={clearActivity}
           />
           </div>
-        </div>
-
-        <div className="border-t border-border px-5 py-3 text-[11px] text-text-dim">
-          <ShieldCheck size={11} className="mr-1 inline" />
-          {!status.enabled ? (
-            "Agent Bridge is off — no token or localhost server exists."
-          ) : (
-            <>
-              Bound to 127.0.0.1 only · token required · per-session opt-in ·{" "}
-              {policy.allowAll
-                ? "auto-approving all requests"
-                : policy.autoRead || policy.autoSafeExec
-                  ? "auto-approving some requests"
-                  : "you approve every request"}
-              .
-            </>
-          )}
-        </div>
-      </div>
     </div>
   );
 }

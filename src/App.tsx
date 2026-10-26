@@ -54,7 +54,8 @@ import { Toaster } from "./components/ui/Toaster";
 import { OverwriteDialogHost } from "./components/OverwriteModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { KeyboardShortcutsDialog } from "./components/KeyboardShortcutsDialog";
-import { AgentBridge, AgentBridgeHost } from "./components/AgentBridge";
+import { AgentBridgeHost } from "./components/AgentBridge";
+import { AgentBridgePage } from "./components/AgentBridgePage";
 import { AgentConsoleDock } from "./components/AgentConsole";
 import { AgentDrawer } from "./components/AgentDrawer";
 import { DiskUsageHost } from "./components/DiskUsage";
@@ -157,7 +158,6 @@ export default function App() {
       {dialog === "import" && <ImportDialog onClose={closeDialog} />}
       {dialog === "grant" && <GrantDialog onClose={closeDialog} />}
       {dialog === "about" && <AboutDialog onClose={closeDialog} />}
-      {dialog === "agentBridge" && <AgentBridge onClose={closeDialog} />}
       <HostKeyModal />
       <AuthPromptModal />
       <Toaster />
@@ -174,7 +174,10 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <ServerRail />
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex flex-1 overflow-hidden">
+          <div className="relative flex flex-1 overflow-hidden">
+            {/* The Agent Bridge page covers the work area (panes stay mounted
+                underneath so their paths survive opening it). */}
+            {dialog === "agentBridge" && <AgentBridgePage onClose={closeDialog} />}
             <div className="min-w-0 flex-1 overflow-hidden">
               <FileUiBridge>
                 {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}

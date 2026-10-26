@@ -62,7 +62,7 @@ const GROUP_ORDER: Protocol[] = ["sftp", "ftps", "ftp", "s3", "azure", "gcs", "w
 
 const fallbackColor = "rgb(var(--accent))";
 
-function profileAddress(p: ConnectionProfile): string {
+export function profileAddress(p: ConnectionProfile): string {
   if (p.protocol === "s3") return `s3://${p.bucket ?? "?"}`;
   if (p.protocol === "azure") return `az://${p.account ?? "?"}/${p.bucket ?? "?"}`;
   if (p.protocol === "gcs") return `gs://${p.bucket ?? "?"}`;
