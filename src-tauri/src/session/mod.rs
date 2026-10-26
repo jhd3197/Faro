@@ -871,6 +871,7 @@ impl SshSession {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code = None;
+        let mut saw_eof = false;
         let mut truncated = false;
 
         // Process-group id of the running command, parsed from the marker line
@@ -883,7 +884,7 @@ impl SshSession {
 
         let collect = async {
             loop {
-                let Some(msg) = channel.wait().await else { break };
+                let Some(msg) = next_after_eof(&mut channel, saw_eof).await else { break };
                 match msg {
                     ChannelMsg::Data { ref data } => {
                         let total = stdout.len() + stderr.len();
@@ -933,8 +934,21 @@ impl SshSession {
                             emit_chunk(s, if is_err { "stderr" } else { "stdout" }, data);
                         }
                     }
-                    ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status as i32),
-                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    // OpenSSH sends EOF *before* the exit status, so keep
+                    // reading past EOF until the status (or Close) arrives.
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        exit_code = Some(exit_status as i32);
+                        if saw_eof {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Eof => {
+                        saw_eof = true;
+                        if exit_code.is_some() {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Close => break,
                     _ => {}
                 }
                 if truncated {
@@ -1141,6 +1155,7 @@ impl SshSession {
 
         let mut out = Vec::new();
         let mut exit_code = None;
+        let mut saw_eof = false;
         let mut truncated = false;
         let marker_bytes = marker.as_bytes();
         let mut markers_seen = 0usize; // prompts observed so far
@@ -1149,7 +1164,7 @@ impl SshSession {
 
         let collect = async {
             loop {
-                let Some(msg) = channel.wait().await else { break };
+                let Some(msg) = next_after_eof(&mut channel, saw_eof).await else { break };
                 match msg {
                     ChannelMsg::Data { ref data } | ChannelMsg::ExtendedData { ref data, .. } => {
                         let total = out.len();
@@ -1176,8 +1191,21 @@ impl SshSession {
                             }
                         }
                     }
-                    ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status as i32),
-                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    // OpenSSH sends EOF *before* the exit status, so keep
+                    // reading past EOF until the status (or Close) arrives.
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        exit_code = Some(exit_status as i32);
+                        if saw_eof {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Eof => {
+                        saw_eof = true;
+                        if exit_code.is_some() {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Close => break,
                     _ => {}
                 }
                 if truncated {
@@ -1187,6 +1215,19 @@ impl SshSession {
         };
 
         let timed_out = tokio::time::timeout(timeout, collect).await.is_err();
+
+        // A sudo'd command runs as root, so `kill_pgid` from the login user
+        // can't reach it — but its terminal can: Ctrl-C on the PTY sends SIGINT
+        // to the foreground group whoever owns it, and closing the channel
+        // hangs the PTY up (SIGHUP). Something that ignores both still survives.
+        let mut killed = false;
+        if timed_out {
+            if channel.data(&[0x03u8][..]).await.is_ok() {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                killed = channel.close().await.is_ok();
+            }
+            tracing::info!(session = %self.id, killed, "interrupted timed-out sudo command");
+        }
 
         // Scrub the priming prompt(s) so the caller/agent sees clean output.
         let text = String::from_utf8_lossy(&out).replace(&primed, "").replace(&marker, "");
@@ -1198,11 +1239,22 @@ impl SshSession {
             exit_code,
             truncated,
             timed_out,
-            // TODO: extend the pgid wrapping + kill-on-timeout to the sudo/PTY
-            // path too (a sudo'd migration is exactly the dangerous case). For
-            // now the sudo path still abandons on timeout, as before.
-            killed: false,
+            killed,
         })
+    }
+}
+
+/// The next channel message; once EOF has been seen, wait at most a moment
+/// for the trailing exit status / close so a server that never sends one
+/// can't stall the call until its timeout.
+async fn next_after_eof(
+    channel: &mut russh::Channel<russh::client::Msg>,
+    saw_eof: bool,
+) -> Option<ChannelMsg> {
+    if saw_eof {
+        tokio::time::timeout(Duration::from_secs(2), channel.wait()).await.ok().flatten()
+    } else {
+        channel.wait().await
     }
 }
 
@@ -2164,5 +2216,39 @@ mod reconnect_verifier_tests {
             assert!(matches!(d("SHA256:b", 22).await, HostDecision::Reject));
             assert!(matches!(d("SHA256:a", 2222).await, HostDecision::Reject));
         });
+    }
+}
+
+#[cfg(test)]
+mod sudo_live_tests {
+    use super::*;
+
+    /// Against the `transfer::live_tests` SFTP fixture, whose user has sudo
+    /// with its login password.
+    #[tokio::test]
+    #[ignore = "needs FARO_LIVE_SFTP with a sudo-capable user"]
+    async fn live_sudo_timeout_kills_and_password_never_leaks() {
+        let session = crate::transfer::live_tests::sftp_session().await.expect("FARO_LIVE_SFTP");
+        let Session::Ssh(ssh) = &*session else { unreachable!() };
+        let pw = std::env::var("FARO_LIVE_SFTP").unwrap().rsplit(':').next().unwrap().to_string();
+
+        // `ps` prints our wrapper's command line, prompt marker included.
+        // Exit codes survive OpenSSH's EOF-before-exit-status ordering.
+        let plain = ssh.exec_bounded("exit 3", 4096, Duration::from_secs(10), None).await.unwrap();
+        assert_eq!(plain.exit_code, Some(3));
+        let out = ssh.exec_sudo("sudo ps -ef", &pw, 1 << 20, Duration::from_secs(20), None).await.unwrap();
+        assert_eq!(out.exit_code, Some(0), "{}", out.stdout);
+        let failed = ssh.exec_sudo("sudo sh -c 'exit 7'", &pw, 4096, Duration::from_secs(20), None).await.unwrap();
+        assert_eq!(failed.exit_code, Some(7));
+        assert!(!out.stdout.contains(&pw), "password leaked into output:\n{}", out.stdout);
+
+        let out = ssh.exec_sudo("sudo sleep 4242", &pw, 4096, Duration::from_secs(3), None).await.unwrap();
+        assert!(out.timed_out && out.killed, "{out:?}");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let left = ssh
+            .exec_bounded("pgrep -f 'sleep 424[2]' || echo gone", 4096, Duration::from_secs(10), None)
+            .await
+            .unwrap();
+        assert_eq!(left.stdout.trim(), "gone", "sudo'd sleep survived the timeout");
     }
 }
