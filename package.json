@@ -19,6 +19,8 @@
   },
   "dependencies": {
     "@faro/file-ui": "*",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "@iconify/react": "^6.0.2",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.0.1",

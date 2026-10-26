@@ -6,23 +6,25 @@
 
 :root,
 [data-theme="dark"] {
-  --bg: 10 11 15;
-  --bg-panel: 17 19 26;
-  --bg-subtle: 24 27 36;
-  --bg-hover: 32 36 49;
-  --border: 38 43 58;
-  --border-subtle: 27 31 42;
-  --text: 234 236 242;
-  --text-muted: 153 161 178;
-  --text-dim: 128 137 156;
-  --accent: 139 127 246;
-  --accent-hover: 121 105 240;
-  --accent-strong: 104 90 222;
-  --accent-glow: 139 127 246;
-  --danger: 248 113 113;
-  --success: 52 211 153;
-  --warning: 251 191 36;
-  --info: 96 165 250;
+  /* Graphite + lighthouse amber. Flat, near-neutral greys (a hair cool) so the
+     one warm accent carries selection and primary actions. */
+  --bg: 13 14 17;
+  --bg-panel: 17 19 23;
+  --bg-subtle: 26 29 35;
+  --bg-hover: 32 36 44;
+  --border: 38 42 51;
+  --border-subtle: 28 31 38;
+  --text: 232 234 238;
+  --text-muted: 163 170 183;
+  --text-dim: 135 142 155;
+  --accent: 240 166 60;
+  --accent-hover: 246 186 106;
+  --accent-strong: 176 92 10;
+  --accent-glow: 240 166 60;
+  --danger: 242 116 99;
+  --success: 82 199 140;
+  --warning: 246 205 90;
+  --info: 120 162 236;
   --shadow: 0 0 0;
   color-scheme: dark;
 }
@@ -37,10 +39,10 @@
   --text: 23 28 36;
   --text-muted: 80 90 105;
   --text-dim: 98 107 124;
-  --accent: 99 88 220;
-  --accent-hover: 79 70 200;
-  --accent-strong: 79 70 200;
-  --accent-glow: 139 127 246;
+  --accent: 180 96 8;
+  --accent-hover: 158 82 6;
+  --accent-strong: 158 82 6;
+  --accent-glow: 240 166 60;
   --danger: 220 38 38;
   --success: 4 120 87;
   --warning: 180 83 9;
@@ -381,6 +383,7 @@ body,
   background: rgb(var(--bg));
   color: rgb(var(--text));
   font-family:
+    "IBM Plex Sans",
     "Inter",
     -apple-system,
     BlinkMacSystemFont,

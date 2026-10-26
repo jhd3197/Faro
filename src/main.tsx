@@ -7,6 +7,12 @@ import { applyAccent } from "./lib/accent";
 import { applyUiLanguage, type UiLanguage } from "./lib/i18n";
 import { applyUiZoom } from "./lib/uiZoom";
 import { sweepStalePopoutBuffers } from "./lib/popout";
+// Bundled (offline) UI and code faces — latin subsets only to keep the bundle lean.
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-500.css";
+import "@fontsource/ibm-plex-sans/latin-600.css";
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-500.css";
 import "./styles.css";
 
 // Optional Chinese UI (Settings → Appearance → Language; "system" follows the
