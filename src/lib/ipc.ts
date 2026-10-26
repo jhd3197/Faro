@@ -26,6 +26,7 @@ import type {
   HostPromptEvent,
   AuthPromptEvent,
   AuthChangedEvent,
+  AuthNoticeEvent,
   ImporterPaths,
   ProfilePreview,
   SessionId,
@@ -655,6 +656,12 @@ export async function onAuthChanged(
   cb: (event: AuthChangedEvent) => void
 ): Promise<UnlistenFn> {
   return listen<AuthChangedEvent>("auth://changed", (e) => cb(e.payload));
+}
+
+export async function onAuthNotice(
+  cb: (event: AuthNoticeEvent) => void
+): Promise<UnlistenFn> {
+  return listen<AuthNoticeEvent>("auth://notice", (e) => cb(e.payload));
 }
 
 export async function onTerminalData(

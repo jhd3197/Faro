@@ -4,11 +4,12 @@ import {
   ipc,
   onAuthPrompt,
   onAuthChanged,
+  onAuthNotice,
 } from "@/lib/ipc";
 import { useDialog } from "@/hooks/useDialog";
 import { useConnections } from "@/stores/connectionsStore";
 import { generatePassword } from "@/lib/password";
-import { toast } from "@/stores/toastStore";
+import { toast, useToasts } from "@/stores/toastStore";
 import type { AuthPromptEvent } from "@/lib/types";
 
 const lower = (s: string) => s.toLowerCase();
@@ -39,6 +40,23 @@ export function AuthPromptModal() {
     // A listener resolving after unmount is dropped at once, not kept twice.
     const keep = (u: () => void) => (cancelled ? u() : unsubs.push(u));
     onAuthPrompt((e) => setQueue((q) => [...q, e])).then(keep);
+    // A Cloudflare Access sign-in a proxy command opened in the browser.
+    // cloudflared opens the page itself; the toast says why, and reopens it.
+    const shown = new Set<string>();
+    onAuthNotice((e) => {
+      const key = e.url ?? e.message;
+      if (shown.has(key)) return;
+      shown.add(key);
+      useToasts.getState().push({
+        variant: "info",
+        title: e.message,
+        message: e.host
+          ? `Connecting to ${e.host} waits until you've signed in.`
+          : "The reconnect waits until you've signed in.",
+        action: e.url ? { label: "Open sign-in page", url: e.url } : undefined,
+        duration: 60_000,
+      });
+    }).then(keep);
     onAuthChanged((e) => {
       const pw = captured.current.get(e.profileId);
       if (pw) {

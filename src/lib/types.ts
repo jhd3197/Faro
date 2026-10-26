@@ -113,6 +113,9 @@ export interface ConnectionProfile {
   ftpSegments?: number;
   // SOCKS5 / HTTP CONNECT proxy for the connection's first TCP hop.
   proxy?: ProxyConfig;
+  /** SFTP: run a local command and speak SSH over its stdin/stdout
+   *  (OpenSSH ProxyCommand, Cloudflare Access). Exclusive with `proxy`. */
+  proxyCommand?: ProxyCommandConfig;
   // Id of another SFTP profile to connect through (ProxyJump), with its own
   // login. Distinct from the grant-only inline jumpHost above.
   jumpProfile?: string;
@@ -129,6 +132,19 @@ export interface ProxyConfig {
   port: number;
   username?: string;
   password?: string;
+}
+
+export type ProxyCommandKind = "command" | "cloudflare";
+
+export interface ProxyCommandConfig {
+  kind: ProxyCommandKind;
+  /** OpenSSH-style command line with %h %p %r (kind "command"). */
+  command?: string;
+  /** Cloudflare Access hostname; absent = the connection's host. */
+  hostname?: string;
+  serviceTokenId?: string;
+  /** Kept in the keychain when keychain mode is on. */
+  serviceTokenSecret?: string;
 }
 
 export const PROTOCOL_DEFAULT_PORT: Record<Protocol, number> = {
@@ -345,6 +361,7 @@ export interface ProfilePreview {
   ftpEncoding?: string;
   ftpActiveMode?: boolean;
   proxy?: ProxyConfig;
+  proxyCommand?: ProxyCommandConfig;
   jumpPreviewId?: string;
   jumpName?: string;
 }
@@ -920,6 +937,15 @@ export interface AuthPromptEvent {
 
 export interface AuthChangedEvent {
   profileId: string;
+}
+
+/** Something to show while connecting, e.g. a Cloudflare Access sign-in a
+ *  proxy command opened in the browser. Silent reconnects carry no profile. */
+export interface AuthNoticeEvent {
+  profileId?: string;
+  host?: string;
+  message: string;
+  url?: string;
 }
 
 // ---- Agent Bridge ----
