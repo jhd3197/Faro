@@ -138,6 +138,9 @@ interface Props {
   /** Host-provided shortcuts for a remote folder; absent in generic/local panes. */
   onSaveSite?: (path: string) => void;
   toolbarActions?: ReactNode;
+  /** Called with the selected entries whenever the selection (or listing)
+   *  changes — lets the host drive a preview pane. */
+  onSelectionChange?: (entries: DirEntry[]) => void;
 }
 
 /** Extract a human message from any thrown value. Transport backends may reject
@@ -173,6 +176,7 @@ export function FilePane({
   reloadToken,
   onSaveSite,
   toolbarActions,
+  onSelectionChange,
 }: Props) {
   // Everything that used to be a direct Tauri call or a zustand read now comes
   // through the injected adapter + settings. The component is otherwise the
@@ -232,6 +236,11 @@ export function FilePane({
   const loadVersion = useRef(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+  useEffect(() => {
+    onSelectionChangeRef.current?.(entries.filter((e) => selected.has(e.path)));
+  }, [selected, entries]);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [caps, setCaps] = useState<Capabilities | null>(null);
   // Width tier of THIS pane (not the viewport). Two panes share the window, so

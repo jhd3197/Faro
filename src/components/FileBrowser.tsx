@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileUp, FolderUp } from "lucide-react";
+import { FileUp, FolderUp, PanelRight } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { downloadDir } from "@tauri-apps/api/path";
 import { FilePane } from "@faro/file-ui";
@@ -11,6 +11,8 @@ import { useSettings } from "@/stores/settingsStore";
 import { toast } from "@/stores/toastStore";
 import { LOCAL_SESSION, type DirEntry } from "@/lib/types";
 import { useSiteBrowser } from "@/hooks/useSiteBrowser";
+import { FilePreview } from "./FilePreview";
+import { cn } from "@/lib/cn";
 
 // Single-pane file browser: the active server is the main view. Uploads go
 // through a native OS picker (Upload button); downloads land in the Downloads
@@ -28,6 +30,10 @@ export function FileBrowser() {
   const revealTarget = useLayout((s) => s.revealTarget);
   const clearReveal = useLayout((s) => s.clearReveal);
   const defaultDownloadFolder = useSettings((s) => s.defaultDownloadFolder);
+  const filePreview = useSettings((s) => s.filePreview);
+  const setFilePreview = useSettings((s) => s.setFilePreview);
+  // The one selected file, if exactly one regular file is selected.
+  const [selectedFile, setSelectedFile] = useState<DirEntry | null>(null);
 
   const enqueueDownloads = useTransfers((s) => s.enqueueDownloads);
   const enqueueUploads = useTransfers((s) => s.enqueueUploads);
@@ -162,8 +168,24 @@ export function FileBrowser() {
     enqueueDownloads(serverSid, entries.map(toTransferItem), dest).catch(() => {});
   };
 
+  const previewToggle = (
+    <button
+      onClick={() => setFilePreview(!filePreview)}
+      aria-pressed={filePreview}
+      title={filePreview ? "Hide file preview" : "Show file preview"}
+      className={cn(
+        "rounded p-1 hover:bg-bg-hover",
+        filePreview ? "text-accent" : "text-text-muted hover:text-text"
+      )}
+    >
+      <PanelRight size={14} />
+    </button>
+  );
+  const showPreview = filePreview && !!target && !!selectedFile;
+
   return (
     <div className="relative flex h-full flex-1">
+      <div className="min-w-0 flex-1">
       <FilePane
         key={browseLocal ? "local" : `${serverSid}:${siteBrowser.site?.id ?? "server"}`}
         paneId={browseLocal ? "local" : "remote"}
@@ -176,8 +198,31 @@ export function FileBrowser() {
         transferLabel={browseLocal ? "Upload" : "Download"}
         reloadToken={reloadToken}
         onSaveSite={browseLocal || !serverSid ? undefined : siteBrowser.saveSite}
-        toolbarActions={browseLocal || !serverSid ? undefined : siteBrowser.toolbar}
+        toolbarActions={
+          <>
+            {previewToggle}
+            {!browseLocal && serverSid && siteBrowser.toolbar}
+          </>
+        }
+        onSelectionChange={(sel) =>
+          setSelectedFile((prev) => {
+            const next = sel.length === 1 && sel[0].kind === "file" ? sel[0] : null;
+            return prev?.path === next?.path && prev?.modified === next?.modified
+              ? prev
+              : next;
+          })
+        }
       />
+      </div>
+      {showPreview && (
+        <FilePreview
+          key={`${target}:${selectedFile!.path}`}
+          sessionId={target!}
+          entry={selectedFile!}
+          onDownload={browseLocal ? undefined : () => void onTransfer([selectedFile!])}
+          onClose={() => setFilePreview(false)}
+        />
+      )}
       {siteBrowser.dialog}
       {uploadMenu && (
         <ContextMenu

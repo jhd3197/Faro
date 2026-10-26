@@ -183,6 +183,27 @@ async function main() {
     await shot("5-setup-tab");
     await D(() => window.__demo.useLayout.getState().closeDialog());
     await sleep(300);
+    // ---- 6. Files: details view by default + text preview of a selection ----
+    await D(() => window.__demo.useLayout.getState().setAgentDrawerOpen(false));
+    await sleep(300);
+    const det = await D(() => window.__demo.useSettings.getState().paneViewMode);
+    check("details is the default view", det === "details", det);
+    await D(() => {
+      const pane = document.querySelector("[data-file-pane]");
+      const row = [...pane.querySelectorAll("*")].find(
+        (el) => el.children.length === 0 && el.textContent === "server.js"
+      );
+      row.click();
+    });
+    await sleep(700);
+    const prev = await D(() => {
+      const aside = document.querySelector('aside[aria-label="File preview"]');
+      return { open: !!aside, text: aside?.innerText ?? "" };
+    });
+    check("selecting a file opens the preview", prev.open);
+    check("preview shows the file's lines", prev.text.includes("step 1 ok"), prev.text.slice(0, 80));
+    await shot("6-file-preview");
+
     // %%MORE%%
     console.log("");
     if (failures === 0) console.log("✅ all redesign checks passed");
