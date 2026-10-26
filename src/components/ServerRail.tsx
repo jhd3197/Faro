@@ -26,6 +26,7 @@ import {
   FolderMinus,
   ArrowUp,
   ArrowDown,
+  Bot,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useBridge } from "@/stores/bridgeStore";
@@ -1073,7 +1074,7 @@ function RailBubble({
           / a Faro agent" at a glance. The colour monogram stays the connection's
           primary identity; this only adds recognizability, never replaces it. */}
       <span className="absolute -left-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-bg text-text-muted ring-1 ring-border">
-        <BrandIcon icon={protocolIcon(p.protocol)} size={11} />
+        <BrandIcon icon={protocolIcon(p.protocol)} size={12} />
       </span>
       {pending > 0 ? (
         <PendingBadge count={pending} />
@@ -1131,7 +1132,7 @@ function RailBubble({
               {bridged ? " · agent connected" : ""}
             </span>
             {agent && (
-              <span className="mt-0.5 border-t border-border pt-1 text-[10px] text-accent">
+              <span className="mt-0.5 border-t border-border pt-1 text-[10px] text-text-muted">
                 Agent: {accessSummary(agent)}
               </span>
             )}
@@ -1401,14 +1402,16 @@ function GroupNameDialog({
   );
 }
 
-// Amber corner dot (top-right): the agent has access to this server.
+// Corner chip (top-right): the agent has access to this server. Neutral like
+// the protocol chip opposite it, because colour on the bubble means connection
+// state only (the bottom-right StatusDot).
 function AgentDot() {
   return (
     <span
       aria-hidden
-      className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-bg"
+      className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-bg text-text-muted ring-1 ring-border"
     >
-      <span className="h-2 w-2 rounded-full bg-accent" />
+      <Bot size={10} />
     </span>
   );
 }

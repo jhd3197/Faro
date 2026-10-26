@@ -18,7 +18,8 @@ import { BRAND_ICONS } from "./brandIconData";
 // brand palette (AWS orange, Azure blue…); monochrome `mdi:` / `simple-icons:`
 // glyphs follow `currentColor`, so they tint to the surrounding UI.
 const PROTOCOL_ICON: Record<Protocol, string> = {
-  sftp: "mdi:ssh",
+  // A terminal glyph, not the "SSH" lettering, which blurs at chip size.
+  sftp: "mdi:console",
   ftp: "mdi:folder-network-outline",
   ftps: "mdi:folder-network",
   s3: "logos:aws-s3",
