@@ -65,6 +65,9 @@ import { FleetSearchHost } from "./components/FleetSearch";
 import { SkillsHost } from "./components/SkillsPanel";
 import { SnippetsHost } from "./components/SnippetsPanel";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useResolvedCommands } from "./lib/keybindings";
+import { formatCombo } from "./lib/shortcuts";
+import { toggleZen } from "./lib/windowMode";
 import { relTime } from "./lib/format";
 import { cn } from "./lib/cn";
 
@@ -80,6 +83,7 @@ export default function App() {
   const terminalVisible = !!activeSessionId && terminalOpen && supportsTerminal;
   const consoleOpen = useLayout((s) => s.consoleOpen);
   const agentDrawerOpen = useLayout((s) => s.agentDrawerOpen);
+  const zen = useLayout((s) => s.zen);
   const browserLayout = useSettings((s) => s.browserLayout);
   const dialog = useLayout((s) => s.dialog);
   const closeDialog = useLayout((s) => s.closeDialog);
@@ -145,7 +149,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen flex-col">
-      <TitleBar />
+      {zen ? <ZenExit /> : <TitleBar />}
       <DeepLinkListener />
       {dialog === "settings" && <Settings onClose={closeDialog} />}
       {dialog === "newConnection" && (
@@ -171,7 +175,7 @@ export default function App() {
       <CommandPalette />
       <KeyboardShortcutsDialog />
       <div className="flex flex-1 overflow-hidden">
-        <ServerRail />
+        {!zen && <ServerRail />}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="relative flex flex-1 overflow-hidden">
             {/* The Agent Bridge page covers the work area (panes stay mounted
@@ -183,9 +187,9 @@ export default function App() {
                 {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
               </FileUiBridge>
             </div>
-            {agentDrawerOpen && <AgentDrawer />}
+            {agentDrawerOpen && !zen && <AgentDrawer />}
           </div>
-          {consoleOpen && (
+          {consoleOpen && !zen && (
             <div className="h-64 border-t border-border">
               <AgentConsoleDock />
             </div>
@@ -208,7 +212,7 @@ export default function App() {
           <TransferQueue />
           <UpdatePrompt />
           <CliUpdatePrompt />
-          <StatusBar
+          {!zen && <StatusBar
             terminalOpen={terminalOpen && supportsTerminal}
             onToggleTerminal={toggleTerminal}
             terminalAvailable={supportsTerminal}
@@ -218,9 +222,31 @@ export default function App() {
             editsMenuOpen={editsMenuOpen}
             onToggleEditsMenu={() => setEditsMenuOpen((v) => !v)}
             onCloseEditsMenu={() => setEditsMenuOpen(false)}
-          />
+          />}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Zen mode hides the title bar, so a thin strip along the top edge reveals a
+// way back out on hover (the shortcut works too).
+function ZenExit() {
+  const commands = useResolvedCommands();
+  const combo = commands.find((c) => c.id === "toggle-zen")?.combo;
+  return (
+    <div className="group fixed inset-x-0 top-0 z-50 flex h-3 justify-center hover:h-10">
+      <button
+        onClick={() => void toggleZen()}
+        className="mt-1.5 hidden h-7 items-center gap-2 rounded-md border border-border bg-bg-panel px-3 text-[12px] text-text-muted shadow-elev-2 hover:text-text group-hover:flex"
+      >
+        Leave Zen mode
+        {combo && (
+          <kbd className="rounded border border-border px-1 font-mono text-[10px] text-text-dim">
+            {formatCombo(combo)}
+          </kbd>
+        )}
+      </button>
     </div>
   );
 }

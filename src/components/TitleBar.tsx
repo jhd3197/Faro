@@ -24,7 +24,10 @@ import {
   Search,
   Maximize2,
   Minimize2,
+  Fullscreen,
+  Focus,
 } from "lucide-react";
+import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
 import { useSettings, stepUiZoom } from "@/stores/settingsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useTransfers } from "@/stores/transfersStore";
@@ -143,6 +146,19 @@ export function TitleBar() {
           icon: <ArrowDownUp size={11} />,
           shortcut: comboOf("toggle-transfers"),
           onClick: togglePanel,
+        },
+        { kind: "sep" },
+        {
+          label: "Full screen",
+          icon: <Fullscreen size={11} />,
+          shortcut: comboOf("toggle-fullscreen"),
+          onClick: () => void toggleFullscreen(),
+        },
+        {
+          label: "Zen mode",
+          icon: <Focus size={11} />,
+          shortcut: comboOf("toggle-zen"),
+          onClick: () => void toggleZen(),
         },
         { kind: "sep" },
         {

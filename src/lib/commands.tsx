@@ -22,7 +22,11 @@ import {
   ZoomIn,
   ZoomOut,
   Search,
+  Fullscreen,
+  Focus,
+  PanelRight,
 } from "lucide-react";
+import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
 import { useConnections } from "@/stores/connectionsStore";
 import { useTransfers } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
@@ -63,6 +67,8 @@ export function useCommands(): Command[] {
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
   const terminalOpen = useLayout((s) => s.terminalOpen);
   const toggleConsole = useLayout((s) => s.toggleConsole);
+  const toggleAgentDrawer = useLayout((s) => s.toggleAgentDrawer);
+  const zen = useLayout((s) => s.zen);
   const openDialog = useLayout((s) => s.openDialog);
   const setShortcutsOpen = useLayout((s) => s.setShortcutsOpen);
   const openSkills = useSkills((s) => s.openPanel);
@@ -171,6 +177,33 @@ export function useCommands(): Command[] {
       combo: "mod+`",
       enabled: !!activeSessionId && supportsTerminal,
       run: toggleTerminal,
+    },
+    {
+      id: "toggle-fullscreen",
+      title: "Toggle Full Screen",
+      group: "View",
+      icon: <Fullscreen size={14} />,
+      combo: "f11",
+      keywords: "full screen fullscreen maximize window",
+      run: () => void toggleFullscreen(),
+    },
+    {
+      id: "toggle-zen",
+      title: zen ? "Leave Zen Mode" : "Zen Mode",
+      group: "View",
+      icon: <Focus size={14} />,
+      combo: "mod+alt+z",
+      keywords: "zen focus distraction free minimal hide sidebar menus panes",
+      run: () => void toggleZen(),
+    },
+    {
+      id: "toggle-agent-panel",
+      title: "Toggle Agent Panel",
+      group: "View",
+      icon: <PanelRight size={14} />,
+      combo: "mod+shift+a",
+      keywords: "agent panel drawer approvals access",
+      run: toggleAgentDrawer,
     },
     {
       id: "switch-theme",
@@ -282,6 +315,7 @@ export function useCommands(): Command[] {
       title: "Reconnect",
       group: "Connection",
       icon: <RefreshCw size={14} />,
+      combo: "mod+shift+r",
       run: () => reconnect().catch(() => {}),
     });
   }
