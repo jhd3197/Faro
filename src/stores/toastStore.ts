@@ -2,11 +2,18 @@ import { create } from "zustand";
 
 export type ToastVariant = "info" | "success" | "error" | "warning";
 
+/** A link button on a toast. A URL, not a callback, so history keeps it. */
+export interface ToastAction {
+  label: string;
+  url: string;
+}
+
 export interface Toast {
   id: string;
   variant: ToastVariant;
   title: string;
   message?: string;
+  action?: ToastAction;
   createdAt: number;
 }
 
@@ -14,6 +21,7 @@ interface PushArgs {
   variant: ToastVariant;
   title: string;
   message?: string;
+  action?: ToastAction;
   duration?: number; // ms; 0 = sticky until dismissed
 }
 
@@ -56,8 +64,8 @@ export const useToasts = create<ToastState>((set, get) => ({
   history: loadHistory(),
   unreadCount: 0,
 
-  push: ({ variant, title, message, duration }) => {
-    const item: Toast = { id: nextId(), variant, title, message, createdAt: Date.now() };
+  push: ({ variant, title, message, action, duration }) => {
+    const item: Toast = { id: nextId(), variant, title, message, action, createdAt: Date.now() };
     const history = [item, ...get().history].slice(0, MAX_HISTORY);
     saveHistory(history);
     set((s) => ({

@@ -77,6 +77,35 @@ pub struct ProxyConfig {
     pub password: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyCommandKind {
+    /// An OpenSSH-style `ProxyCommand` line.
+    Command,
+    /// `cloudflared access ssh`, built from the Access hostname.
+    Cloudflare,
+}
+
+/// SSH over a local process's stdin/stdout (OpenSSH `ProxyCommand`), for
+/// Cloudflare Access, AWS SSM, Google IAP and the like. See `proxy_command.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyCommandConfig {
+    pub kind: ProxyCommandKind,
+    /// The command line, with `%h %p %r` expanded (`kind = command`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub command: String,
+    /// Access hostname (`kind = cloudflare`). Absent = the profile's host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Access service token, for logins with no browser (CLI, Agent Bridge).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_token_id: Option<String>,
+    // Kept in the keychain (and blanked from profiles.json) in keychain mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_token_secret: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -155,6 +184,10 @@ pub struct ConnectionProfile {
     // SOCKS5 / HTTP CONNECT proxy for backends that dial TCP. Absent = direct.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    // SSH only: run this command and speak SSH over its stdin/stdout instead
+    // of dialing TCP. Exclusive with `proxy`. Absent = dial directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_command: Option<ProxyCommandConfig>,
     // Id of another SSH profile to connect through (ProxyJump), with that
     // profile's own auth, proxy and jump host. Distinct from the inline
     // `jump_host` above, which access grants use.
@@ -261,6 +294,18 @@ impl ProfileStore {
                         }
                     }
                 }
+                if let Some(cmd) = p.proxy_command.as_mut().filter(|c| {
+                    c.service_token_id.is_some() && c.service_token_secret.is_none()
+                }) {
+                    let purpose = credentials::profile_cf_token_secret_purpose(&p.id);
+                    match credentials::get_secret(&purpose) {
+                        Ok(v) => cmd.service_token_secret = v,
+                        Err(e) => {
+                            eprintln!("keychain read failed for profile {} Access token: {e:#}", p.name);
+                            unresolved.push((p.id.clone(), p.name.clone()));
+                        }
+                    }
+                }
                 let purpose = match secret_purpose(p) {
                     Some(purpose) if secret_is_empty(&p.auth) => purpose,
                     _ => continue,
@@ -330,7 +375,10 @@ impl ProfileStore {
             for p in g.iter() {
                 for purpose in all_secret_purposes(&p.id)
                     .into_iter()
-                    .chain([credentials::profile_proxy_password_purpose(&p.id)])
+                    .chain([
+                        credentials::profile_proxy_password_purpose(&p.id),
+                        credentials::profile_cf_token_secret_purpose(&p.id),
+                    ])
                 {
                     credentials::delete_secret(&purpose);
                     let _ = db.forget_keychain(credentials::SERVICE, &purpose);
@@ -464,18 +512,35 @@ pub fn sync_profile_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved
     db.record_keychain(credentials::SERVICE, &purpose)
 }
 
-/// Keychain side of a profile's proxy password, like `sync_profile_secret`.
+/// Keychain side of a profile's proxy password and Access service-token
+/// secret, like `sync_profile_secret`.
 fn sync_proxy_secret(profile: &ConnectionProfile, db: &Db, keep_unresolved: bool) -> Result<()> {
-    let purpose = credentials::profile_proxy_password_purpose(&profile.id);
-    match profile.proxy.as_ref().and_then(|p| p.password.as_deref()).filter(|v| !v.is_empty()) {
+    let password = profile.proxy.as_ref().and_then(|p| p.password.as_deref());
+    sync_optional_secret(
+        &credentials::profile_proxy_password_purpose(&profile.id),
+        password,
+        db,
+        keep_unresolved,
+    )?;
+    let token = profile.proxy_command.as_ref().and_then(|c| c.service_token_secret.as_deref());
+    sync_optional_secret(
+        &credentials::profile_cf_token_secret_purpose(&profile.id),
+        token,
+        db,
+        keep_unresolved,
+    )
+}
+
+fn sync_optional_secret(purpose: &str, value: Option<&str>, db: &Db, keep_unresolved: bool) -> Result<()> {
+    match value.filter(|v| !v.is_empty()) {
         Some(value) => {
-            credentials::set_secret(&purpose, value)?;
-            db.record_keychain(credentials::SERVICE, &purpose)
+            credentials::set_secret(purpose, value)?;
+            db.record_keychain(credentials::SERVICE, purpose)
         }
         None if keep_unresolved => Ok(()),
         None => {
-            credentials::delete_secret(&purpose);
-            db.forget_keychain(credentials::SERVICE, &purpose)
+            credentials::delete_secret(purpose);
+            db.forget_keychain(credentials::SERVICE, purpose)
         }
     }
 }
@@ -495,6 +560,9 @@ fn for_disk(profiles: &[ConnectionProfile], keychain: bool) -> Vec<ConnectionPro
                 }
                 if let Some(proxy) = p.proxy.as_mut() {
                     proxy.password = None;
+                }
+                if let Some(cmd) = p.proxy_command.as_mut() {
+                    cmd.service_token_secret = None;
                 }
             }
             p
@@ -556,6 +624,24 @@ mod tests {
         assert!(!on.contains("proxy-pw") && on.contains("proxy.test"));
         let off = serde_json::to_string(&for_disk(&[p], false)).unwrap();
         assert!(off.contains("proxy-pw") && off.contains(r#""kind":"socks5""#));
+    }
+
+    #[test]
+    fn keychain_mode_keeps_access_token_secret_out_of_file() {
+        let mut p = profile(serde_json::json!({ "kind": "agent" }));
+        p.proxy_command = Some(ProxyCommandConfig {
+            kind: ProxyCommandKind::Cloudflare,
+            command: String::new(),
+            hostname: Some("ssh.example.com".into()),
+            service_token_id: Some("tok.access".into()),
+            service_token_secret: Some("cf-secret".into()),
+        });
+        let on = serde_json::to_string(&for_disk(&[p.clone()], true)).unwrap();
+        assert!(!on.contains("cf-secret"), "{on}");
+        // The id stays: it's what tells the loader to fetch the secret.
+        assert!(on.contains("tok.access") && on.contains("ssh.example.com"));
+        let off = serde_json::to_string(&for_disk(&[p], false)).unwrap();
+        assert!(off.contains("cf-secret"));
     }
 
     fn ssh(id: &str, jump: Option<&str>) -> ConnectionProfile {

@@ -117,7 +117,10 @@ pub async fn delete_profile(
         // Keychain-held saved password or key passphrase (no-op when none stored).
         for purpose in crate::profiles::all_secret_purposes(&p.id)
             .into_iter()
-            .chain([crate::credentials::profile_proxy_password_purpose(&p.id)])
+            .chain([
+                crate::credentials::profile_proxy_password_purpose(&p.id),
+                crate::credentials::profile_cf_token_secret_purpose(&p.id),
+            ])
         {
             crate::credentials::delete_secret(&purpose);
             let _ = state
@@ -423,6 +426,7 @@ pub async fn dropbox_authorize(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        proxy_command: None,
         oauth_client_id: client_id,
     };
     let account_label = match crate::session::dropbox_connect(&probe).await {
@@ -480,6 +484,7 @@ pub async fn onedrive_authorize(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        proxy_command: None,
         oauth_client_id: client_id,
     };
     let account_label = match crate::session::onedrive_connect(&probe).await {
@@ -542,6 +547,7 @@ pub async fn dynamics_authorize(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        proxy_command: None,
         oauth_client_id: None,
     };
     let account_label = match crate::session::dynamics_connect(&probe).await {
@@ -594,6 +600,7 @@ pub async fn gdrive_authorize(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        proxy_command: None,
         oauth_client_id: client_id,
     };
     let account_label = match crate::session::gdrive_connect(&probe).await {
@@ -646,6 +653,7 @@ pub async fn box_authorize(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        proxy_command: None,
         oauth_client_id: client_id,
     };
     let account_label = match crate::session::box_connect(&probe).await {

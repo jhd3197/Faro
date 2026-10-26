@@ -2,7 +2,7 @@ pub mod filezilla;
 pub mod openssh;
 pub mod putty;
 
-use crate::profiles::{AuthMethod, ConnectionProfile, ProxyConfig};
+use crate::profiles::{AuthMethod, ConnectionProfile, ProxyCommandConfig, ProxyConfig};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -41,6 +41,10 @@ pub struct ProfilePreview {
     /// Proxy carried over from the source (OpenSSH `ProxyCommand nc -X ...`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    /// A `ProxyCommand` that isn't a plain proxy or jump host (cloudflared,
+    /// AWS SSM, ...), run as the SSH transport.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_command: Option<ProxyCommandConfig>,
     /// Jump host (OpenSSH `ProxyJump`): the bastion's preview in the same
     /// import, and its name for matching an existing profile when that
     /// preview isn't imported.
@@ -64,6 +68,7 @@ impl ProfilePreview {
             ftp_encoding: None,
             ftp_active_mode: None,
             proxy: None,
+            proxy_command: None,
             jump_preview_id: None,
             jump_name: None,
         }
@@ -112,6 +117,7 @@ impl ProfilePreview {
             proxy: self.proxy,
             jump_profile: None,
             jump_via: None,
+            proxy_command: self.proxy_command,
             oauth_client_id: None,
         }
     }

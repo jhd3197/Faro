@@ -95,6 +95,15 @@ pub struct GrantImportResult {
     pub group: String,
     pub imported: Vec<ConnectionProfile>,
     pub failed: Vec<GrantImportFailure>,
+    /// `SHA256:…` fingerprint of the key Faro generated, so the user can read
+    /// it to the issuer's admin when the device needs approval.
+    pub fingerprint: String,
+    /// The issuer registered the key but an admin must approve this device
+    /// before it can connect. The connections are imported anyway; they start
+    /// working once approved.
+    pub pending_approval: bool,
+    /// Optional human message from the issuer.
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,12 +115,18 @@ pub struct GrantImportFailure {
 
 /// The issuer's reply to the key upload: `{ "installed": [...], "failed":
 /// [{name,error}] }`. An absent `installed` means every connection succeeded.
+/// `pending_approval` / `message` are optional (an issuer that approves
+/// devices before installing their key sets them).
 #[derive(Debug, Deserialize)]
 struct KeyInstallResponse {
     #[serde(default)]
     installed: Option<Vec<String>>,
     #[serde(default)]
     failed: Vec<KeyInstallFailure>,
+    #[serde(default)]
+    pending_approval: bool,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,7 +338,11 @@ pub async fn accept_grant(
     let url = format!("{base}/.well-known/faro-grant/{token}/key");
     let resp = http_client()?
         .post(&url)
-        .json(&serde_json::json!({ "public_key": public_key }))
+        .json(&serde_json::json!({
+            "public_key": public_key,
+            // Lets the issuer label the new device (e.g. "JUANS-LAPTOP").
+            "device_name": crate::session::agent::hostname(),
+        }))
         .send()
         .await
         .map_err(|e| http_err("upload grant key", e))?;
@@ -385,12 +404,16 @@ pub async fn accept_grant(
         grant = %manifest.name,
         imported = imported.len(),
         failed = failed.len(),
+        pending_approval = reply.pending_approval,
         "grant accepted"
     );
     Ok(GrantImportResult {
         group,
         imported,
         failed,
+        fingerprint: crate::keys::openssh_fingerprint(&public_key).unwrap_or_default(),
+        pending_approval: reply.pending_approval,
+        message: reply.message,
     })
 }
 
@@ -448,6 +471,7 @@ async fn import_connection(
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        proxy_command: None,
         oauth_client_id: None,
     };
     if let Err(e) = state.profiles.upsert(profile.clone()).await {
@@ -651,5 +675,23 @@ mod tests {
         // …and it round-trips back through camelCase (what the frontend sends).
         let m2: GrantManifest = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert!(validate_manifest(&m2).is_ok());
+    }
+
+    #[test]
+    fn key_install_reply_defaults_and_pending_approval() {
+        // v1 issuers send only installed/failed.
+        let plain: KeyInstallResponse =
+            serde_json::from_str(r#"{ "installed": ["web-1"], "failed": [] }"#).unwrap();
+        assert!(!plain.pending_approval);
+        assert!(plain.message.is_none());
+        // Issuers that approve devices first add the flag + a message.
+        let pending: KeyInstallResponse = serde_json::from_str(
+            r#"{ "installed": ["web-1"], "failed": [], "pending_approval": true,
+                 "message": "Waiting for an administrator to approve this device." }"#,
+        )
+        .unwrap();
+        assert!(pending.pending_approval);
+        assert_eq!(pending.installed.as_deref(), Some(&["web-1".to_string()][..]));
+        assert!(pending.message.unwrap().contains("approve"));
     }
 }

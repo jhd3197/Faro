@@ -1,5 +1,5 @@
 use super::ProfilePreview;
-use crate::profiles::{ProxyConfig, ProxyKind};
+use crate::profiles::{ProxyCommandConfig, ProxyCommandKind, ProxyConfig, ProxyKind};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -13,9 +13,11 @@ pub fn default_path() -> Option<PathBuf> {
 /// skipped — they're configuration scaffolding, not actual targets.
 ///
 /// We support a small but sufficient subset of OpenSSH directives:
-/// Host, Hostname, User, Port, IdentityFile, ProxyJump, and the common
-/// ProxyCommand forms (`nc -X`, `ncat --proxy`, `connect -S/-H`,
-/// `ssh -W`). Everything else is ignored. Include/Match etc. are
+/// Host, Hostname, User, Port, IdentityFile, ProxyJump, and ProxyCommand:
+/// the common forms (`nc -X`, `ncat --proxy`, `connect -S/-H`, `ssh -W`)
+/// become a Faro proxy or jump host, `cloudflared access ssh` becomes
+/// Cloudflare Access, and any other command is kept as the SSH transport.
+/// Everything else is ignored. Include/Match etc. are
 /// deliberately out of scope — most desktop users have flat config files
 /// and that's the case we want to cover.
 pub fn parse_file(path: &PathBuf) -> Result<Vec<ProfilePreview>> {
@@ -90,6 +92,11 @@ pub fn parse(text: &str, source_label: String) -> Vec<ProfilePreview> {
                 preview.proxy = Some(proxy);
                 out.push(preview);
             }
+            Some(Via::Command(cmd)) => {
+                let mut preview = preview;
+                preview.proxy_command = Some(cmd);
+                out.push(preview);
+            }
             Some(Via::Jump(hop)) => {
                 pending.push((out.len(), hop));
                 out.push(preview);
@@ -147,6 +154,7 @@ impl Hop {
 enum Via {
     Jump(Hop),
     Proxy(ProxyConfig),
+    Command(ProxyCommandConfig),
 }
 
 /// `ProxyJump [user@]host[:port][,...]`. Faro chains through profiles, so the
@@ -183,11 +191,55 @@ fn split_host_port(s: &str) -> Option<(String, Option<u16>)> {
     }
 }
 
+/// A ProxyCommand as a Faro proxy, jump host or proxy command. `none`
+/// means direct.
+fn parse_proxy_command(value: &str) -> Option<Via> {
+    if value.trim().eq_ignore_ascii_case("none") {
+        return None;
+    }
+    translate_proxy_command(value)
+        .or_else(|| cloudflare_access(value))
+        .or_else(|| {
+            Some(Via::Command(ProxyCommandConfig {
+                kind: ProxyCommandKind::Command,
+                command: value.trim().to_string(),
+                hostname: None,
+                service_token_id: None,
+                service_token_secret: None,
+            }))
+        })
+}
+
+/// `cloudflared access ssh --hostname %h|<name>` with nothing else.
+fn cloudflare_access(value: &str) -> Option<Via> {
+    let args = crate::proxy_command::split(value).ok()?;
+    let mut args = args.iter().map(String::as_str);
+    let prog = args.next()?.rsplit(['/', '\\']).next()?;
+    let prog = prog.strip_suffix(".exe").unwrap_or(prog);
+    if !prog.eq_ignore_ascii_case("cloudflared") || args.next()? != "access" || args.next()? != "ssh" {
+        return None;
+    }
+    let rest: Vec<&str> = args.collect();
+    let hostname = match rest.as_slice() {
+        [flag, h] if matches!(*flag, "--hostname" | "--tunnel-host" | "-T") => *h,
+        [one] => one.strip_prefix("--hostname=")?,
+        _ => return None,
+    };
+    Some(Via::Command(ProxyCommandConfig {
+        kind: ProxyCommandKind::Cloudflare,
+        command: String::new(),
+        // `%h` is the profile's own host, which is the default.
+        hostname: (hostname != "%h").then(|| hostname.to_string()),
+        service_token_id: None,
+        service_token_secret: None,
+    }))
+}
+
 /// The ProxyCommand forms that map onto a Faro proxy or jump host:
 /// `nc -X 5|connect -x host:port %h %p`, `ncat --proxy host:port
 /// --proxy-type socks5|http %h %p`, `connect -S|-H host:port %h %p`, and
 /// `ssh -W %h:%p [user@]bastion`.
-fn parse_proxy_command(value: &str) -> Option<Via> {
+fn translate_proxy_command(value: &str) -> Option<Via> {
     let args: Vec<&str> = value.split_whitespace().collect();
     let prog = args.first()?.rsplit(['/', '\\']).next()?.trim_end_matches(".exe");
     let flag = |name: &str| args.iter().position(|a| *a == name).and_then(|i| args.get(i + 1)).copied();
@@ -412,7 +464,83 @@ Host cache
             parse_proxy_command("ssh -q -W %h:%p -p 2200 ops@bastion"),
             Some(Via::Jump(Hop { user: Some("ops".into()), host: "bastion".into(), port: Some(2200) }))
         );
-        assert_eq!(parse_proxy_command("cloudflared access ssh --hostname %h"), None);
+        assert_eq!(parse_proxy_command("none"), None);
+        assert_eq!(parse_proxy_command("NONE "), None);
+    }
+
+    fn cloudflare(hostname: Option<&str>) -> Option<Via> {
+        Some(Via::Command(ProxyCommandConfig {
+            kind: ProxyCommandKind::Cloudflare,
+            command: String::new(),
+            hostname: hostname.map(Into::into),
+            service_token_id: None,
+            service_token_secret: None,
+        }))
+    }
+
+    fn command(line: &str) -> Option<Via> {
+        Some(Via::Command(ProxyCommandConfig {
+            kind: ProxyCommandKind::Command,
+            command: line.into(),
+            hostname: None,
+            service_token_id: None,
+            service_token_secret: None,
+        }))
+    }
+
+    #[test]
+    fn cloudflared_becomes_cloudflare_access() {
+        assert_eq!(parse_proxy_command("cloudflared access ssh --hostname %h"), cloudflare(None));
+        assert_eq!(
+            parse_proxy_command("/usr/local/bin/cloudflared access ssh --hostname ssh.example.com"),
+            cloudflare(Some("ssh.example.com"))
+        );
+        assert_eq!(
+            parse_proxy_command(r#""C:\Program Files (x86)\cloudflared\cloudflared.exe" access ssh --hostname=%h"#),
+            cloudflare(None)
+        );
+        assert_eq!(parse_proxy_command("cloudflared access ssh -T %h"), cloudflare(None));
+        // Extra flags (service tokens, logging...) are kept verbatim, not lost.
+        let line = "cloudflared access ssh --hostname %h --id abc --secret def";
+        assert_eq!(parse_proxy_command(line), command(line));
+    }
+
+    #[test]
+    fn other_proxy_commands_are_kept_verbatim() {
+        for line in [
+            "aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p",
+            "gcloud compute start-iap-tunnel %h %p --listen-on-stdin --zone us-central1-a",
+            "sh -c 'nc %h %p'",
+            "nc %h %p",
+        ] {
+            assert_eq!(parse_proxy_command(line), command(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn imported_cloudflare_host_becomes_a_working_profile() {
+        let cfg = concat!(
+            "Host prod\n",
+            "  HostName ssh.example.com\n",
+            "  User deploy\n",
+            "  ProxyCommand cloudflared access ssh --hostname %h\n",
+            "Host ssm\n",
+            "  HostName i-0abc\n",
+            "  ProxyCommand aws ssm start-session --target %h\n",
+            "Host plain\n",
+            "  HostName 10.0.0.1\n",
+            "  ProxyCommand none\n",
+        );
+        let profiles = super::super::into_profiles(parse(cfg, "t".into()), &[]);
+        let find = |n: &str| profiles.iter().find(|p| p.name == n).unwrap();
+        let prod = find("prod");
+        assert_eq!((prod.host.as_str(), prod.port, prod.username.as_str()), ("ssh.example.com", 22, "deploy"));
+        let pc = prod.proxy_command.as_ref().unwrap();
+        assert_eq!((pc.kind, pc.hostname.as_deref()), (ProxyCommandKind::Cloudflare, None));
+        assert!(prod.proxy.is_none() && prod.jump_profile.is_none());
+        let ssm = find("ssm").proxy_command.as_ref().unwrap();
+        assert_eq!((ssm.kind, ssm.command.as_str()), (ProxyCommandKind::Command, "aws ssm start-session --target %h"));
+        assert!(find("plain").proxy_command.is_none());
     }
 
     #[test]

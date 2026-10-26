@@ -26,6 +26,9 @@ import type {
   HostPromptEvent,
   AuthPromptEvent,
   AuthChangedEvent,
+  AuthNoticeEvent,
+  AccessStatus,
+  CloudflaredStatus,
   ImporterPaths,
   ProfilePreview,
   SessionId,
@@ -218,6 +221,18 @@ export const ipc = {
   cliUpdaterUpdate: () => invoke<CliStatus>("cli_updater_update"),
   cliUpdaterSetMode: (mode: CliUpdateMode) =>
     invoke<CliStatus>("cli_updater_set_mode", { mode }),
+
+  // ---- Cloudflare (Plan 29): managed cloudflared + Access sign-ins ----
+  cloudflaredStatus: () => invoke<CloudflaredStatus>("cloudflared_status"),
+  /** Also asks GitHub for the latest release. */
+  cloudflaredCheck: () => invoke<CloudflaredStatus>("cloudflared_check"),
+  /** Download, verify and use Faro's own copy of the official release. */
+  cloudflaredInstall: () => invoke<CloudflaredStatus>("cloudflared_install"),
+  cloudflaredSetCustomPath: (path: string | null) =>
+    invoke<CloudflaredStatus>("cloudflared_set_custom_path", { path }),
+  cfAccessStatus: (hostname: string) => invoke<AccessStatus>("cf_access_status", { hostname }),
+  /** Browser sign-in; resolves once it finishes (or fails). */
+  cfAccessLogin: (hostname: string) => invoke<AccessStatus>("cf_access_login", { hostname }),
 
   // ---- One-click "Add faro-cli to PATH" (Plan 16 Phase 4): per-user, no admin.
   pathStatus: () => invoke<PathStatus>("path_status"),
@@ -657,6 +672,12 @@ export async function onAuthChanged(
   return listen<AuthChangedEvent>("auth://changed", (e) => cb(e.payload));
 }
 
+export async function onAuthNotice(
+  cb: (event: AuthNoticeEvent) => void
+): Promise<UnlistenFn> {
+  return listen<AuthNoticeEvent>("auth://notice", (e) => cb(e.payload));
+}
+
 export async function onTerminalData(
   cb: (event: TerminalDataEvent) => void
 ): Promise<UnlistenFn> {
@@ -710,6 +731,12 @@ export async function onAgentHostPaired(
 }
 
 /** CLI version-drift status changed (startup check, or an update finished). */
+export async function onCloudflaredStatus(
+  cb: (status: CloudflaredStatus) => void
+): Promise<UnlistenFn> {
+  return listen<CloudflaredStatus>("cloudflared://status", (e) => cb(e.payload));
+}
+
 export async function onCliUpdaterStatus(
   cb: (status: CliStatus) => void
 ): Promise<UnlistenFn> {

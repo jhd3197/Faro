@@ -1,0 +1,32 @@
+# Cloudflare Access lab for Plan 28 (proxy commands). sshd has NO published
+# port; the only way in is a Cloudflare quick tunnel, reached with
+# `cloudflared access ssh` (no Cloudflare account needed):
+#   docker compose -f scripts/cf-lab.yml up -d
+#   docker compose -f scripts/cf-lab.yml logs tunnel | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com'
+#   FARO_LIVE_CF=<that hostname, without https://> \
+#     cargo test -p faro --lib -- --ignored live_cloudflare --nocapture --test-threads 1
+# Needs cloudflared on the host. Quick tunnels are best-effort; if the
+# hostname stops answering, `docker compose ... restart tunnel` for a new one.
+name: faro-cflab
+networks:
+  sealed: {}
+services:
+  target:
+    image: alpine:3.20
+    networks: [sealed]
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache openssh coreutils >/dev/null
+        ssh-keygen -A
+        adduser -D faro && echo faro:farotest | chpasswd
+        printf 'PasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /etc/ssh/sshd_config
+        mkdir -p /home/faro/data && echo 'hello through cloudflare' > /home/faro/data/hello.txt
+        head -c 8388608 /dev/urandom > /home/faro/data/blob.bin
+        chown -R faro /home/faro
+        exec /usr/sbin/sshd -D -e
+  tunnel:
+    image: cloudflare/cloudflared:2025.8.1
+    networks: [sealed]
+    command: tunnel --no-autoupdate --url ssh://target:22

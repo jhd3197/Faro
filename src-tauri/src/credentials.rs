@@ -35,6 +35,11 @@ pub fn profile_proxy_password_purpose(profile_id: &str) -> String {
     format!("profile-proxy-password:{profile_id}")
 }
 
+/// Keychain purpose for a profile's Cloudflare Access service-token secret.
+pub fn profile_cf_token_secret_purpose(profile_id: &str) -> String {
+    format!("profile-cf-token-secret:{profile_id}")
+}
+
 /// Write (or overwrite) a secret for `purpose`. An empty value clears it.
 pub fn set_secret(purpose: &str, value: &str) -> Result<()> {
     if value.is_empty() {

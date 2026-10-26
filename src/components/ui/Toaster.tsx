@@ -1,4 +1,5 @@
-import { CheckCircle2, AlertCircle, Info, AlertTriangle, X } from "lucide-react";
+import { CheckCircle2, AlertCircle, Info, AlertTriangle, X, ExternalLink } from "lucide-react";
+import { ipc } from "@/lib/ipc";
 import {
   useToasts,
   type Toast as ToastT,
@@ -61,6 +62,15 @@ function ToastCard({
           <div className="mt-0.5 max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] text-text-muted">
             {toast.message}
           </div>
+        )}
+        {toast.action && (
+          <button
+            onClick={() => void ipc.openExternalUrl(toast.action!.url)}
+            className="mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent hover:bg-bg-hover"
+          >
+            <ExternalLink size={11} />
+            {toast.action.label}
+          </button>
         )}
       </div>
       <CopyTextButton text={notificationText(toast)} />

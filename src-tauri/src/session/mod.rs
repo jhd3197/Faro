@@ -189,6 +189,10 @@ pub trait AuthPrompter: Send + Sync {
     /// Called once after an interactive exchange the user had to answer succeeds,
     /// so the GUI can offer to save a freshly-changed password. No-op otherwise.
     fn on_interactive_success(&self) {}
+
+    /// Something to show while connecting that needs no answer, such as the
+    /// Cloudflare Access sign-in a proxy command opened in the browser.
+    fn notice(&self, _message: &str, _url: Option<&str>) {}
 }
 
 /// GUI auth prompter: emits `auth://prompt` and waits for `respond_to_auth_prompt`.
@@ -250,6 +254,18 @@ impl AuthPrompter for TauriAuthPrompter {
             serde_json::json!({ "profileId": self.profile_id }),
         );
     }
+
+    fn notice(&self, message: &str, url: Option<&str>) {
+        let _ = self.app.emit(
+            "auth://notice",
+            serde_json::json!({
+                "profileId": self.profile_id,
+                "host": self.host,
+                "message": message,
+                "url": url,
+            }),
+        );
+    }
 }
 
 /// Non-interactive prompter that refuses any prompt — used for silent reconnects
@@ -267,6 +283,11 @@ impl AuthPrompter for RejectAuthPrompter {
         Err(anyhow!(
             "this server requires interactive authentication, which isn't available here"
         ))
+    }
+
+    // No prompt to show it with: the app-wide hook, or stderr for the CLI.
+    fn notice(&self, message: &str, url: Option<&str>) {
+        crate::proxy_command::notice(message, url);
     }
 }
 
@@ -452,6 +473,29 @@ pub struct ClientHandler {
     host: String,
     port: u16,
     verifier: Arc<dyn HostKeyVerifier>,
+}
+
+/// An SSH session opened the way the GUI opens one (keys accepted once are
+/// reused by reconnects), without a `SessionManager`.
+#[cfg(test)]
+pub(crate) async fn ssh_session_for_tests(
+    profile: &ConnectionProfile,
+    verifier: Arc<dyn HostKeyVerifier>,
+) -> Result<Arc<SshSession>> {
+    let accepted = AcceptedKeys::default();
+    let verifier: Arc<dyn HostKeyVerifier> = Arc::new(RecordingVerifier { inner: verifier, accepted: accepted.clone() });
+    let conn = ssh_connect(profile, verifier, Arc::new(RejectAuthPrompter)).await?;
+    let mut ssh = SshSession::new(profile.clone(), conn.handle);
+    ssh.accepted_keys = accepted;
+    *ssh.jump_handles.lock().await = conn.jump_handles;
+    Ok(Arc::new(ssh))
+}
+
+#[cfg(test)]
+impl ClientHandler {
+    pub(crate) fn for_tests(host: &str, port: u16, verifier: Arc<dyn HostKeyVerifier>) -> Self {
+        Self { host: host.into(), port, verifier }
+    }
 }
 
 #[async_trait]
@@ -1639,15 +1683,17 @@ pub async fn ssh_connect(
             port: jump_port,
             verifier: verifier.clone(),
         };
-        let stream = crate::proxy::dial_async(profile.proxy.as_ref(), &jump_host, jump_port)
+        let (stream, diag) = dial_first_hop(profile, &jump_host, jump_port, &jump_username, &prompter)
             .await
             .with_context(|| format!("connect to jump host {jump_host}:{jump_port}"))?;
-        let mut jump = client::connect_stream(config.clone(), stream, jump_handler)
-            .await
-            .with_context(|| format!("connect to jump host {jump_host}:{jump_port}"))?;
+        let mut jump = match client::connect_stream(config.clone(), stream, jump_handler).await {
+            Ok(jump) => jump,
+            Err(e) => return Err(explain(diag, e, format!("connect to jump host {jump_host}:{jump_port}")).await),
+        };
         authenticate(&mut jump, profile, &jump_username, &prompter)
             .await
             .with_context(|| format!("authenticate on jump host {jump_host}"))?;
+        report_access_login(diag, &prompter);
 
         let channel = jump
             .channel_open_direct_tcpip(
@@ -1688,17 +1734,88 @@ pub async fn ssh_connect(
         port: profile.port,
         verifier,
     };
-    // Through the profile's SOCKS5 / HTTP proxy when it has one.
-    let stream = crate::proxy::dial_async(profile.proxy.as_ref(), &profile.host, profile.port)
-        .await?;
-    let mut session = client::connect_stream(config, stream, handler)
-        .await
-        .with_context(|| format!("connect to {}:{}", profile.host, profile.port))?;
+    let (stream, diag) =
+        dial_first_hop(profile, &profile.host, profile.port, &profile.username, &prompter).await?;
+    let mut session = match client::connect_stream(config, stream, handler).await {
+        Ok(session) => session,
+        Err(e) => return Err(explain(diag, e, format!("connect to {}:{}", profile.host, profile.port)).await),
+    };
     authenticate(&mut session, profile, &profile.username, &prompter).await?;
+    report_access_login(diag, &prompter);
     Ok(SshConnection {
         handle: session,
         jump_handles: Vec::new(),
     })
+}
+
+/// Any transport an SSH session can run over.
+trait Transport: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Transport for T {}
+
+/// The transport to a profile's first hop (`host:port`, the target or its
+/// inline jump host): the profile's proxy command when it has one, else TCP
+/// through its SOCKS5 / HTTP proxy, else direct. A proxy command comes with
+/// its diagnostics, for `explain`.
+async fn dial_first_hop(
+    profile: &ConnectionProfile,
+    host: &str,
+    port: u16,
+    username: &str,
+    prompter: &Arc<dyn AuthPrompter>,
+) -> Result<(Box<dyn Transport>, Option<crate::proxy_command::Diagnostics>)> {
+    let Some(cmd) = profile.proxy_command.as_ref() else {
+        let stream = crate::proxy::dial_async(profile.proxy.as_ref(), host, port).await?;
+        return Ok((Box::new(stream), None));
+    };
+    if profile.proxy.is_some() {
+        return Err(crate::proxy_command::conflict_error(&profile.name));
+    }
+    let spec = crate::proxy_command::build(cmd, host, port, username)?;
+    let prompter = prompter.clone();
+    let stream = crate::proxy_command::spawn(&spec, move |url| {
+        prompter.notice("Finish the Cloudflare Access sign-in in your browser", Some(&url));
+    })?;
+    let diag = stream.diagnostics();
+    Ok((Box::new(stream), Some(diag)))
+}
+
+/// After a connect that needed a Cloudflare Access sign-in, say whose it is.
+fn report_access_login(diag: Option<crate::proxy_command::Diagnostics>, prompter: &Arc<dyn AuthPrompter>) {
+    let Some(d) = diag.filter(|d| d.login_url().is_some()) else { return };
+    let Some(hostname) = d.access_hostname() else { return };
+    let prompter = prompter.clone();
+    tokio::spawn(async move {
+        // The same cloudflared the connection ran, so the same token cache.
+        let status = crate::cloudflared::access_status(d.program(), &hostname).await;
+        if let Some(identity) = status.identity {
+            prompter.notice(&format!("Logged in to Cloudflare as {identity}"), None);
+        }
+    });
+}
+
+/// A failed handshake as an error with `context`. When the transport itself
+/// failed (EOF, I/O, timeout) under a proxy command, the command's own output
+/// explains it. A rejected host key or a protocol mismatch is the server's
+/// answer, not the command's fault, so it is left as is.
+async fn explain(
+    diag: Option<crate::proxy_command::Diagnostics>,
+    err: russh::Error,
+    context: String,
+) -> anyhow::Error {
+    let transport = matches!(
+        err,
+        russh::Error::IO(_)
+            | russh::Error::Disconnect
+            | russh::Error::HUP
+            | russh::Error::ConnectionTimeout
+            | russh::Error::SendError
+            | russh::Error::Elapsed(_)
+    );
+    let err = anyhow::Error::from(err).context(context);
+    match diag {
+        Some(d) if transport => d.explain(err).await,
+        _ => err,
+    }
 }
 
 /// Authenticate `session` with the profile's auth material, as `username`.

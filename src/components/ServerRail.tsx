@@ -86,8 +86,9 @@ export function profileAddress(p: ConnectionProfile): string {
   return `${p.username}@${p.host}${port}`;
 }
 
-/// How the connection reaches its server, for the tooltip: "via <bastion>"
-/// or "via SOCKS5 proxy host:port". Empty for a direct connection.
+/// How the connection reaches its server, for the tooltip: "via <bastion>",
+/// "via SOCKS5 proxy host:port" or "via Cloudflare Access". Empty for a
+/// direct connection.
 function profileRoute(p: ConnectionProfile, profiles: ConnectionProfile[]): string {
   if (p.protocol === "sftp" && p.jumpProfile) {
     const bastion = profiles.find((b) => b.id === p.jumpProfile);
@@ -97,6 +98,11 @@ function profileRoute(p: ConnectionProfile, profiles: ConnectionProfile[]): stri
   if (p.proxy) {
     return `via ${p.proxy.kind === "socks5" ? "SOCKS5" : "HTTP"} proxy ${p.proxy.host}:${p.proxy.port}`;
   }
+  if (p.proxyCommand?.kind === "cloudflare") {
+    // A service token is a standing credential; say so.
+    return `via Cloudflare Access${p.proxyCommand.serviceTokenId ? " · service token" : ""}`;
+  }
+  if (p.proxyCommand?.kind === "command") return "via proxy command";
   return "";
 }
 

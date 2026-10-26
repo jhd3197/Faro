@@ -116,8 +116,11 @@ limited. Body `{ "error": "..." }` optional.
 Called **only after the user clicks Accept**. Body:
 
 ```json
-{ "public_key": "ssh-ed25519 AAAAC3NzaC… faro-grant" }
+{ "public_key": "ssh-ed25519 AAAAC3NzaC… faro-grant", "device_name": "JUANS-LAPTOP" }
 ```
+
+`device_name` (optional) is this machine's hostname; an issuer that tracks
+devices can use it as the default label.
 
 The issuer validates the token again, installs the key on every listed server
 (and jump hosts), marks the token redeemed, and replies:
@@ -132,6 +135,20 @@ The issuer validates the token again, installs the key on every listed server
 successful ones and reports the rest. On total failure, a non-200 with
 `{ "error": "…" }` and nothing is imported.
 
+**Device approval (optional).** An issuer may hold a new key until an admin
+approves the device (so a leaked link yields a request, not access). It then
+replies 200 with every connection in `installed` plus:
+
+```json
+{ "installed": ["web-1", "web-2"], "failed": [], "pending_approval": true,
+  "message": "Waiting for an administrator to approve this device." }
+```
+
+Faro imports the connections as usual and tells the user they work once the
+device is approved, showing the key's `SHA256:` fingerprint so they can confirm
+it with the admin. Clients that don't know the flag simply import; the
+connections fail auth until approval.
+
 ## Issuer requirements (checklist for implementors)
 
 1. Tokens: `secrets.token_urlsafe(24)` or better; store **hashed**; TTL +
@@ -143,8 +160,12 @@ successful ones and reports the rest. On total failure, a non-200 with
    uploaded public key is the only credential material in the protocol.
 4. Serve the endpoints over HTTPS with a valid certificate.
 5. Recommended: dedicated low-privilege grant usernames on target servers,
-   `from="<bastion-ip>"` restrictions on installed keys, and an audit log of
+   `from="<bastion-ip>"` restrictions on installed keys, `permitopen` on the
+   bastion, `expiry-time=` on the key line, and an audit log of
    issue/redeem/revoke events.
+6. Optional: one link per *device* of a known person ("add a device"), with
+   `pending_approval` until an admin approves it. The ServerKit issuer does
+   this for members.
 
 The reference issuer is the ServerKit extension
 [`serverkit-faro`](https://github.com/jhd3197/serverkit-faro).

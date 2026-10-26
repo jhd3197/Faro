@@ -313,7 +313,13 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
         })
       );
       data.setProfiles([...data.profiles, ...imported]);
-      return { group: manifest?.group ?? "Grants", imported, failed: [] };
+      return {
+        group: manifest?.group ?? "Grants",
+        imported,
+        failed: [],
+        fingerprint: "SHA256:mockmockmockmockmockmockmockmockmockmockmo",
+        pendingApproval: false,
+      };
     }
 
     // ---- sync ----

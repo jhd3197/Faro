@@ -237,6 +237,7 @@ impl AgentSession {
                 proxy: None,
                 jump_profile: None,
                 jump_via: None,
+                proxy_command: None,
                 oauth_client_id: None,
             },
             server_key: String::new(),
@@ -346,8 +347,9 @@ async fn fetch_system_info(channel: &mut SecureChannel<TcpStream>) -> Result<Sys
     }
 }
 
-/// This controller machine's hostname, sent to the daemon for its audit log.
-fn hostname() -> String {
+/// This controller machine's hostname, sent to the daemon for its audit log
+/// (and to grant issuers as the new device's default name).
+pub(crate) fn hostname() -> String {
     gethostname_string()
 }
 

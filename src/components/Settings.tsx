@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard } from "lucide-react";
+import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Cloud, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { ACCENTS } from "@/lib/accent";
 import type { UiLanguage } from "@/lib/i18n";
@@ -28,6 +28,7 @@ import { cn } from "@/lib/cn";
 import { RemoteControlSettings } from "./RemoteControlSettings";
 import { SyncSettings } from "./SyncSettings";
 import { CliUpdaterSettings } from "./CliUpdaterSettings";
+import { CloudflareSettings } from "./CloudflareSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
 import { AboutSettings } from "./AboutSettings";
 
@@ -46,6 +47,7 @@ type SectionId =
   | "sync"
   | "bridge"
   | "cli"
+  | "cloudflare"
   | "backup"
   | "about";
 
@@ -60,6 +62,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: "sync", label: "Folder Sync", icon: <FolderSync size={14} /> },
   { id: "bridge", label: "Agent Bridge", icon: <Radio size={14} /> },
   { id: "cli", label: "faro-cli", icon: <TerminalSquare size={14} /> },
+  { id: "cloudflare", label: "Cloudflare", icon: <Cloud size={14} /> },
   { id: "backup", label: "Backup", icon: <ShieldAlert size={14} /> },
   { id: "about", label: "About", icon: <Info size={14} /> },
 ];
@@ -502,6 +505,9 @@ export function Settings({ onClose }: Props) {
 
       case "cli":
         return <CliUpdaterSettings />;
+
+      case "cloudflare":
+        return <CloudflareSettings />;
 
       case "sync":
         return <SyncSettings />;

@@ -279,6 +279,26 @@ enum Cmd {
         #[command(subcommand)]
         action: BackupCmd,
     },
+
+    /// Cloudflare Access: the cloudflared Faro uses, and sign-ins.
+    ///
+    /// Uses the same cloudflared and token cache as the app, so a sign-in
+    /// here is one there too.
+    Cf {
+        #[command(subcommand)]
+        action: CfCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CfCmd {
+    /// Which cloudflared runs, and the sign-in state of each Access
+    /// hostname your connections use (or just HOST).
+    Status { host: Option<String> },
+    /// Sign in to an Access hostname (or a connection's) in the browser.
+    Login { host: String },
+    /// Install or update Faro's own copy of the official cloudflared.
+    Install,
 }
 
 #[derive(Subcommand)]
@@ -638,6 +658,8 @@ async fn async_main() {
 
 async fn run(cli: Cli) -> Result<()> {
     let store = open_store()?;
+    // The cloudflared picked in the app (custom or Faro-managed copy).
+    faro_lib::cloudflared::configure(&default_data_dir()?);
 
     match cli.command {
         Cmd::Ls { target, bytes } => cmd_ls(&store, &target, bytes).await,
@@ -694,6 +716,109 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Wp { connection, action } => cmd_wp(&store, &connection, action).await,
         // Encrypted backup / restore — sync, no bridge or session needed.
         Cmd::Backup { action } => cmd_backup(action),
+        Cmd::Cf { action } => cmd_cf(&store, action).await,
+    }
+}
+
+// ---- Cloudflare Access -------------------------------------------------
+
+/// The Access hostname of each saved Cloudflare connection, deduplicated.
+async fn access_hostnames(store: &ProfileStore) -> Result<Vec<(String, String)>> {
+    use faro_lib::profiles::ProxyCommandKind;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for p in store.list().await? {
+        let Some(cmd) = p.proxy_command.as_ref().filter(|c| c.kind == ProxyCommandKind::Cloudflare) else {
+            continue;
+        };
+        let host = cmd.hostname.clone().filter(|h| !h.trim().is_empty()).unwrap_or(p.host.clone());
+        if !out.iter().any(|(h, _)| *h == host) {
+            out.push((host, p.name.clone()));
+        }
+    }
+    Ok(out)
+}
+
+fn describe_access(s: &faro_lib::cloudflared::AccessStatus) -> String {
+    use faro_lib::cloudflared::AccessState;
+    let expires = s.expires_at.map(|exp| {
+        let left = exp - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        if left > 3600 {
+            format!(", expires in {}h{:02}m", left / 3600, left % 3600 / 60)
+        } else {
+            format!(", expires in {}m", left.max(0) / 60)
+        }
+    });
+    match s.state {
+        AccessState::LoggedIn => format!(
+            "signed in as {}{}",
+            s.identity.as_deref().unwrap_or("?"),
+            expires.unwrap_or_default()
+        ),
+        AccessState::Expired => "sign-in expired — run `faro-cli cf login` again".into(),
+        AccessState::LoggedOut => "not signed in".into(),
+        AccessState::NotProtected => "no Access sign-in needed".into(),
+        AccessState::Unknown => format!("unknown ({})", s.message.as_deref().unwrap_or("no answer")),
+    }
+}
+
+async fn cmd_cf(store: &ProfileStore, action: CfCmd) -> Result<()> {
+    use faro_lib::cloudflared;
+    let dir = default_data_dir()?;
+    match action {
+        CfCmd::Status { host } => {
+            let (source, path) = cloudflared::locate(&dir, &cloudflared::read_config(&dir));
+            match &path {
+                Some(p) => {
+                    let version = cloudflared::version(p).await.unwrap_or_else(|| "?".into());
+                    println!("cloudflared {version}  {}  ({source:?})", p.display());
+                }
+                None => {
+                    println!("{}", warn("cloudflared isn't installed — run `faro-cli cf install`"));
+                    return Ok(());
+                }
+            }
+            let bin = faro_lib::proxy_command::resolve_cloudflared()?;
+            let hosts = match host {
+                Some(h) => vec![(h, String::new())],
+                None => access_hostnames(store).await?,
+            };
+            if hosts.is_empty() {
+                println!("{}", dim("No connections use Cloudflare Access."));
+            }
+            for (h, name) in hosts {
+                let s = cloudflared::access_status(&bin, &h).await;
+                let label = if name.is_empty() { String::new() } else { dim(&format!(" ({name})")) };
+                println!("{h}{label}: {}", describe_access(&s));
+            }
+            Ok(())
+        }
+        CfCmd::Login { host } => {
+            // A connection name works too.
+            let host = match access_hostnames(store).await?.into_iter().find(|(_, name)| *name == host) {
+                Some((h, _)) => h,
+                None => host,
+            };
+            let bin = faro_lib::proxy_command::resolve_cloudflared()?;
+            eprintln!("Signing in to {host} — a browser window should open…");
+            let s = cloudflared::access_login(&bin, &host, |url| {
+                eprintln!("If it didn't, open:\n  {url}");
+            })
+            .await?;
+            println!("{host}: {}", describe_access(&s));
+            Ok(())
+        }
+        CfCmd::Install => {
+            let dest = cloudflared::managed_path(&dir);
+            eprintln!("Downloading the official cloudflared release…");
+            let version = cloudflared::Installer::default().install(&dest).await?;
+            // Installing means "use this one", as in the app.
+            let mut cfg = cloudflared::read_config(&dir);
+            if cfg.custom_path.take().is_some() {
+                std::fs::write(dir.join("cloudflared.json"), serde_json::to_vec_pretty(&cfg)?)?;
+            }
+            println!("Installed cloudflared {version} to {} (checksum verified)", dest.display());
+            Ok(())
+        }
     }
 }
 

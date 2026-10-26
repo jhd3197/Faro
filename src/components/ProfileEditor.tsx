@@ -19,6 +19,8 @@ import {
   type SshKeyType,
   type ProxyConfig,
   type ProxyKind,
+  type ProxyCommandConfig,
+  type ProxyCommandKind,
 } from "@/lib/types";
 import {
   ShieldOff,
@@ -43,6 +45,7 @@ import {
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
 import { BrandIcon, protocolIcon } from "@/lib/brandIcons";
+import { AccessSignIn, InstallCloudflared } from "./CloudflareSettings";
 import { BRAND_ICONS } from "@/lib/brandIconData";
 import { monogram } from "@/lib/format";
 import { IconPicker } from "./IconPicker";
@@ -222,6 +225,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [proxyPort, setProxyPort] = useState(seed?.proxy?.port ?? 1080);
   const [proxyUser, setProxyUser] = useState(seed?.proxy?.username ?? "");
   const [proxyPass, setProxyPass] = useState(seed?.proxy?.password ?? "");
+  const [proxyCmd, setProxyCmd] = useState(() => proxyCmdDraft(seed?.proxyCommand));
   const [jumpProfile, setJumpProfile] = useState(seed?.jumpProfile ?? "");
   const [group, setGroup] = useState(seed?.group ?? "");
   // Custom rail bubble glyph: emoji/short string, or a bundled Iconify key
@@ -551,10 +555,30 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       ftpSegments: isFtp && ftpSegments !== 1 ? ftpSegments : undefined,
       // A jump host brings its own proxy settings.
       proxy: protocol === "sftp" && jumpProfile ? undefined : buildProxy(),
+      proxyCommand: buildProxyCommand(),
       jumpProfile: protocol === "sftp" && jumpProfile ? jumpProfile : undefined,
       oauthClientId: isCloudOAuth ? oauthClientId.trim() || undefined : undefined,
     };
   };
+
+  function buildProxyCommand(): ProxyCommandConfig | undefined {
+    // SSH only, and a jump host brings its own way in.
+    if (protocol !== "sftp" || jumpProfile) return undefined;
+    if (proxyCmd.kind === "command") {
+      const command = proxyCmd.command.trim();
+      return command ? { kind: "command", command } : undefined;
+    }
+    if (proxyCmd.kind === "cloudflare") {
+      const tokenId = proxyCmd.serviceTokenId.trim();
+      return {
+        kind: "cloudflare",
+        hostname: proxyCmd.hostname.trim() || undefined,
+        serviceTokenId: tokenId || undefined,
+        serviceTokenSecret: tokenId && proxyCmd.serviceTokenSecret ? proxyCmd.serviceTokenSecret : undefined,
+      };
+    }
+    return undefined;
+  }
 
   function buildProxy(): ProxyConfig | undefined {
     if (!proxyKind || !proxyHost.trim()) return undefined;
@@ -1189,6 +1213,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           setProxyUser={setProxyUser}
           proxyPass={proxyPass}
           setProxyPass={setProxyPass}
+          proxyCmd={proxyCmd}
+          setProxyCmd={setProxyCmd}
+          host={host}
           jumpProfile={jumpProfile}
           setJumpProfile={setJumpProfile}
           ftpActiveMode={isFtp && ftpActiveMode}
@@ -3067,6 +3094,25 @@ function ProtocolButton({
 
 const PROXY_DEFAULT_PORT: Record<ProxyKind, number> = { socks5: 1080, http: 3128 };
 
+/** Editor state for a proxy command; `kind` "" = none. */
+interface ProxyCmdDraft {
+  kind: ProxyCommandKind | "";
+  command: string;
+  hostname: string;
+  serviceTokenId: string;
+  serviceTokenSecret: string;
+}
+
+function proxyCmdDraft(c?: ProxyCommandConfig): ProxyCmdDraft {
+  return {
+    kind: c?.kind ?? "",
+    command: c?.command ?? "",
+    hostname: c?.hostname ?? "",
+    serviceTokenId: c?.serviceTokenId ?? "",
+    serviceTokenSecret: c?.serviceTokenSecret ?? "",
+  };
+}
+
 /// Collapsible "Proxy & jump host" block: a SOCKS5 / HTTP CONNECT proxy for
 /// any connection, and (SFTP only) another SSH connection to jump through.
 function NetworkSection({
@@ -3083,6 +3129,9 @@ function NetworkSection({
   setProxyUser,
   proxyPass,
   setProxyPass,
+  proxyCmd,
+  setProxyCmd,
+  host,
   jumpProfile,
   setJumpProfile,
   ftpActiveMode,
@@ -3100,12 +3149,16 @@ function NetworkSection({
   setProxyUser: (v: string) => void;
   proxyPass: string;
   setProxyPass: (v: string) => void;
+  proxyCmd: ProxyCmdDraft;
+  setProxyCmd: (v: ProxyCmdDraft) => void;
+  host: string;
   jumpProfile: string;
   setJumpProfile: (v: string) => void;
   ftpActiveMode: boolean;
 }) {
   const isSsh = protocol === "sftp";
-  const [open, setOpen] = useState(!!proxyKind || (isSsh && !!jumpProfile));
+  const cmdKind = isSsh ? proxyCmd.kind : "";
+  const [open, setOpen] = useState(!!proxyKind || !!cmdKind || (isSsh && !!jumpProfile));
   const byId = new Map(profiles.map((p) => [p.id, p]));
   // A profile that already jumps through this one would make a loop.
   const jumpsThrough = (p: ConnectionProfile | undefined) => {
@@ -3122,6 +3175,8 @@ function NetworkSection({
   const viaJump = isSsh && !!jumpProfile;
   const summary = [
     !viaJump && proxyKind && proxyHost.trim() ? `${proxyKind === "socks5" ? "SOCKS5" : "HTTP"} proxy` : "",
+    !viaJump && cmdKind === "cloudflare" ? "Cloudflare Access" : "",
+    !viaJump && cmdKind === "command" && proxyCmd.command.trim() ? "Proxy command" : "",
     isSsh && jumpProfile ? `via ${byId.get(jumpProfile)?.name ?? "a deleted connection"}` : "",
   ]
     .filter(Boolean)
@@ -3134,6 +3189,17 @@ function NetworkSection({
     }
     setProxyKind(kind);
   };
+  // One select for both: a TCP proxy, or (SSH) a command that carries SSH.
+  const changeRoute = (v: string) => {
+    if (v === "cloudflare" || v === "command") {
+      setProxyKind("");
+      setProxyCmd({ ...proxyCmd, kind: v });
+    } else {
+      setProxyCmd({ ...proxyCmd, kind: "" });
+      changeKind(v as ProxyKind | "");
+    }
+  };
+  const setCmd = (patch: Partial<ProxyCmdDraft>) => setProxyCmd({ ...proxyCmd, ...patch });
 
   return (
     <div className="mb-3 rounded-md border border-border">
@@ -3181,17 +3247,31 @@ function NetworkSection({
           )}
           {!viaJump && (
             <div className="flex gap-3">
-              <Field label="Proxy" className="w-32 shrink-0">
+              <Field label="Proxy" className={cn("shrink-0", isSsh ? "w-40" : "w-32")}>
                 <select
-                  value={proxyKind}
-                  onChange={(e) => changeKind(e.target.value as ProxyKind | "")}
+                  value={cmdKind || proxyKind}
+                  onChange={(e) => changeRoute(e.target.value)}
                   className={inputCls}
                 >
                   <option value="">None</option>
                   <option value="socks5">SOCKS5</option>
                   <option value="http">HTTP</option>
+                  {isSsh && <option value="cloudflare">Cloudflare Access</option>}
+                  {isSsh && <option value="command">Command</option>}
                 </select>
               </Field>
+              {cmdKind === "cloudflare" && (
+                <Field label="Access hostname" className="min-w-0 flex-1">
+                  <input
+                    value={proxyCmd.hostname}
+                    onChange={(e) => setCmd({ hostname: e.target.value })}
+                    placeholder={host.trim() || "ssh.example.com"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={inputCls}
+                  />
+                </Field>
+              )}
               {proxyKind && (
                 <>
                   <Field label="Proxy host" className="min-w-0 flex-1">
@@ -3230,6 +3310,63 @@ function NetworkSection({
                 <PasswordInput value={proxyPass} onChange={setProxyPass} generate={false} />
               </Field>
             </div>
+          )}
+          {!viaJump && cmdKind === "cloudflare" && (
+            <>
+              <InstallCloudflared />
+              {(proxyCmd.hostname.trim() || host.trim()) && (
+                <div className="mb-3 rounded-md border border-border px-2.5 py-2" data-testid="editor-access-signin">
+                  <AccessSignIn hostname={proxyCmd.hostname.trim() || host.trim()} compact />
+                </div>
+              )}
+              <div className="flex gap-3">
+                <Field label="Service token ID (optional)" className="min-w-0 flex-1">
+                  <input
+                    value={proxyCmd.serviceTokenId}
+                    onChange={(e) => setCmd({ serviceTokenId: e.target.value })}
+                    placeholder="xxxxxxxx.access"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="Service token secret" className="min-w-0 flex-1">
+                  <PasswordInput
+                    value={proxyCmd.serviceTokenSecret}
+                    onChange={(v) => setCmd({ serviceTokenSecret: v })}
+                    generate={false}
+                  />
+                </Field>
+              </div>
+              <Hint>
+                Faro runs <code>cloudflared access ssh</code> for this server, so
+                its SSH port can stay closed. The first connect opens a Cloudflare
+                sign-in in your browser. A service token lets faro-cli and the
+                Agent Bridge connect when nobody is there to sign in. Leave the
+                hostname empty to use the server's host.
+              </Hint>
+            </>
+          )}
+          {!viaJump && cmdKind === "command" && (
+            <>
+              <Field label="Command">
+                <input
+                  value={proxyCmd.command}
+                  onChange={(e) => setCmd({ command: e.target.value })}
+                  placeholder="aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={cn(inputCls, "font-mono text-[11.5px]")}
+                />
+              </Field>
+              <Hint>
+                Faro runs this command and speaks SSH over its input and output,
+                like OpenSSH's <code>ProxyCommand</code>. <code>%h</code>,{" "}
+                <code>%p</code> and <code>%r</code> become the host, port and
+                user. It runs without a shell; wrap pipes in{" "}
+                <code>sh -c '…'</code>.
+              </Hint>
+            </>
           )}
           {!viaJump && proxyKind && ftpActiveMode && (
             <Hint tone="warn">

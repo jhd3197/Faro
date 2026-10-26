@@ -67,6 +67,7 @@ fn profile(protocol: &str, host: &str, port: u16, user: &str, pass: &str) -> Con
         proxy: None,
         jump_profile: None,
         jump_via: None,
+        proxy_command: None,
         oauth_client_id: None,
     }
 }
@@ -950,4 +951,107 @@ async fn live_jump_profile_chains() {
     let err = lab_open(&target).await.err().expect("unresolved chain");
     assert!(format!("{err:#}").contains("could not be resolved"), "{err:#}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---- Cloudflare Access (Plan 28) ----------------------------------------
+
+/// cloudflared processes this test process started.
+fn our_cloudflareds() -> Vec<u32> {
+    let me = std::process::id();
+    #[cfg(windows)]
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!("Get-CimInstance Win32_Process -Filter \"ParentProcessId={me} AND Name='cloudflared.exe'\" | ForEach-Object {{ $_.ProcessId }}"),
+        ])
+        .output()
+        .unwrap();
+    #[cfg(not(windows))]
+    let out = std::process::Command::new("pgrep").args(["-P", &me.to_string(), "cloudflared"]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect()
+}
+
+fn kill_pid(pid: u32) {
+    #[cfg(windows)]
+    let _ = std::process::Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+    #[cfg(not(windows))]
+    let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+}
+
+/// The acceptance run for issue #52: a server with no open SSH port, reached
+/// only through Cloudflare with the real `cloudflared access ssh`.
+#[tokio::test]
+#[ignore = "requires scripts/cf-lab.yml, cloudflared and FARO_LIVE_CF"]
+async fn live_cloudflare_access_round_trip() {
+    use crate::profiles::{ProxyCommandConfig, ProxyCommandKind};
+    let Ok(host) = std::env::var("FARO_LIVE_CF") else { return };
+    let mut p = profile("sftp", &host, 22, "faro", "farotest");
+    p.proxy_command = Some(ProxyCommandConfig {
+        kind: ProxyCommandKind::Cloudflare,
+        command: String::new(),
+        hostname: None,
+        service_token_id: None,
+        service_token_secret: None,
+    });
+
+    let ssh = crate::session::ssh_session_for_tests(&p, Arc::new(AcceptAll)).await.expect("connect via Cloudflare");
+    let session = Arc::new(Session::Ssh(ssh.clone()));
+    assert_eq!(our_cloudflareds().len(), 1, "one cloudflared per session");
+
+    // Browse.
+    let names: Vec<String> = fs_for_session(&session).list_dir("/home/faro/data").await.unwrap().into_iter().map(|e| e.name).collect();
+    assert!(names.contains(&"hello.txt".to_string()) && names.contains(&"blob.bin".to_string()), "{names:?}");
+    // Exec (what `faro-cli agent exec` and the Agent Bridge run on).
+    assert_eq!(ssh.exec("cat /home/faro/data/hello.txt").await.unwrap().stdout.trim(), "hello through cloudflare");
+
+    // Download, checked against the server's own hash.
+    let dir = scratch("cf");
+    let mgr = Arc::new(TransferManager::new());
+    mgr.set_verify(true);
+    let (t, took, _) = download(&mgr, &session, "/home/faro/data/blob.bin", &dir).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    let remote = ssh.exec("sha256sum /home/faro/data/blob.bin").await.unwrap().stdout;
+    assert!(remote.starts_with(&sha_file(&dir.join("blob.bin"))), "download hash");
+    println!("Cloudflare download: {:.2} MiB/s", mbps(t.size, took));
+
+    // Upload 16 MiB.
+    let local = dir.join("up.bin");
+    random_file(&local, 16);
+    let (t, took, _) = upload(&mgr, &session, &local, "/home/faro/up.bin").await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    let remote = ssh.exec("sha256sum /home/faro/up.bin").await.unwrap().stdout;
+    assert!(remote.starts_with(&sha_file(&local)), "upload hash");
+    println!("Cloudflare upload: {:.2} MiB/s", mbps(t.size, took));
+
+    // The tunnel process dies mid-session: the next op reconnects by itself,
+    // which starts a fresh cloudflared.
+    let before = our_cloudflareds();
+    for pid in &before {
+        kill_pid(*pid);
+    }
+    let out = ssh.exec("echo back").await.expect("reconnect after cloudflared died");
+    assert_eq!(out.stdout.trim(), "back");
+    let after = our_cloudflareds();
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert!(!before.contains(&after[0]), "a new cloudflared was started");
+
+    // Dropping the session leaves no cloudflared behind.
+    drop(session);
+    drop(ssh);
+    for _ in 0..50 {
+        if our_cloudflareds().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(our_cloudflareds().is_empty(), "orphaned cloudflared");
+
+    // Errors a user can act on.
+    let mut wrong = p.clone();
+    wrong.host = "faro-no-such-tunnel-28.trycloudflare.com".into();
+    let err = crate::session::open_session(&wrong, Arc::new(AcceptAll)).await.err().expect("bogus hostname fails");
+    println!("bogus hostname -> {err}");
+    assert!(err.to_string().contains("faro-no-such-tunnel-28.trycloudflare.com"), "{err:#}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
