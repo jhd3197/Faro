@@ -140,6 +140,12 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return data.capabilities(a.sessionId);
     case "read_file_preview":
       throw new Error("no preview in demo mode");
+    case "read_file_head":
+      return btoa(
+        Array.from({ length: 40 }, (_, i) =>
+          `22:41:${String(i).padStart(2, "0")}  step ${i + 1} ok`
+        ).join(String.fromCharCode(10))
+      );
     case "preview_thumbnail":
       // A valid 8×8 RGBA PNG so the mock harness can exercise the remote-preview
       // UI (toggle → thumbnail render → downscale) without a real backend.
@@ -347,6 +353,17 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "bridge_set_policy":
     case "bridge_register_mcp":
       return data.bridgeStatus;
+    case "bridge_set_profile_access": {
+      const st = data.bridgeStatus;
+      const acc = a.access as import("@/lib/types").ProfileAccess;
+      const on = [acc.read, acc.write, acc.exec].some((l) => l !== "off");
+      if (on) st.profileAccess[a.profileId] = acc;
+      else delete st.profileAccess[a.profileId];
+      st.enabledProfiles = on
+        ? Array.from(new Set([...st.enabledProfiles, a.profileId]))
+        : st.enabledProfiles.filter((id) => id !== a.profileId);
+      return { ...st };
+    }
     case "bridge_activity":
       return data.bridgeActivity;
     case "bridge_clear_activity":

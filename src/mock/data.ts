@@ -268,6 +268,10 @@ export const bridgeStatus: BridgeStatus = {
   token: "demo-7f3a1c9b",
   enabledSessions: ["sess-p-api"],
   policy: { allowAll: false, autoRead: true, autoSafeExec: false, allowSudo: false },
+  enabledProfiles: ["p-api"],
+  profileAccess: {
+    "p-api": { read: "auto", write: "ask", exec: "ask", sudo: "off" },
+  },
 };
 
 export const bridgeActivity = [

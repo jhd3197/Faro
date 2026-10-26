@@ -81,6 +81,58 @@ pub struct ApprovalPolicy {
     pub allow_sudo: bool,
 }
 
+/// How much the agent may do for one class of operation on one server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccessLevel {
+    /// Refused outright — the agent gets a 403, no prompt.
+    Off,
+    /// The user approves each request.
+    Ask,
+    /// Runs without a prompt.
+    Auto,
+}
+
+/// Per-server agent access, set from the Agent Bridge access matrix. Keyed by
+/// profile id (persisted) so it applies to every future connect of that server
+/// and can be set while the server is offline. A profile with no entry falls
+/// back to [`default_access`] derived from the global [`ApprovalPolicy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileAccess {
+    /// list_dir, read_file, search, jobs.
+    pub read: AccessLevel,
+    /// Uploads, downloads, deletes, renames, syncs — anything that writes a disk.
+    pub write: AccessLevel,
+    /// Shell commands.
+    pub exec: AccessLevel,
+    /// Off: sudo's password prompt is never answered. Ask: a sudo command always
+    /// prompts, even when `exec` is Auto. Auto: sudo follows `exec`.
+    pub sudo: AccessLevel,
+}
+
+impl ProfileAccess {
+    /// True when at least one non-sudo capability is open — i.e. the server is
+    /// granted at all.
+    fn grants_any(&self) -> bool {
+        [self.read, self.write, self.exec]
+            .iter()
+            .any(|l| *l != AccessLevel::Off)
+    }
+}
+
+/// What a granted server without an explicit matrix entry gets: the old global
+/// auto-approve switches, expressed as levels.
+fn default_access(p: &ApprovalPolicy) -> ProfileAccess {
+    let lvl = |auto: bool| if auto { AccessLevel::Auto } else { AccessLevel::Ask };
+    ProfileAccess {
+        read: lvl(p.allow_all || p.auto_read),
+        write: lvl(p.allow_all),
+        exec: lvl(p.allow_all),
+        sudo: if p.allow_sudo { AccessLevel::Ask } else { AccessLevel::Off },
+    }
+}
+
 /// A user-defined, pre-approved command the agent can run by NAME. The agent
 /// only ever supplies the name; the exact `command` string was written and
 /// vetted by the user when they saved it, so running one skips the approval
@@ -188,6 +240,9 @@ struct PersistedConfig {
     enabled: bool,
     enabled_profiles: Vec<String>,
     policy: ApprovalPolicy,
+    /// Per-server access levels from the access matrix, keyed by profile id.
+    #[serde(default)]
+    profile_access: HashMap<String, ProfileAccess>,
     /// User-defined pre-approved commands the agent can run by name.
     #[serde(default)]
     saved_commands: Vec<SavedCommand>,
@@ -211,6 +266,10 @@ pub struct BridgeStatus {
     pub token: Option<String>,
     pub enabled_sessions: Vec<String>,
     pub policy: ApprovalPolicy,
+    /// Profiles granted access (persisted), so the UI can show offline servers.
+    pub enabled_profiles: Vec<String>,
+    /// Explicit per-server levels; profiles absent here use the policy defaults.
+    pub profile_access: HashMap<String, ProfileAccess>,
 }
 
 #[derive(Clone, Serialize)]
@@ -271,6 +330,8 @@ pub struct BridgeState {
     /// Persistent allow-list, keyed by profile id; re-applied on connect.
     enabled_profiles: Mutex<HashSet<String>>,
     policy: Mutex<ApprovalPolicy>,
+    /// Per-server access levels (profile id -> levels), persisted.
+    profile_access: Mutex<HashMap<String, ProfileAccess>>,
     /// User-defined pre-approved commands (global name -> command list).
     saved_commands: Mutex<Vec<SavedCommand>>,
     /// Saved Skills (Plan 8): AI-authorable, multi-step, fleet-targetable.
@@ -453,6 +514,7 @@ impl BridgeState {
             enabled_master: Mutex::new(cfg.enabled),
             enabled_profiles: Mutex::new(cfg.enabled_profiles.into_iter().collect()),
             policy: Mutex::new(cfg.policy),
+            profile_access: Mutex::new(cfg.profile_access),
             saved_commands: Mutex::new(cfg.saved_commands),
             skills: Mutex::new(cfg.skills),
             skills_migrated: Mutex::new(cfg.skills_migrated),
@@ -469,6 +531,7 @@ impl BridgeState {
             enabled: *self.enabled_master.lock().await,
             enabled_profiles: self.enabled_profiles.lock().await.iter().cloned().collect(),
             policy: *self.policy.lock().await,
+            profile_access: self.profile_access.lock().await.clone(),
             saved_commands: self.saved_commands.lock().await.clone(),
             skills: self.skills.lock().await.clone(),
             skills_migrated: *self.skills_migrated.lock().await,
@@ -483,6 +546,8 @@ impl BridgeState {
         let enabled = *self.enabled_master.lock().await;
         let enabled_sessions = self.enabled.lock().await.iter().cloned().collect();
         let policy = *self.policy.lock().await;
+        let enabled_profiles = self.enabled_profiles.lock().await.iter().cloned().collect();
+        let profile_access = self.profile_access.lock().await.clone();
         match running.as_ref() {
             Some(r) => BridgeStatus {
                 running: true,
@@ -492,6 +557,8 @@ impl BridgeState {
                 token: Some(r.token.clone()),
                 enabled_sessions,
                 policy,
+                enabled_profiles,
+                profile_access,
             },
             None => BridgeStatus {
                 running: false,
@@ -501,6 +568,8 @@ impl BridgeState {
                 token: None,
                 enabled_sessions,
                 policy,
+                enabled_profiles,
+                profile_access,
             },
         }
     }
@@ -616,6 +685,68 @@ impl BridgeState {
         self.persist().await;
     }
 
+    /// Set one server's access levels from the access matrix. Works whether or
+    /// not the server is connected: the grant lives on the profile and is
+    /// mirrored onto any live session of it. All of read/write/exec Off revokes
+    /// the grant entirely (and drops the entry, so a later re-grant starts from
+    /// the policy defaults).
+    pub async fn set_profile_access(
+        &self,
+        app: &AppHandle,
+        profile_id: &str,
+        access: ProfileAccess,
+    ) {
+        let granted = access.grants_any();
+        {
+            let mut map = self.profile_access.lock().await;
+            if granted {
+                map.insert(profile_id.to_string(), access);
+            } else {
+                map.remove(profile_id);
+            }
+        }
+        {
+            let mut profs = self.enabled_profiles.lock().await;
+            if granted {
+                profs.insert(profile_id.to_string());
+            } else {
+                profs.remove(profile_id);
+            }
+        }
+        let live: Vec<String> = app
+            .state::<AppState>()
+            .sessions
+            .ids_for_profile(profile_id)
+            .await;
+        {
+            let mut set = self.enabled.lock().await;
+            for id in live {
+                if granted {
+                    set.insert(id);
+                } else {
+                    set.remove(&id);
+                }
+            }
+        }
+        self.persist().await;
+    }
+
+    /// The levels that apply to a session right now: its profile's explicit
+    /// matrix entry, else the policy defaults.
+    async fn access_for_session(&self, app: &AppHandle, session_id: &str) -> ProfileAccess {
+        let policy = *self.policy.lock().await;
+        let Some(sess) = app.state::<AppState>().sessions.get(session_id).await else {
+            return default_access(&policy);
+        };
+        let profile_id = sess.profile().id.clone();
+        self.profile_access
+            .lock()
+            .await
+            .get(&profile_id)
+            .copied()
+            .unwrap_or_else(|| default_access(&policy))
+    }
+
     pub async fn set_active_session(&self, session_id: Option<String>) {
         *self.active_session_id.lock().await = session_id;
     }
@@ -624,19 +755,43 @@ impl BridgeState {
         self.enabled.lock().await.contains(session_id)
     }
 
-    /// Decide whether the current policy auto-approves an operation.
-    async fn auto_approved(&self, class: OpClass, exec_cmd: Option<&str>) -> bool {
-        let p = *self.policy.lock().await;
-        if p.allow_all {
-            return true;
+    /// Decide how an operation on a session is handled under its access levels.
+    async fn decide(
+        &self,
+        app: &AppHandle,
+        session_id: &str,
+        class: OpClass,
+        exec_cmd: Option<&str>,
+    ) -> AccessLevel {
+        let access = self.access_for_session(app, session_id).await;
+        let level = match class {
+            OpClass::Read => access.read,
+            OpClass::Write => access.write,
+            OpClass::Exec => access.exec,
+        };
+        if class != OpClass::Exec || level == AccessLevel::Off {
+            return level;
         }
-        match class {
-            OpClass::Read => p.auto_read,
-            OpClass::Write => false,
-            OpClass::Exec => {
-                p.auto_safe_exec && exec_cmd.map(is_read_only_command).unwrap_or(false)
-            }
+        let uses_sudo = exec_cmd.map(command_uses_sudo).unwrap_or(false);
+        // Sudo on Ask overrides an Auto exec level: privileged commands prompt.
+        if uses_sudo && access.sudo == AccessLevel::Ask {
+            return AccessLevel::Ask;
         }
+        // The global safe-command heuristic still lifts plain read-only
+        // commands on an Ask server to Auto.
+        if level == AccessLevel::Ask
+            && !uses_sudo
+            && self.policy.lock().await.auto_safe_exec
+            && exec_cmd.map(is_read_only_command).unwrap_or(false)
+        {
+            return AccessLevel::Auto;
+        }
+        level
+    }
+
+    /// Whether sudo's password prompt may be answered on this session.
+    async fn sudo_allowed(&self, app: &AppHandle, session_id: &str) -> bool {
+        self.access_for_session(app, session_id).await.sudo != AccessLevel::Off
     }
 
     pub async fn resolve_approval(
@@ -891,8 +1046,24 @@ async fn gate(
     if let Some(ssh) = app.state::<AppState>().sessions.get_ssh(session_id).await {
         let _ = ssh.ensure_alive().await;
     }
-    if state.auto_approved(class, exec_cmd).await {
-        return Ok(());
+    match state.decide(app, session_id, class, exec_cmd).await {
+        AccessLevel::Auto => return Ok(()),
+        AccessLevel::Off => {
+            state
+                .log(app, activity("denied", session_id, summary.to_string(), false))
+                .await;
+            let what = match class {
+                OpClass::Read => "reading",
+                OpClass::Write => "writing or transferring files",
+                OpClass::Exec => "running commands",
+            };
+            return Err((403, json!({
+                "error": format!(
+                    "the user has turned off {what} for '{session_name}' in Faro's Agent Bridge access settings. Don't retry; ask the user if you need it."
+                )
+            })));
+        }
+        AccessLevel::Ask => {}
     }
     if state
         .request_approval(app, session_id, session_name, kind, summary)
@@ -2290,8 +2461,7 @@ async fn exec_core(
     // password-auth session, answer sudo's prompt with the connection password
     // over a PTY. Otherwise the normal no-tty exec (clean stdout/stderr split).
     let sudo_pw = {
-        let policy = *state.policy.lock().await;
-        if policy.allow_sudo && command_uses_sudo(command) {
+        if command_uses_sudo(command) && state.sudo_allowed(app, session_id).await {
             connection_password(ssh)
         } else {
             None

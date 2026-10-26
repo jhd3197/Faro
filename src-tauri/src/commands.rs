@@ -687,6 +687,34 @@ pub async fn read_file_preview(
     Ok(base64::engine::general_purpose::STANDARD.encode(data))
 }
 
+/// Largest head the preview pane may ask for.
+const MAX_FILE_HEAD_BYTES: u64 = 256 * 1024;
+
+/// Read the first `max_bytes` (capped) of a file on any backend — local or a
+/// live session — for the file browser's text preview pane. A bounded read
+/// (`preview::read_head`), so a huge log never comes over the wire whole.
+#[tauri::command]
+pub async fn read_file_head(
+    session_id: String,
+    path: String,
+    max_bytes: u64,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let max = max_bytes.min(MAX_FILE_HEAD_BYTES);
+    let data = if session_id == LOCAL_SESSION {
+        crate::preview::read_head(None, &path, max).await
+    } else {
+        let sess = state
+            .sessions
+            .get(&session_id)
+            .await
+            .ok_or_else(|| format!("no session {session_id}"))?;
+        crate::preview::read_head(Some(&sess), &path, max).await
+    }
+    .map_err(err)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(data))
+}
+
 // ---------- Terminal ----------
 
 #[tauri::command]
@@ -1740,6 +1768,17 @@ pub async fn bridge_set_session_access(
     state: State<'_, AppState>,
 ) -> Result<BridgeStatus, String> {
     state.bridge.set_access(&app, &session_id, enabled).await;
+    Ok(state.bridge.status().await)
+}
+
+#[tauri::command]
+pub async fn bridge_set_profile_access(
+    profile_id: String,
+    access: crate::bridge::ProfileAccess,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<BridgeStatus, String> {
+    state.bridge.set_profile_access(&app, &profile_id, access).await;
     Ok(state.bridge.status().await)
 }
 
