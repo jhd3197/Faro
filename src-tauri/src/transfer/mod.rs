@@ -4610,6 +4610,7 @@ mod tests {
             (
                 "object",
                 Session::Object(Arc::new(ObjectSession {
+                    namespace: Default::default(),
                     id: "t".into(),
                     profile: delta_gate_profile("s3"),
                     container: "b".into(),
@@ -4800,6 +4801,7 @@ mod tests {
     /// serves ranged GETs and honours `if_match` like a real store.
     fn memory_session(store: Arc<object_store::memory::InMemory>) -> Arc<Session> {
         Arc::new(Session::Object(Arc::new(crate::session::ObjectSession {
+            namespace: Default::default(),
             id: "mem".into(),
             profile: delta_gate_profile("s3"),
             container: "b".into(),

@@ -372,10 +372,8 @@ async fn fallback_walk(
 
 // ---------- Protocol fast paths ----------
 
-/// POSIX single-quote a path so `find` survives spaces / shell metacharacters.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a path so `find` survives spaces / shell metacharacters.
+use crate::scp::quote_path as sh_quote;
 
 /// `find <root> -type f -printf '%s\t%p\n'` — one line per regular file, its
 /// byte size and absolute path, tab-separated. Symlinks aren't `-type f`, so

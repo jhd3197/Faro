@@ -3379,9 +3379,7 @@ pub(crate) async fn op_tail(
     }
 }
 
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\"'\"'"))
-}
+use crate::scp::quote_path as shell_quote;
 
 fn default_download_dir(app: &AppHandle) -> String {
     app.path()

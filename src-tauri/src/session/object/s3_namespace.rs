@@ -163,14 +163,10 @@ impl S3Namespace {
             let mut page: Listing = quick_xml::de::from_str(&xml).context("decode S3 listing")?;
             if page.encoding_type.as_deref() == Some("url") {
                 for object in &mut page.objects {
-                    object.key = percent_encoding::percent_decode_str(&object.key)
-                        .decode_utf8()?
-                        .into_owned();
+                    object.key = decode_listed_key(&object.key)?;
                 }
                 for prefix in &mut page.prefixes {
-                    prefix.prefix = percent_encoding::percent_decode_str(&prefix.prefix)
-                        .decode_utf8()?
-                        .into_owned();
+                    prefix.prefix = decode_listed_key(&prefix.prefix)?;
                 }
             }
             listing.objects.extend(page.objects);
@@ -235,5 +231,24 @@ impl S3Namespace {
             bail!("S3 copy returned an empty ETag");
         }
         Ok(())
+    }
+}
+
+/// Decode a key from an `encoding-type=url` listing. S3 form-encodes it: a
+/// space arrives as `+` and a literal `+` as `%2B` (botocore decodes these
+/// with `unquote_plus` for the same reason).
+fn decode_listed_key(raw: &str) -> Result<String> {
+    Ok(percent_encoding::percent_decode_str(&raw.replace('+', " "))
+        .decode_utf8()?
+        .into_owned())
+}
+
+#[cfg(test)]
+mod listed_key_tests {
+    #[test]
+    fn plus_is_a_space_and_percent_2b_is_a_plus() {
+        assert_eq!(super::decode_listed_key("reports/Q1+final.pdf").unwrap(), "reports/Q1 final.pdf");
+        assert_eq!(super::decode_listed_key("a%2Bb+c%20d").unwrap(), "a+b c d");
+        assert_eq!(super::decode_listed_key("caf%C3%A9.txt").unwrap(), "café.txt");
     }
 }

@@ -273,8 +273,7 @@ impl AuthPrompter for RejectAuthPrompter {
 /// Decides what to do with a server key on connect. Implementations: the
 /// GUI's `TauriHostKeyVerifier` (emits a Tauri event + awaits the user's
 /// click via oneshot), and the CLI's `CliHostKeyVerifier` (prompts on
-/// stdin/stdout). A no-op `AutoTrustVerifier` exists for scripted scenarios
-/// where the operator has explicitly opted out of prompting.
+/// stdin/stdout). Silent reconnects use `ReconnectVerifier`.
 #[async_trait]
 pub trait HostKeyVerifier: Send + Sync {
     async fn decide(
@@ -374,41 +373,78 @@ impl HostKeyVerifier for TauriHostKeyVerifier {
     }
 }
 
-/// A non-interactive host-key verifier used for transparent reconnects. On a
-/// reconnect the server key is already in `known_hosts`, so `check_server_key`
-/// short-circuits on `Match` *before* `decide()` is ever called; `decide()`
-/// therefore only runs for an unknown or **changed** key — which a silent
-/// background reconnect must refuse rather than auto-trust behind the user's
-/// back. `reject_unknown` (the safe default) makes that explicit.
-pub struct AutoTrustVerifier {
-    reject_unknown: bool,
+/// The keychain service holding a profile's OAuth token, by protocol. One
+/// list, so backup and keychain migration can't drift apart.
+pub fn oauth_token_service(protocol: &str) -> Option<&'static str> {
+    Some(match protocol {
+        "dropbox" => dropbox::DROPBOX_SERVICE,
+        "onedrive" => onedrive::ONEDRIVE_SERVICE,
+        "gdrive" => gdrive::GDRIVE_SERVICE,
+        "box" => boxdrive::BOX_SERVICE,
+        "dynamics" => dynamics::DYNAMICS_TOKEN_SERVICE,
+        _ => return None,
+    })
 }
 
-impl AutoTrustVerifier {
-    /// Refuse any key not already trusted in `known_hosts`. Safe for silent
-    /// reconnects: a matching key never reaches `decide()`; an unknown/changed
-    /// one is rejected loudly instead of being trusted without the user.
-    pub fn reject_unknown() -> Self {
-        Self { reject_unknown: true }
-    }
+/// Host keys the user accepted for one session only ("Accept once"), as
+/// `(host, port, fingerprint)` — one per hop when a jump host is involved.
+type AcceptedKeys = Arc<std::sync::Mutex<Vec<(String, u16, String)>>>;
+
+/// Wraps the interactive verifier on first connect and remembers every key
+/// the user accepted for this session only, so a reconnect can reuse it.
+struct RecordingVerifier {
+    inner: Arc<dyn HostKeyVerifier>,
+    accepted: AcceptedKeys,
 }
 
 #[async_trait]
-impl HostKeyVerifier for AutoTrustVerifier {
+impl HostKeyVerifier for RecordingVerifier {
     async fn decide(
         &self,
-        _host: &str,
-        _port: u16,
+        host: &str,
+        port: u16,
+        key_type: &str,
+        fingerprint: &str,
+        stored_fingerprint: Option<&str>,
+        kind: HostPromptKind,
+    ) -> Result<HostDecision, russh::Error> {
+        let d = self
+            .inner
+            .decide(host, port, key_type, fingerprint, stored_fingerprint, kind)
+            .await?;
+        if matches!(d, HostDecision::Accept) {
+            if let Ok(mut keys) = self.accepted.lock() {
+                keys.push((host.to_string(), port, fingerprint.to_string()));
+            }
+        }
+        Ok(d)
+    }
+}
+
+/// The verifier for a silent reconnect. A key already in `known_hosts`
+/// never reaches `decide()`; besides that, only the exact keys the user
+/// accepted for this session are allowed — an unknown or changed key is
+/// refused instead of being trusted with no user to ask.
+pub struct ReconnectVerifier {
+    accepted: AcceptedKeys,
+}
+
+#[async_trait]
+impl HostKeyVerifier for ReconnectVerifier {
+    async fn decide(
+        &self,
+        host: &str,
+        port: u16,
         _key_type: &str,
-        _fingerprint: &str,
+        fingerprint: &str,
         _stored_fingerprint: Option<&str>,
         _kind: HostPromptKind,
     ) -> Result<HostDecision, russh::Error> {
-        Ok(if self.reject_unknown {
-            HostDecision::Reject
-        } else {
-            HostDecision::Accept
-        })
+        let known = self.accepted.lock().is_ok_and(|keys| {
+            keys.iter()
+                .any(|(h, p, fp)| h == host && *p == port && fp == fingerprint)
+        });
+        Ok(if known { HostDecision::Accept } else { HostDecision::Reject })
     }
 }
 
@@ -489,6 +525,8 @@ pub struct SshSession {
     sftp: Mutex<Option<Arc<Mutex<SftpSession>>>>,
     /// Serializes reconnects so a burst of failed ops triggers exactly one.
     reconnect_lock: Mutex<()>,
+    /// Keys accepted "once" at connect time; a reconnect may reuse them.
+    accepted_keys: AcceptedKeys,
     /// Bumped on every successful reconnect; lets a waiter that lost the race
     /// notice another task already reconnected and skip doing it again.
     generation: AtomicU64,
@@ -529,6 +567,7 @@ impl SshSession {
             jump_handles: Mutex::new(Vec::new()),
             sftp: Mutex::new(None),
             reconnect_lock: Mutex::new(()),
+            accepted_keys: AcceptedKeys::default(),
             generation: AtomicU64::new(0),
             jobs: Mutex::new(HashMap::new()),
         }
@@ -655,7 +694,9 @@ impl SshSession {
             return Ok(()); // someone else already reconnected while we waited
         }
         tracing::warn!(session = %self.id, host = %self.profile.host, "SSH transport dead — reconnecting");
-        let verifier: Arc<dyn HostKeyVerifier> = Arc::new(AutoTrustVerifier::reject_unknown());
+        let verifier: Arc<dyn HostKeyVerifier> = Arc::new(ReconnectVerifier {
+            accepted: self.accepted_keys.clone(),
+        });
         // A silent reconnect has no user to answer prompts — refuse interactive
         // auth rather than hang. (An expired password on reconnect surfaces as a
         // failed reconnect, which the user resolves by reconnecting by hand.)
@@ -1863,6 +1904,11 @@ impl SessionManager {
         let _ = app;
         let session = match profile.protocol.as_str() {
             "sftp" | "ssh" | "" => {
+                let accepted = AcceptedKeys::default();
+                let verifier: Arc<dyn HostKeyVerifier> = Arc::new(RecordingVerifier {
+                    inner: verifier,
+                    accepted: accepted.clone(),
+                });
                 let conn = ssh_connect(&profile, verifier, prompter).await?;
                 let id = Uuid::new_v4().to_string();
                 let ssh = Arc::new(SshSession {
@@ -1872,6 +1918,7 @@ impl SessionManager {
                     jump_handles: Mutex::new(conn.jump_handles),
                     sftp: Mutex::new(None),
                     reconnect_lock: Mutex::new(()),
+                    accepted_keys: accepted,
                     generation: AtomicU64::new(0),
                     jobs: Mutex::new(HashMap::new()),
                 });
@@ -2095,5 +2142,27 @@ impl SessionManager {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod reconnect_verifier_tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_accepts_only_keys_accepted_once() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async {
+            let accepted = AcceptedKeys::default();
+            accepted.lock().unwrap().push(("h".into(), 22, "SHA256:a".into()));
+            let v = ReconnectVerifier { accepted };
+            let d = |fp: &'static str, port| {
+                let v = &v;
+                async move { v.decide("h", port, "ssh-ed25519", fp, None, HostPromptKind::Unknown).await.unwrap() }
+            };
+            assert!(matches!(d("SHA256:a", 22).await, HostDecision::Accept));
+            assert!(matches!(d("SHA256:b", 22).await, HostDecision::Reject));
+            assert!(matches!(d("SHA256:a", 2222).await, HostDecision::Reject));
+        });
     }
 }

@@ -811,11 +811,9 @@ async fn name_object(
 
 // ---------- Exec fast path (rg / grep / find) ----------
 
-/// POSIX single-quote a string so it survives spaces / shell metacharacters when
-/// interpolated into a remote command.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a string so it survives spaces / shell metacharacters when
+// interpolated into a remote command.
+use crate::scp::quote_path as sh_quote;
 
 /// The glob `find -iname` should match. A pattern with `*`/`?` is used verbatim;
 /// a plain substring becomes `*substr*` (matching the generic substring rule).

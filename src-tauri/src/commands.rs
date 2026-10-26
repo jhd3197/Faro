@@ -1256,11 +1256,9 @@ pub async fn chmod_path(
 
 // ---------- Duplicate ----------
 
-/// POSIX single-quote a string so it survives spaces / shell metacharacters when
-/// interpolated into a remote command. `'` is closed, escaped, and reopened.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a string so it survives spaces / shell metacharacters when
+// interpolated into a remote command. `'` is closed, escaped, and reopened.
+use crate::scp::quote_path as sh_quote;
 
 /// Split a POSIX path into (parent, last-component). "/foo" → ("", "foo"),
 /// "/a/b" → ("/a", "b"), "rel" → (".", "rel").

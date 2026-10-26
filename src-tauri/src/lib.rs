@@ -241,13 +241,8 @@ pub fn run() {
                         // OAuth tokens aren't in the manifest: one entry per
                         // cloud profile under its provider's service.
                         for p in profiles.list().await.unwrap_or_default() {
-                            let service = match p.protocol.as_str() {
-                                "dropbox" => session::dropbox::DROPBOX_SERVICE,
-                                "onedrive" => session::onedrive::ONEDRIVE_SERVICE,
-                                "gdrive" => session::gdrive::GDRIVE_SERVICE,
-                                "box" => session::boxdrive::BOX_SERVICE,
-                                "dynamics" => session::dynamics::DYNAMICS_TOKEN_SERVICE,
-                                _ => continue,
+                            let Some(service) = session::oauth_token_service(&p.protocol) else {
+                                continue;
                             };
                             entries.push((service.to_string(), p.id.clone()));
                         }

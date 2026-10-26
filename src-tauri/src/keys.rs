@@ -263,7 +263,7 @@ fn pub_path_for(priv_path: &Path) -> PathBuf {
 /// The wire key-type token for an `authorized_keys` line. Derived from the key
 /// variant rather than `PublicKey::name()`, which returns the *signature* algo
 /// name for RSA (`rsa-sha2-256`) — wrong as an `authorized_keys` type token.
-fn type_token(pk: &PublicKey) -> &'static str {
+pub(crate) fn type_token(pk: &PublicKey) -> &'static str {
     match pk {
         PublicKey::Ed25519(_) => "ssh-ed25519",
         PublicKey::RSA { .. } => "ssh-rsa",

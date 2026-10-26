@@ -324,11 +324,9 @@ pub(crate) async fn hash_path(session: Option<&Session>, path: &str) -> Result<S
     }
 }
 
-/// POSIX single-quote a path so it survives spaces / shell metacharacters when
-/// interpolated into a remote command.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+// POSIX single-quote a path so it survives spaces / shell metacharacters when
+// interpolated into a remote command.
+use crate::scp::quote_path as sh_quote;
 
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

@@ -169,11 +169,12 @@ impl ServerAccum {
         //   0  = FTP
         //   1  = SFTP
         //   3  = FTPES (explicit FTP over TLS)
-        //   4  = FTPS  (implicit FTP over TLS)
+        //   4  = FTPS  (implicit FTP over TLS) — Faro's "ftps" is explicit
+        //        only, so importing it would give a profile that never connects
         //   6  = STORJ + various — out of scope for us
         let (proto, default_port): (&str, u16) = match self.protocol.unwrap_or(0) {
             1 => ("sftp", 22),
-            3 | 4 => ("ftps", 21),
+            3 => ("ftps", 21),
             0 => ("ftp", 21),
             _ => return None, // unsupported protocol
         };
@@ -219,6 +220,7 @@ mod tests {
   <Server><Host>a.example</Host><Protocol>0</Protocol><EncodingType>Custom</EncodingType><CustomEncoding>ISO-8859-1</CustomEncoding><Name>a</Name></Server>
   <Server><Host>b.example</Host><Protocol>0</Protocol><EncodingType>UTF-8</EncodingType><Name>b</Name></Server>
   <Server><Host>c.example</Host><Protocol>3</Protocol><EncodingType>Auto</EncodingType><PasvMode>MODE_ACTIVE</PasvMode><Name>c</Name></Server>
+  <Server><Host>d.example</Host><Protocol>4</Protocol><Port>990</Port><Name>implicit</Name></Server>
 </Servers></FileZilla3>"#;
         let got: Vec<_> = parse(xml)
             .unwrap()

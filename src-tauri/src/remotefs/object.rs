@@ -69,7 +69,7 @@ impl RemoteFs for ObjectFs {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>> {
         let prefix = normalize_prefix(path);
         if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
-            let api = crate::session::object::namespace::Namespace::new(&self.session.profile)?;
+            let api = self.session.namespace()?;
             let prefix = if prefix.is_empty() { prefix } else { format!("{prefix}/") };
             let listing = api.list(&prefix, true).await?;
             if !prefix.is_empty() && listing.objects.is_empty() && listing.prefixes.is_empty() {
@@ -134,7 +134,7 @@ impl RemoteFs for ObjectFs {
 
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
         if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
-            let api = crate::session::object::namespace::Namespace::new(&self.session.profile)?;
+            let api = self.session.namespace()?;
             let src = normalize_prefix(from);
             let dst = normalize_prefix(to);
             if src.is_empty() || dst.is_empty() { anyhow::bail!("cannot rename the bucket root"); }
@@ -171,7 +171,7 @@ impl RemoteFs for ObjectFs {
     async fn delete(&self, path: &str, recursive: bool) -> Result<()> {
         let key = normalize_prefix(path);
         if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
-            let api = crate::session::object::namespace::Namespace::new(&self.session.profile)?;
+            let api = self.session.namespace()?;
             if !key.is_empty() && !path.ends_with('/') && api.exists(&key).await? {
                 return api.delete(&key).await;
             }
@@ -222,7 +222,7 @@ impl RemoteFs for ObjectFs {
         if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
             let key = normalize_prefix(path);
             if !key.is_empty() {
-                return crate::session::object::namespace::Namespace::new(&self.session.profile)?
+                return self.session.namespace()?
                     .mkdir(&format!("{key}/")).await;
             }
         }

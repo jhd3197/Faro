@@ -112,7 +112,8 @@ impl Archive {
             credentials: self.credentials.len(),
             has_bridge: self.bridge_json.is_some(),
             has_sync: self.foldersync_json.is_some(),
-            db_bytes: self.faro_db_b64.len(),
+            // Decoded size: base64 is ~4/3 of the real bytes.
+            db_bytes: self.faro_db_b64.trim_end_matches('=').len() * 3 / 4,
         }
     }
 }
@@ -336,20 +337,13 @@ fn collect_credentials(dir: &Path, db: &Db) -> Vec<Cred> {
         }
     }
 
-    // OAuth tokens are keyed by profile id under a per-provider service. Try each
-    // service for every profile — a non-cloud profile simply has no entry.
-    let oauth_services = [
-        crate::session::dropbox::DROPBOX_SERVICE,
-        crate::session::onedrive::ONEDRIVE_SERVICE,
-        crate::session::gdrive::GDRIVE_SERVICE,
-        crate::session::boxdrive::BOX_SERVICE,
-    ];
+    // OAuth tokens are keyed by profile id under their provider's service.
     if let Ok(bytes) = std::fs::read(dir.join("profiles.json")) {
         if let Ok(profiles) =
             serde_json::from_slice::<Vec<crate::profiles::ConnectionProfile>>(&bytes)
         {
             for p in profiles {
-                for svc in oauth_services {
+                if let Some(svc) = crate::session::oauth_token_service(&p.protocol) {
                     take(svc, &p.id, &mut out, &mut seen);
                 }
             }
