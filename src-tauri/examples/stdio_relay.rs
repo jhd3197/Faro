@@ -13,6 +13,13 @@
 //! expected TUNNEL_SERVICE_TOKEN_* env), garbage (answer with an HTTP error
 //! instead of SSH). `--linger` keeps the process alive after the relay ends,
 //! so only being killed stops it.
+//!
+//! Plan 29: `--version` reports a version, and `access token|login|ssh`
+//! emulate cloudflared's Access sign-in with files next to the executable,
+//! per hostname H: `token-H.json` is the cached token (`{"email","exp"}`),
+//! `login-H.json` is what a browser sign-in yields (plus `delayMs`), and
+//! `notprotected-H` means no Access application. `access ssh --access` without a
+//! valid token signs in first (if it can), then relays to `--target`.
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
@@ -21,6 +28,27 @@ use std::time::Duration;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    if args.first().map(String::as_str) == Some("--version") {
+        println!("cloudflared version 2099.1.0 (built 2099-01-01-0000 UTC)");
+        return;
+    }
+    if args.first().map(String::as_str) == Some("access") {
+        let host = flag("--app")
+            .or_else(|| flag("--hostname"))
+            .unwrap_or_default()
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .to_string();
+        match args.get(1).map(String::as_str) {
+            Some("token") => access_token(&host),
+            Some("login") => access_login(&host),
+            // Opt-in, so the plain relay tests keep their fake cloudflared.
+            Some("ssh") if args.iter().any(|a| a == "--access") => {
+                access_ready(&host);
+            }
+            _ => {}
+        }
+    }
     let say: Vec<&String> = args
         .iter()
         .enumerate()
@@ -79,6 +107,81 @@ fn main() {
         loop {
             std::thread::sleep(Duration::from_secs(60));
         }
+    }
+}
+
+fn state_file(name: &str) -> std::path::PathBuf {
+    std::env::current_exe().unwrap().parent().unwrap().join(name)
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+fn token(host: &str) -> Option<serde_json::Value> {
+    serde_json::from_slice(&std::fs::read(state_file(&format!("token-{host}.json"))).ok()?).ok()
+}
+
+fn jwt(claims: &serde_json::Value) -> String {
+    use base64::Engine as _;
+    let b = |v: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v);
+    format!("{}.{}.{}", b(br#"{"alg":"RS256"}"#), b(claims.to_string().as_bytes()), b(b"sig"))
+}
+
+fn not_protected(host: &str) {
+    if state_file(&format!("notprotected-{host}")).exists() {
+        eprintln!("failed to find Access application at https://{host}");
+        std::process::exit(1);
+    }
+}
+
+fn access_token(host: &str) -> ! {
+    not_protected(host);
+    match token(host) {
+        Some(t) => {
+            println!("{}", jwt(&t));
+            std::process::exit(0)
+        }
+        None => {
+            eprintln!("Unable to find token for provided application. Please run login command to generate token.");
+            std::process::exit(1)
+        }
+    }
+}
+
+/// A browser sign-in: print the URL, wait for the "user", store the token.
+fn sign_in(host: &str) -> bool {
+    let Ok(raw) = std::fs::read(state_file(&format!("login-{host}.json"))) else {
+        return false;
+    };
+    let login: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    eprintln!("A browser window should have opened at the following URL:\n");
+    eprintln!("https://team.cloudflareaccess.com/cdn-cgi/access/cli?aud={host}&token=abc\n");
+    std::thread::sleep(Duration::from_millis(login["delayMs"].as_u64().unwrap_or(300)));
+    let mut claims = login.clone();
+    claims.as_object_mut().unwrap().remove("delayMs");
+    if claims.get("exp").is_none() {
+        claims["exp"] = (now() + 3600).into();
+    }
+    std::fs::write(state_file(&format!("token-{host}.json")), claims.to_string()).unwrap();
+    true
+}
+
+fn access_login(host: &str) -> ! {
+    not_protected(host);
+    if sign_in(host) {
+        std::process::exit(0)
+    }
+    eprintln!("failed to fetch token: the sign-in was cancelled");
+    std::process::exit(1)
+}
+
+/// `access ssh --access`: a valid token, or a sign-in that yields one.
+fn access_ready(host: &str) {
+    let valid = token(host).and_then(|t| t["exp"].as_i64()).is_some_and(|exp| exp > now());
+    if !valid && !sign_in(host) {
+        eprintln!("failed to find token for {host}");
+        std::process::exit(1)
     }
 }
 

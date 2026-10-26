@@ -14,6 +14,7 @@ pub mod commands;
 mod agent_host;
 mod app_updater;
 pub mod cli_updater;
+pub mod cloudflared;
 pub mod credentials;
 pub mod db;
 mod deeplink;
@@ -58,6 +59,8 @@ pub struct AppState {
     /// CLI version-drift watcher (Plan 10 Phase 0c/0d) — keeps `faro-cli` in step
     /// with the app per the user's `cliUpdate` preference.
     pub cli_updater: Arc<cli_updater::CliUpdater>,
+    /// Which cloudflared Faro runs, and its managed copy (Plan 29).
+    pub cloudflared: Arc<cloudflared::Manager>,
     pub foldersync: Arc<foldersync::FolderSync>,
     /// On-demand virtual folders (Plan 9) — OneDrive-style placeholders. Owns
     /// the OS sync-root registrations; inert on non-Windows / non-`virtualfs`
@@ -320,6 +323,9 @@ pub fn run() {
                     cli_updater::CliUpdater::load(&handle)
                         .expect("failed to initialise CLI updater settings"),
                 ),
+                cloudflared: Arc::new(
+                    cloudflared::Manager::load(&handle).expect("failed to initialise cloudflared settings"),
+                ),
                 foldersync: Arc::new(
                     foldersync::FolderSync::load(&handle)
                         .expect("failed to initialise folder sync settings"),
@@ -406,6 +412,13 @@ pub fn run() {
                 cli_updater.auto_start_if_enabled(cli_handle).await;
             });
 
+            // A Faro-managed cloudflared: look for a newer official release.
+            let cloudflared = app.state::<AppState>().cloudflared.clone();
+            let cf_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                cloudflared.check_on_launch(cf_handle).await;
+            });
+
             // Show transfers, agent requests and folder sync in Vela.
             vela::start(app.handle());
 
@@ -471,6 +484,12 @@ pub fn run() {
             cli_updater::cli_updater_check,
             cli_updater::cli_updater_update,
             cli_updater::cli_updater_set_mode,
+            cloudflared::cloudflared_status,
+            cloudflared::cloudflared_check,
+            cloudflared::cloudflared_install,
+            cloudflared::cloudflared_set_custom_path,
+            cloudflared::cf_access_status,
+            cloudflared::cf_access_login,
             path_integration::path_status,
             path_integration::path_add,
             path_integration::path_remove,

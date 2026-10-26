@@ -261,6 +261,49 @@ fn extra_dirs(cloudflared: bool) -> Vec<PathBuf> {
     dirs
 }
 
+/// The `cloudflared` the user picked in Settings (their own path, or the copy
+/// Faro installed). Wins over PATH for a bare `cloudflared`. Set by
+/// `cloudflared::configure` in the app and in faro-cli.
+static CLOUDFLARED_PATH: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+pub fn set_cloudflared_path(path: Option<PathBuf>) {
+    if let Ok(mut p) = CLOUDFLARED_PATH.write() {
+        *p = path;
+    }
+}
+
+/// The first match for a bare program name on PATH or in `extra_dirs`.
+pub fn find_program(name: &str, cloudflared: bool) -> Option<PathBuf> {
+    let names: Vec<String> = if cfg!(windows) && Path::new(name).extension().is_none() {
+        let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
+        exts.split(';')
+            .filter(|e| !e.is_empty())
+            .map(|e| format!("{name}{}", e.to_ascii_lowercase()))
+            .collect()
+    } else {
+        vec![name.to_string()]
+    };
+    let path_dirs = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .unwrap_or_default();
+    path_dirs
+        .into_iter()
+        .chain(extra_dirs(cloudflared))
+        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
+        .find(|c| c.is_file())
+}
+
+/// The `cloudflared` to run: the one picked in Settings, else PATH.
+pub fn resolve_cloudflared() -> Result<PathBuf> {
+    let spec = CommandSpec {
+        program: "cloudflared".into(),
+        args: Vec::new(),
+        env: Vec::new(),
+        cloudflared: true,
+    };
+    resolve_program(&spec)
+}
+
 /// The executable to run: a path as given, else the first match for a bare
 /// name on PATH or in `extra_dirs`.
 fn resolve_program(spec: &CommandSpec) -> Result<PathBuf> {
@@ -271,28 +314,20 @@ fn resolve_program(spec: &CommandSpec) -> Result<PathBuf> {
         }
         return Ok(program.to_path_buf());
     }
-    let names: Vec<String> = if cfg!(windows) && program.extension().is_none() {
-        let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
-        exts.split(';')
-            .filter(|e| !e.is_empty())
-            .map(|e| format!("{}{}", spec.program, e.to_ascii_lowercase()))
-            .collect()
-    } else {
-        vec![spec.program.clone()]
-    };
-    let path_dirs = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .unwrap_or_default();
-    for dir in path_dirs.into_iter().chain(extra_dirs(spec.cloudflared)) {
-        for name in &names {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Ok(candidate);
+    if spec.cloudflared && spec.program.eq_ignore_ascii_case("cloudflared") {
+        let chosen = CLOUDFLARED_PATH.read().ok().and_then(|p| p.clone());
+        if let Some(path) = chosen {
+            if !path.is_file() {
+                bail!("the cloudflared chosen in Settings ({}) doesn't exist; pick another or install one there", path.display());
             }
+            return Ok(path);
         }
     }
+    if let Some(found) = find_program(&spec.program, spec.cloudflared) {
+        return Ok(found);
+    }
     if spec.cloudflared {
-        bail!("cloudflared isn't installed (or isn't on PATH). Install it from {CLOUDFLARED_DOWNLOAD_URL} and connect again");
+        bail!("cloudflared isn't installed. Install it from Settings → Cloudflare (Faro downloads the official release), or from {CLOUDFLARED_DOWNLOAD_URL}");
     }
     bail!("`{}` was not found on PATH; install it or use its full path in the proxy command", spec.program)
 }
@@ -316,7 +351,7 @@ pub fn spawn(spec: &CommandSpec, on_login: impl Fn(String) + Send + 'static) -> 
     else {
         bail!("the proxy command's pipes could not be opened");
     };
-    let diag = Diagnostics::new(spec, child.id());
+    let diag = Diagnostics::new(spec, child.id(), &program);
 
     // Drain stderr for the whole session: a full pipe would stall the child.
     let d = diag.clone();
@@ -454,18 +489,25 @@ pub struct Diagnostics {
     hostname: Option<Arc<str>>,
     cloudflared: bool,
     pid: Option<u32>,
+    /// The executable that ran.
+    program: Arc<Path>,
     state: Arc<watch::Sender<State>>,
 }
 
 impl Diagnostics {
-    fn new(spec: &CommandSpec, pid: Option<u32>) -> Self {
+    fn new(spec: &CommandSpec, pid: Option<u32>, program: &Path) -> Self {
         Self {
             display: spec.display().into(),
             hostname: spec.cloudflare_hostname().map(Into::into),
             cloudflared: spec.cloudflared,
             pid,
+            program: program.into(),
             state: Arc::new(watch::channel(State::default()).0),
         }
+    }
+
+    pub fn program(&self) -> &Path {
+        &self.program
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -474,6 +516,11 @@ impl Diagnostics {
 
     pub fn login_url(&self) -> Option<String> {
         self.state.borrow().login_url.clone()
+    }
+
+    /// The Access hostname, when the command is `cloudflared access`.
+    pub fn access_hostname(&self) -> Option<String> {
+        self.cloudflared.then(|| self.hostname.as_deref().map(String::from)).flatten()
     }
 
     pub fn has_exited(&self) -> bool {
@@ -553,7 +600,7 @@ impl Diagnostics {
 }
 
 /// A Cloudflare Access sign-in URL on a `cloudflared` stderr line.
-fn access_login_url(line: &str) -> Option<String> {
+pub fn access_login_url(line: &str) -> Option<String> {
     let start = line.find("https://")?;
     let url: String = line[start..].chars().take_while(|c| !c.is_whitespace()).collect();
     url.contains("/cdn-cgi/access/").then_some(url)
@@ -619,7 +666,7 @@ pub fn conflict_error(profile_name: &str) -> anyhow::Error {
 
 #[cfg(test)]
 #[path = "proxy_command_tests.rs"]
-mod e2e;
+pub(crate) mod e2e;
 
 #[cfg(test)]
 mod tests {

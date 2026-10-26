@@ -18,7 +18,7 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 // ---- The relay binary --------------------------------------------------
 
 /// `examples/stdio_relay`, built once per test run.
-fn relay_exe() -> PathBuf {
+pub(crate) fn relay_exe() -> PathBuf {
     static EXE: OnceLock<PathBuf> = OnceLock::new();
     EXE.get_or_init(|| {
         let status = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
@@ -38,7 +38,7 @@ fn relay_exe() -> PathBuf {
 }
 
 /// The relay under the name `cloudflared`, so Faro treats it as such.
-fn fake_cloudflared() -> PathBuf {
+pub(crate) fn fake_cloudflared() -> PathBuf {
     static EXE: OnceLock<PathBuf> = OnceLock::new();
     EXE.get_or_init(|| {
         let dir = scratch("fake-cloudflared");
@@ -49,7 +49,7 @@ fn fake_cloudflared() -> PathBuf {
     .clone()
 }
 
-fn scratch(tag: &str) -> PathBuf {
+pub(crate) fn scratch(tag: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "faro-proxycmd-{}-{tag}-{}",
@@ -60,12 +60,12 @@ fn scratch(tag: &str) -> PathBuf {
     dir
 }
 
-fn quoted(p: &std::path::Path) -> String {
+pub(crate) fn quoted(p: &std::path::Path) -> String {
     format!("\"{}\"", p.display())
 }
 
 /// Whether a process is still running.
-fn alive(pid: u32) -> bool {
+pub(crate) fn alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
         let out = std::process::Command::new("tasklist")
@@ -221,7 +221,7 @@ impl russh::server::Handler for Server {
 }
 
 /// An SSH server on 127.0.0.1, answering until the test process ends.
-async fn ssh_server() -> u16 {
+pub(crate) async fn ssh_server() -> u16 {
     let config = Arc::new(russh::server::Config {
         keys: vec![russh_keys::key::KeyPair::generate_ed25519().unwrap()],
         auth_rejection_time: Duration::from_millis(10),
@@ -247,7 +247,7 @@ async fn ssh_server() -> u16 {
 
 /// Accepts every key, recording which host:port each check was for.
 #[derive(Default)]
-struct Verifier(StdMutex<Vec<(String, u16)>>);
+pub(crate) struct Verifier(pub(crate) StdMutex<Vec<(String, u16)>>);
 
 #[async_trait::async_trait]
 impl HostKeyVerifier for Verifier {
@@ -267,7 +267,7 @@ impl HostKeyVerifier for Verifier {
 
 /// Refuses prompts, records notices.
 #[derive(Default)]
-struct Prompter(StdMutex<Vec<(String, Option<String>)>>);
+pub(crate) struct Prompter(pub(crate) StdMutex<Vec<(String, Option<String>)>>);
 
 #[async_trait::async_trait]
 impl AuthPrompter for Prompter {
@@ -281,7 +281,7 @@ impl AuthPrompter for Prompter {
 }
 
 /// A profile for the unroutable `host`, reached only through `command`.
-fn profile(host: &str, command: String) -> ConnectionProfile {
+pub(crate) fn profile(host: &str, command: String) -> ConnectionProfile {
     let mut p: ConnectionProfile = serde_json::from_value(serde_json::json!({
         "id": format!("pc-{host}"), "name": host, "protocol": "sftp", "host": host, "port": 22,
         "username": "faro", "auth": { "kind": "password", "password": "pw" },
@@ -316,7 +316,7 @@ impl Harness {
     }
 }
 
-async fn exec(conn: &SshConnection, cmd: &str) -> Result<Vec<u8>> {
+pub(crate) async fn exec(conn: &SshConnection, cmd: &str) -> Result<Vec<u8>> {
     let mut ch = conn.handle.channel_open_session().await?;
     ch.exec(true, cmd).await?;
     let mut out = Vec::new();
@@ -328,12 +328,12 @@ async fn exec(conn: &SshConnection, cmd: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-async fn exec_str(conn: &SshConnection, cmd: &str) -> String {
+pub(crate) async fn exec_str(conn: &SshConnection, cmd: &str) -> String {
     String::from_utf8(exec(conn, cmd).await.unwrap()).unwrap()
 }
 
 /// The top line of an error, which is all the UI shows.
-fn top(e: &anyhow::Error) -> String {
+pub(crate) fn top(e: &anyhow::Error) -> String {
     e.to_string()
 }
 

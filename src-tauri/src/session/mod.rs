@@ -1693,6 +1693,7 @@ pub async fn ssh_connect(
         authenticate(&mut jump, profile, &jump_username, &prompter)
             .await
             .with_context(|| format!("authenticate on jump host {jump_host}"))?;
+        report_access_login(diag, &prompter);
 
         let channel = jump
             .channel_open_direct_tcpip(
@@ -1740,6 +1741,7 @@ pub async fn ssh_connect(
         Err(e) => return Err(explain(diag, e, format!("connect to {}:{}", profile.host, profile.port)).await),
     };
     authenticate(&mut session, profile, &profile.username, &prompter).await?;
+    report_access_login(diag, &prompter);
     Ok(SshConnection {
         handle: session,
         jump_handles: Vec::new(),
@@ -1775,6 +1777,20 @@ async fn dial_first_hop(
     })?;
     let diag = stream.diagnostics();
     Ok((Box::new(stream), Some(diag)))
+}
+
+/// After a connect that needed a Cloudflare Access sign-in, say whose it is.
+fn report_access_login(diag: Option<crate::proxy_command::Diagnostics>, prompter: &Arc<dyn AuthPrompter>) {
+    let Some(d) = diag.filter(|d| d.login_url().is_some()) else { return };
+    let Some(hostname) = d.access_hostname() else { return };
+    let prompter = prompter.clone();
+    tokio::spawn(async move {
+        // The same cloudflared the connection ran, so the same token cache.
+        let status = crate::cloudflared::access_status(d.program(), &hostname).await;
+        if let Some(identity) = status.identity {
+            prompter.notice(&format!("Logged in to Cloudflare as {identity}"), None);
+        }
+    });
 }
 
 /// A failed handshake as an error with `context`. When the transport itself
