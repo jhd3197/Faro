@@ -176,6 +176,18 @@ async function main() {
     });
     await sleep(300);
     check("bulk bar appears for a selection", (await text()).includes("2 selected"));
+    // Header buttons stay on one line in a narrow window.
+    await page.setViewport({ width: 1100, height: 900 });
+    await sleep(300);
+    const hdr = await D(() =>
+      [...document.querySelectorAll("button")]
+        .filter((b) => ["Copy MCP command", "Live console"].includes(b.innerText.trim()))
+        .map((b) => b.getBoundingClientRect().height)
+    );
+    check("header buttons don't wrap at 1100px", hdr.length === 2 && hdr.every((h) => h <= 30), JSON.stringify(hdr));
+    await shot("4b-narrow-header");
+    await page.setViewport({ width: 1440, height: 900 });
+    await sleep(300);
     await shot("4-access-matrix");
     await D(() => [...document.querySelectorAll('[role="tab"]')].find((t) => t.innerText.startsWith("Setup")).click());
     await sleep(400);

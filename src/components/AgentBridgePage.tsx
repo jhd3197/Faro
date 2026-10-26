@@ -154,9 +154,16 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
 
   const grantedCount = ordered.filter(granted).length;
   const copyMcp = async () => {
-    if (!status.url || !status.token) return;
-    await navigator.clipboard.writeText(mcpAddCmd(status.url, status.token));
-    toast.success("MCP command copied", "Paste it in a terminal to add Faro to Claude Code.");
+    if (!status.url || !status.token) {
+      toast.info("Bridge not running", "Turn the bridge on to get an MCP command.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(mcpAddCmd(status.url, status.token));
+      toast.success("MCP command copied", "Paste it in a terminal to add Faro to Claude Code.");
+    } catch (e) {
+      toast.error("Couldn't copy the MCP command", String(e));
+    }
   };
 
   return (
@@ -169,7 +176,7 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
       <div className="flex min-w-0 flex-1 flex-col px-5 pt-4">
         {/* Header */}
         <div className="flex items-start gap-3">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h1 className="flex items-center gap-2 text-[17px] font-semibold tracking-tight">
               <Radio size={16} className={status.running ? "text-accent" : "text-text-dim"} />
               Agent Bridge
@@ -188,21 +195,20 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
               )}
             </p>
           </div>
-          <span className="flex-1" />
           <button
             onClick={() => void copyMcp()}
             disabled={!status.running}
-            className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2.5 text-[12px] hover:bg-bg-hover disabled:opacity-40"
+            className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-bg-subtle px-2.5 text-[12px] hover:bg-bg-hover disabled:opacity-40"
           >
             <Copy size={12} /> Copy MCP command
           </button>
           <button
             onClick={() => setConsoleOpen(true)}
-            className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2.5 text-[12px] hover:bg-bg-hover"
+            className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-bg-subtle px-2.5 text-[12px] hover:bg-bg-hover"
           >
             <TerminalIcon size={12} /> Live console
           </button>
-          <label className="flex h-7 items-center gap-2 border-l border-border pl-3 text-[12px] text-text-muted">
+          <label className="flex h-7 shrink-0 items-center gap-2 whitespace-nowrap border-l border-border pl-3 text-[12px] text-text-muted">
             Bridge
             <button
               role="switch"
@@ -225,7 +231,7 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
           <button
             onClick={onClose}
             aria-label="Close Agent Bridge"
-            className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-text-muted hover:bg-bg-hover hover:text-text"
+            className="flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-[12px] text-text-muted hover:bg-bg-hover hover:text-text"
           >
             <X size={13} /> Close
           </button>
@@ -325,10 +331,12 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
             )}
 
             {/* Matrix */}
-            <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-bg-panel">
+            {/* Scrolls sideways in a narrow window rather than crushing names. */}
+            <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-x-auto overflow-y-hidden rounded-lg border border-border bg-bg-panel">
+              <div className="flex min-w-[56rem] flex-1 flex-col overflow-hidden">
               <div className="flex h-8 shrink-0 items-center gap-3 border-b border-border px-3 text-[10.5px] uppercase tracking-[0.07em] text-text-dim">
                 <span className="w-4" />
-                <span className="min-w-0 flex-1">Server</span>
+                <span className="min-w-[10rem] flex-1">Server</span>
                 <span className="w-16">Type</span>
                 {ACCESS_COLUMNS.map((c) => (
                   <span key={c.key} className="w-[7.5rem] truncate whitespace-nowrap" title={`${c.label} — ${c.help}`}>
@@ -403,6 +411,7 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
                     </div>
                   );
                 })}
+              </div>
               </div>
             </div>
             <div className="flex h-9 shrink-0 flex-wrap items-center gap-x-4 text-[11.5px] text-text-dim">
@@ -530,12 +539,12 @@ function MatrixRow({
         onChange={(e) => onSelect(e.target.checked)}
         className="h-3.5 w-3.5 accent-[rgb(var(--accent))]"
       />
-      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+      <div className="flex min-w-[10rem] flex-1 items-center gap-2.5">
         <span
           className="h-2 w-2 shrink-0 rounded-[2px]"
           style={{ background: p.color || "rgb(var(--accent))" }}
         />
-        <span className={cn("truncate text-[13px] font-medium", !connected && "text-text-muted")}>
+        <span className={cn("max-w-[14rem] shrink-0 truncate text-[13px] font-medium", !connected && "text-text-muted")}>
           {p.name}
         </span>
         <span className="truncate font-mono text-[11.5px] text-text-dim">{profileAddress(p)}</span>
