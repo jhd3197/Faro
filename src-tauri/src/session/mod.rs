@@ -1073,7 +1073,12 @@ impl SshSession {
         stream: Option<&ExecStream>,
     ) -> Result<ExecOutput> {
         let marker = format!("[faro-sudo-{}]", Uuid::new_v4().simple());
-        let wrapped = format!("sudo -p '{marker}' -v && {command}");
+        // Echoed once priming is over; after it the password is never typed
+        // again, even if the marker shows up in the command's own output (`ps`
+        // prints our command line). Split in the shell so the command line
+        // itself doesn't contain the joined text.
+        let primed = format!("{marker}-ok");
+        let wrapped = format!("sudo -p '{marker}' -v && echo '{marker}''-ok' && {command}");
         let wrapped_ref = wrapped.as_str();
 
         // Open + request a PTY + exec, reconnecting once if the transport is dead
@@ -1099,6 +1104,7 @@ impl SshSession {
         let marker_bytes = marker.as_bytes();
         let mut markers_seen = 0usize; // prompts observed so far
         let mut pw_sent = 0usize; // password lines typed
+        let mut priming = true; // false once sudo -v has succeeded
 
         let collect = async {
             loop {
@@ -1113,7 +1119,10 @@ impl SshSession {
                         // Type the password each time a *new* sudo prompt appears.
                         // sudo retries up to 3x on a wrong password and then gives
                         // up (channel closes), so capping the sends avoids a hang.
-                        let hits = count_occurrences(&out, marker_bytes);
+                        if priming && count_occurrences(&out, primed.as_bytes()) > 0 {
+                            priming = false;
+                        }
+                        let hits = if priming { count_occurrences(&out, marker_bytes) } else { 0 };
                         while markers_seen < hits {
                             markers_seen += 1;
                             if pw_sent < 3 {
@@ -1139,7 +1148,7 @@ impl SshSession {
         let timed_out = tokio::time::timeout(timeout, collect).await.is_err();
 
         // Scrub the priming prompt(s) so the caller/agent sees clean output.
-        let text = String::from_utf8_lossy(&out).replace(&marker, "");
+        let text = String::from_utf8_lossy(&out).replace(&primed, "").replace(&marker, "");
         let text = text.trim_start_matches(['\r', '\n']).to_string();
 
         Ok(ExecOutput {

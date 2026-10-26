@@ -441,11 +441,12 @@ fn is_read_only_command(cmd: &str) -> bool {
     }
     // Curated binaries that neither mutate state nor launch other programs with
     // their normal invocations. Deliberately excludes find/sed/awk/sort/uniq
-    // (write/exec/-i/-o flags) and anything in NEVER_SAFE.
+    // (write/exec/-i/-o flags), `tree` (`-o FILE` writes) and `file` (`-C`
+    // writes magic.mgc), and anything in NEVER_SAFE.
     const READ_ONLY: &[&str] = &[
         "ls", "cat", "pwd", "whoami", "id", "uname", "uptime", "df", "du",
-        "free", "ps", "stat", "head", "tail", "wc", "file", "echo", "printenv",
-        "which", "type", "tree", "readlink", "realpath", "dirname", "basename",
+        "free", "ps", "stat", "head", "tail", "wc", "echo", "printenv",
+        "which", "type", "readlink", "realpath", "dirname", "basename",
         "lsblk", "lscpu", "netstat", "cut", "grep", "egrep", "fgrep", "md5sum",
         "sha1sum", "sha256sum", "groups", "getent", "lsof", "nproc", "vmstat",
         "cal", "arch", "lsusb", "lspci", "uptime",
@@ -761,7 +762,7 @@ impl BridgeState {
         app: &AppHandle,
         session_id: &str,
         class: OpClass,
-        exec_cmd: Option<&str>,
+        exec: Option<ExecText<'_>>,
     ) -> AccessLevel {
         let access = self.access_for_session(app, session_id).await;
         let level = match class {
@@ -772,7 +773,7 @@ impl BridgeState {
         if class != OpClass::Exec || level == AccessLevel::Off {
             return level;
         }
-        let uses_sudo = exec_cmd.map(command_uses_sudo).unwrap_or(false);
+        let uses_sudo = exec.map(|e| command_uses_sudo(e.text())).unwrap_or(false);
         // Sudo on Ask overrides an Auto exec level: privileged commands prompt.
         if uses_sudo && access.sudo == AccessLevel::Ask {
             return AccessLevel::Ask;
@@ -782,7 +783,7 @@ impl BridgeState {
         if level == AccessLevel::Ask
             && !uses_sudo
             && self.policy.lock().await.auto_safe_exec
-            && exec_cmd.map(is_read_only_command).unwrap_or(false)
+            && matches!(exec, Some(ExecText::Command(c)) if is_read_only_command(c))
         {
             return AccessLevel::Auto;
         }
@@ -976,13 +977,23 @@ impl BridgeState {
     /// `created_by = "ai"` with a fresh id, so the agent can neither approve its
     /// own workflow nor overwrite an existing (approved) Skill. Returns the saved
     /// proposal.
-    pub async fn propose_skill(&self, mut skill: Skill) -> Skill {
+    /// Save an agent-written skill as a proposal. `None` once
+    /// `MAX_PENDING_PROPOSALS` are waiting, so a looping agent can't flood the
+    /// Skills panel (and `bridge.json`) faster than a human reviews it.
+    pub async fn propose_skill(&self, mut skill: Skill) -> Option<Skill> {
         skill.id = Uuid::new_v4().to_string();
         skill.status = SkillStatus::Proposed;
         skill.created_by = "ai".into();
-        self.skills.lock().await.push(skill.clone());
+        {
+            let mut skills = self.skills.lock().await;
+            let pending = skills.iter().filter(|s| s.status == SkillStatus::Proposed).count();
+            if pending >= MAX_PENDING_PROPOSALS {
+                return None;
+            }
+            skills.push(skill.clone());
+        }
         self.persist().await;
-        skill
+        Some(skill)
     }
 
     /// Find a Skill by id or name (case-insensitive name, first match).
@@ -1019,6 +1030,56 @@ fn migrate_command_to_skill(c: &SavedCommand) -> Skill {
     }
 }
 
+/// What an Exec op will run. Both kinds are checked for sudo; only a single
+/// `Command` may be lifted to Auto by the safe read-only heuristic — a script or
+/// background job is multi-statement and can't be classified safe.
+#[derive(Clone, Copy)]
+enum ExecText<'a> {
+    Command(&'a str),
+    Script(&'a str),
+}
+
+impl ExecText<'_> {
+    fn text(&self) -> &str {
+        match self {
+            ExecText::Command(t) | ExecText::Script(t) => t,
+        }
+    }
+}
+
+fn not_granted(session_name: &str) -> (u16, Value) {
+    (403, json!({
+        "error": format!(
+            "connection '{session_name}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it."
+        )
+    }))
+}
+
+/// A dry run's approval answer, from the same per-server decision the real call
+/// uses — so the agent is never told "no prompt" for a call that will 403.
+async fn exec_dry_run_verdict(
+    app: &AppHandle,
+    state: &Arc<BridgeState>,
+    session_id: &str,
+    exec: ExecText<'_>,
+) -> Value {
+    match state.decide(app, session_id, OpClass::Exec, Some(exec)).await {
+        AccessLevel::Off => json!({
+            "needsApproval": false,
+            "refused": true,
+            "reason": "the user has turned off running commands on this server",
+        }),
+        AccessLevel::Auto => json!({
+            "needsApproval": false,
+            "reason": "this server's access level runs it without a prompt",
+        }),
+        AccessLevel::Ask => json!({
+            "needsApproval": true,
+            "reason": "will prompt for approval in Faro",
+        }),
+    }
+}
+
 /// Opt-in check → policy/approval gate. On success the caller proceeds; on
 /// failure it returns the contained `(status, json)` response. Denials are
 /// logged here so callers only log their own success/error paths.
@@ -1030,15 +1091,10 @@ async fn gate(
     class: OpClass,
     kind: &str,
     summary: &str,
-    exec_cmd: Option<&str>,
+    exec: Option<ExecText<'_>>,
 ) -> Result<(), (u16, Value)> {
     if !state.is_enabled(session_id).await {
-        return Err((403, json!({
-            "error": format!(
-                "connection '{}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it.",
-                session_name
-            )
-        })));
+        return Err(not_granted(session_name));
     }
     // Proactively heal a transport that died while the session sat idle, so the
     // op below runs on a live connection instead of eating the first failure.
@@ -1046,7 +1102,7 @@ async fn gate(
     if let Some(ssh) = app.state::<AppState>().sessions.get_ssh(session_id).await {
         let _ = ssh.ensure_alive().await;
     }
-    match state.decide(app, session_id, class, exec_cmd).await {
+    match state.decide(app, session_id, class, exec).await {
         AccessLevel::Auto => return Ok(()),
         AccessLevel::Off => {
             state
@@ -1199,7 +1255,12 @@ async fn handle_conn(
     mut stream: TcpStream,
     token: String,
 ) -> Result<()> {
-    let req = match read_request(&mut stream).await {
+    // A client that connects and never finishes its request would otherwise
+    // hold a task and a socket forever.
+    let req = match tokio::time::timeout(Duration::from_secs(10), read_request(&mut stream))
+        .await
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("request timed out")))
+    {
         Ok(r) => r,
         Err(_) => {
             return write_response(&mut stream, 400, &json!({"error": "bad request"})).await;
@@ -1781,31 +1842,13 @@ pub(crate) async fn exec_on(
     };
 
     if !state.is_enabled(session_id).await {
-        return (403, json!({
-            "error": format!(
-                "connection '{}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it.",
-                session_name
-            )
-        }));
+        return not_granted(&session_name);
     }
 
-    let policy = *state.policy.lock().await;
-    let would_auto_approve = policy.allow_all || (policy.auto_safe_exec && is_read_only_command(command));
     if dry_run {
-        return (
-            200,
-            json!({
-                "wouldRun": command,
-                "needsApproval": !would_auto_approve,
-                "reason": if policy.allow_all {
-                    "auto-approve all requests is on"
-                } else if policy.auto_safe_exec && is_read_only_command(command) {
-                    "command matches the safe read-only heuristic"
-                } else {
-                    "command will prompt for approval in Faro"
-                },
-            }),
-        );
+        let mut v = exec_dry_run_verdict(app, state, session_id, ExecText::Command(command)).await;
+        v["wouldRun"] = json!(command);
+        return (200, v);
     }
 
     if let Err(resp) = gate(
@@ -1816,7 +1859,7 @@ pub(crate) async fn exec_on(
         OpClass::Exec,
         "exec",
         command,
-        Some(command),
+        Some(ExecText::Command(command)),
     )
     .await
     {
@@ -1870,34 +1913,19 @@ async fn exec_script_on(
     };
 
     if !state.is_enabled(session_id).await {
-        return (403, json!({
-            "error": format!(
-                "connection '{}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it.",
-                session_name
-            )
-        }));
+        return not_granted(&session_name);
     }
 
     if dry_run {
-        let policy = *state.policy.lock().await;
-        return (
-            200,
-            json!({
-                "wouldRun": label,
-                "bytes": script.len(),
-                "lines": script.lines().count(),
-                "needsApproval": !policy.allow_all,
-                "reason": if policy.allow_all {
-                    "auto-approve all requests is on"
-                } else {
-                    "a script always prompts for approval in Faro (never auto-approved by the safe-exec heuristic)"
-                },
-            }),
-        );
+        let mut v = exec_dry_run_verdict(app, state, session_id, ExecText::Script(script)).await;
+        v["wouldRun"] = json!(label);
+        v["bytes"] = json!(script.len());
+        v["lines"] = json!(script.lines().count());
+        return (200, v);
     }
 
-    // Gate as an Exec, but pass `None` for the command so the safe-read-only
-    // heuristic can't auto-approve a multi-statement script — only allow-all does.
+    // Gated as a Script: sudo inside it still honours "sudo: Ask", but the
+    // safe-read-only heuristic can't auto-approve a multi-statement script.
     // The approval summary shows a header plus the script body (capped) so the
     // user reviews exactly what will run.
     if let Err(resp) = gate(
@@ -1908,7 +1936,7 @@ async fn exec_script_on(
         OpClass::Exec,
         "script",
         &script_approval_summary(label, script),
-        None,
+        Some(ExecText::Script(script)),
     )
     .await
     {
@@ -1933,22 +1961,21 @@ async fn exec_script_on(
 /// its size, then the body (capped at ~4 KiB so a huge script doesn't overflow
 /// the prompt — the user still sees the head and the total size).
 fn script_approval_summary(label: &str, script: &str) -> String {
-    const CAP: usize = 4096;
     let header = format!("Run {label} ({} bytes, {} lines):", script.len(), script.lines().count());
-    if script.len() <= CAP {
-        format!("{header}\n{script}")
-    } else {
-        // Cut at the largest char boundary ≤ CAP so we never split a UTF-8 scalar.
-        let mut cut = CAP;
-        while cut > 0 && !script.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        format!(
-            "{header}\n{}\n… [preview truncated; {} bytes total]",
-            &script[..cut],
-            script.len()
-        )
+    format!("{header}\n{}", capped_preview(script))
+}
+
+/// `text` capped at ~4 KiB for an approval prompt, cut on a UTF-8 boundary.
+fn capped_preview(text: &str) -> String {
+    const CAP: usize = 4096;
+    if text.len() <= CAP {
+        return text.to_string();
     }
+    let mut cut = CAP;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}\n… [preview truncated; {} bytes total]", &text[..cut], text.len())
 }
 
 /// Exec on a Faro Agent machine. The daemon runs the command natively (and
@@ -2157,17 +2184,13 @@ async fn op_exec_detached(
     };
     let session_name = ssh.profile.name.clone();
     if !state.is_enabled(session_id).await {
-        return (403, json!({
-            "error": format!("connection '{session_name}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it.")
-        }));
+        return not_granted(&session_name);
     }
     if dry_run {
-        let policy = *state.policy.lock().await;
-        return (200, json!({
-            "wouldRun": command,
-            "detach": true,
-            "needsApproval": !policy.allow_all,
-        }));
+        let mut v = exec_dry_run_verdict(app, state, session_id, ExecText::Script(command)).await;
+        v["wouldRun"] = json!(command);
+        v["detach"] = json!(true);
+        return (200, v);
     }
     if let Err(resp) = gate(
         app,
@@ -2177,7 +2200,7 @@ async fn op_exec_detached(
         OpClass::Exec,
         "exec",
         &format!("run detached (background job): {command}"),
-        None,
+        Some(ExecText::Script(command)),
     )
     .await
     {
@@ -2213,17 +2236,13 @@ async fn op_exec_detached_agent(
 ) -> (u16, Value) {
     let session_name = agent.profile.name.clone();
     if !state.is_enabled(session_id).await {
-        return (403, json!({
-            "error": format!("connection '{session_name}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it.")
-        }));
+        return not_granted(&session_name);
     }
     if dry_run {
-        let policy = *state.policy.lock().await;
-        return (200, json!({
-            "wouldRun": command,
-            "detach": true,
-            "needsApproval": !policy.allow_all,
-        }));
+        let mut v = exec_dry_run_verdict(app, state, session_id, ExecText::Script(command)).await;
+        v["wouldRun"] = json!(command);
+        v["detach"] = json!(true);
+        return (200, v);
     }
     if let Err(resp) = gate(
         app,
@@ -2233,7 +2252,7 @@ async fn op_exec_detached_agent(
         OpClass::Exec,
         "exec",
         &format!("run detached (background job): {command}"),
-        None,
+        Some(ExecText::Script(command)),
     )
     .await
     {
@@ -2398,16 +2417,23 @@ pub(crate) async fn op_run_command(
     let Some(cmd) = state.find_command(name).await else {
         return (404, json!({"error": format!("no saved command named '{name}'")}));
     };
-    // Opt-in is still required (a saved command is pre-approved, not un-gated):
+    // Opt-in is still required (a saved command is pre-approved, not un-gated),
+    // and "Run commands: Off" on this server refuses it like any other exec.
     if !state.is_enabled(session_id).await {
-        return (403, json!({
-            "error": format!(
-                "connection '{}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it.",
-                ssh.profile.name
-            )
-        }));
+        return not_granted(&ssh.profile.name);
     }
     let session_name = ssh.profile.name.clone();
+    let level = state
+        .decide(app, session_id, OpClass::Exec, Some(ExecText::Script(&cmd.command)))
+        .await;
+    if level == AccessLevel::Off {
+        state
+            .log(app, activity("denied", session_id, format!("[{}] {}", cmd.name, cmd.command), false))
+            .await;
+        return (403, json!({
+            "error": format!("the user has turned off running commands for '{session_name}' in Faro's Agent Bridge access settings. Don't retry; ask the user if you need it.")
+        }));
+    }
     let label = format!("[{}] {}", cmd.name, cmd.command);
     if dry_run {
         return (
@@ -4000,12 +4026,7 @@ async fn op_sync(
     // Opt-in check before ANY I/O: even planning walks the remote tree.
     // (The gate below re-checks; this just refuses earlier.)
     if !state.is_enabled(session_id).await {
-        return (403, json!({
-            "error": format!(
-                "connection '{}' has not granted agent access. Ask the user to open Faro → Agent Bridge and toggle 'Allow agent access' for it.",
-                name
-            )
-        }));
+        return not_granted(&name);
     }
 
     // For a push the local side is the source and must exist; for a pull it's
@@ -4815,6 +4836,8 @@ pub(crate) async fn op_context(app: &AppHandle, state: &Arc<BridgeState>) -> (u1
 /// How many targets a fleet run touches at once. Steps run in order *within* a
 /// target; this bounds the fan-out *across* targets.
 const SKILL_MAX_CONCURRENCY: usize = 4;
+/// Agent skill proposals allowed to wait for review at once.
+const MAX_PENDING_PROPOSALS: usize = 50;
 /// Per-stream cap on a step's stdout/stderr in the aggregated run result, so a
 /// noisy fleet run doesn't balloon an MCP/CLI response (the live console still
 /// shows the full, un-clipped output — this only trims the summary).
@@ -4848,12 +4871,27 @@ fn build_param_map(
 /// inserted verbatim (not shell-escaped) — matching the raw-shell model of
 /// `faro_exec` and saved commands, where the author writes the shell. The dry-run
 /// preview and the one confirm gate both show the fully resolved command, so any
-/// interpolation is visible before it runs.
+/// interpolation is visible before it runs. One left-to-right pass: a value is
+/// never re-scanned, so a value containing `${other}` stays literal and the
+/// result doesn't depend on map order.
 fn substitute(template: &str, params: &HashMap<String, String>) -> String {
-    let mut out = template.to_string();
-    for (k, v) in params {
-        out = out.replace(&format!("${{{k}}}"), v);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}').and_then(|end| params.get(&after[..end]).map(|v| (end, v))) {
+            Some((end, v)) => {
+                out.push_str(v);
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str("${");
+                rest = after;
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
@@ -5060,12 +5098,8 @@ pub(crate) async fn op_run_skill(
         return (400, json!({"error": "this skill has no steps"}));
     }
 
-    let (runnable, skipped) =
+    let (resolved, mut skipped) =
         resolve_skill_targets(app, state, &skill, target_override.as_deref()).await;
-    let skipped_json: Vec<Value> = skipped
-        .iter()
-        .map(|(t, r)| json!({"target": t, "reason": r}))
-        .collect();
 
     // Resolve every step's command once (reused across targets).
     let steps: Vec<(String, String)> = skill
@@ -5077,11 +5111,40 @@ pub(crate) async fn op_run_skill(
             (label, cmd)
         })
         .collect();
+    let all_commands = steps
+        .iter()
+        .enumerate()
+        .map(|(i, (_, c))| format!("{}. {c}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Each target's own access level applies: "Run commands: Off" drops it, and
+    // the run skips the prompt only when every target is on Auto. The steps
+    // count as a script, so the safe read-only heuristic never lifts them.
+    let mut runnable: Vec<(String, String, bool)> = Vec::new();
+    let mut auto = true;
+    for t in resolved {
+        match state
+            .decide(app, &t.0, OpClass::Exec, Some(ExecText::Script(&all_commands)))
+            .await
+        {
+            AccessLevel::Off => {
+                skipped.push((t.1.clone(), "running commands is turned off on this server".into()))
+            }
+            level => {
+                auto &= level == AccessLevel::Auto;
+                runnable.push(t);
+            }
+        }
+    }
+    let skipped_json: Vec<Value> = skipped
+        .iter()
+        .map(|(t, r)| json!({"target": t, "reason": r}))
+        .collect();
 
     // Dry run: pure string substitution — no server is contacted, so no gate and
     // no proposal block. Returns the resolved commands per target for preview.
     if dry_run {
-        let auto = state.policy.lock().await.allow_all;
         let targets_json: Vec<Value> = runnable
             .iter()
             .map(|(id, name, _)| {
@@ -5127,20 +5190,20 @@ pub(crate) async fn op_run_skill(
         );
     }
 
-    // One confirm gate covers the whole fleet run. A skill fans arbitrary
-    // multi-step commands across many servers, so ONLY allow-all auto-approves —
-    // the read-only safe-exec heuristic never applies to a whole skill.
+    // One confirm gate covers the whole fleet run, and it shows every resolved
+    // command: parameter values are spliced in verbatim, so the user must see
+    // what they actually approve.
     let target_names: Vec<&str> = runnable.iter().map(|(_, n, _)| n.as_str()).collect();
     let summary = format!(
-        "Run skill \"{}\" on {} server{} ({}) — {} step{} each",
+        "Run skill \"{}\" on {} server{} ({}) — {} step{} each:\n{}",
         skill.name,
         runnable.len(),
         if runnable.len() == 1 { "" } else { "s" },
         target_names.join(", "),
         steps.len(),
         if steps.len() == 1 { "" } else { "s" },
+        capped_preview(&all_commands),
     );
-    let auto = state.policy.lock().await.allow_all;
     if !auto {
         let (gate_id, gate_name, _) = &runnable[0];
         let approved = state
@@ -6205,7 +6268,9 @@ async fn mcp_tools_call(app: &AppHandle, state: &Arc<BridgeState>, params: &Valu
                 if def.steps.is_empty() || def.steps.iter().any(|s| s.command.trim().is_empty()) {
                     return tool_error("a skill needs at least one step with a non-empty command");
                 }
-                let saved = state.propose_skill(def).await;
+                let Some(saved) = state.propose_skill(def).await else {
+                    return tool_error("too many skill proposals are waiting for review. Ask the user to approve or reject some in Faro's Skills panel first.");
+                };
                 // Nudge the GUI to surface the new proposal.
                 let _ = app.emit("bridge://skill-proposed", &saved);
                 tool_text(format!(
@@ -6700,6 +6765,37 @@ mod tests {
     }
 
     #[test]
+    fn read_only_heuristic_cases() {
+        for safe in ["ls -la /srv", "/usr/bin/ls", "grep -n foo app.log", "df -h", "cat /etc/os-release"] {
+            assert!(is_read_only_command(safe), "{safe}");
+        }
+        for unsafe_ in [
+            "tree -o /home/deploy/.bashrc /", "file -C", "ls; rm -rf /", "cat $(x)",
+            "env rm x", "sudo ls", "ls | sudo tee x", "echo hi > f", "", "rm -rf /",
+        ] {
+            assert!(!is_read_only_command(unsafe_), "{unsafe_}");
+        }
+    }
+
+    #[test]
+    fn sudo_detection_cases() {
+        for yes in ["sudo ls", "cmd|sudo x", "a;sudo b", "$(sudo id)", "/usr/bin/sudo -v"] {
+            assert!(command_uses_sudo(yes), "{yes}");
+        }
+        for no in ["grep -n sudoers /etc", "pseudo x", "ls"] {
+            assert!(!command_uses_sudo(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn substitute_is_one_pass() {
+        let mut params = HashMap::new();
+        params.insert("a".to_string(), "${b}".to_string());
+        params.insert("b".to_string(), "rm -rf /".to_string());
+        assert_eq!(substitute("echo ${a} ${b", &params), "echo ${b} ${b");
+    }
+
+    #[test]
     fn substitute_replaces_placeholders() {
         let mut params = HashMap::new();
         params.insert("service".to_string(), "nginx".to_string());
@@ -6782,7 +6878,7 @@ mod tests {
             id: "attacker-chosen".into(),
             ..one_step_skill("ai-skill")
         };
-        let proposed = state.propose_skill(sneaky).await;
+        let proposed = state.propose_skill(sneaky).await.unwrap();
         assert_eq!(proposed.status, SkillStatus::Proposed);
         assert_eq!(proposed.created_by, "ai");
         assert_ne!(proposed.id, "attacker-chosen");
