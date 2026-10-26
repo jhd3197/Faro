@@ -111,7 +111,7 @@ export function ActivityLine({
   const bad = a.kind === "denied" || a.kind === "error" || !a.ok;
   return (
     <div className="flex items-baseline gap-2 py-1 text-[11.5px] leading-snug">
-      <span className="w-14 shrink-0 font-mono text-text-dim">{clockTime(a.at)}</span>
+      <span className="w-[4.25rem] shrink-0 font-mono text-text-dim">{clockTime(a.at)}</span>
       <span className="w-20 shrink-0 truncate text-text-muted" title={serverName}>
         {serverName || "—"}
       </span>

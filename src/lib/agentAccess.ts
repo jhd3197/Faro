@@ -58,14 +58,16 @@ export type AccessColumn = keyof ProfileAccess;
 export const ACCESS_COLUMNS: {
   key: AccessColumn;
   label: string;
+  /** Column-header form for the matrix. */
+  short: string;
   help: string;
   /** Auto on this column is shown in the danger tone. */
   risky: boolean;
 }[] = [
-  { key: "read", label: "Browse & read", help: "List directories, read files, search", risky: false },
-  { key: "write", label: "Transfer & write", help: "Uploads, downloads, deletes, renames, syncs", risky: false },
-  { key: "exec", label: "Run commands", help: "Shell commands over SSH or a Faro Agent", risky: true },
-  { key: "sudo", label: "Sudo", help: "Off: never answer sudo · Ask: sudo always prompts · Auto: follows Run commands", risky: true },
+  { key: "read", label: "Browse & read", short: "Read", help: "List directories, read files, search", risky: false },
+  { key: "write", label: "Transfer & write", short: "Write", help: "Uploads, downloads, deletes, renames, syncs", risky: false },
+  { key: "exec", label: "Run commands", short: "Commands", help: "Shell commands over SSH or a Faro Agent", risky: true },
+  { key: "sudo", label: "Sudo", short: "Sudo", help: "Off: never answer sudo · Ask: sudo always prompts · Auto: follows Run commands", risky: true },
 ];
 
 /** Short summary for tooltips: "read Auto · write Ask · run Ask · sudo Off". */

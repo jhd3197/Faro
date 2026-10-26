@@ -331,11 +331,11 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
                 <span className="min-w-0 flex-1">Server</span>
                 <span className="w-16">Type</span>
                 {ACCESS_COLUMNS.map((c) => (
-                  <span key={c.key} className="w-[7.5rem]" title={c.help}>
-                    {c.label}
+                  <span key={c.key} className="w-[7.5rem] truncate whitespace-nowrap" title={`${c.label} — ${c.help}`}>
+                    {c.short}
                   </span>
                 ))}
-                <span className="w-16 text-right">Last call</span>
+                <span className="w-[4.5rem] whitespace-nowrap text-right">Last call</span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 {byGroup.length === 0 && (
@@ -559,7 +559,7 @@ function MatrixRow({
           </span>
         );
       })}
-      <span className="w-16 text-right font-mono text-[11px] text-text-dim">
+      <span className="w-[4.5rem] text-right font-mono text-[11px] text-text-dim">
         {lastCall ? clockTime(lastCall).slice(0, 5) : "—"}
       </span>
     </div>
