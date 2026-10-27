@@ -9,6 +9,7 @@ use tauri::Manager;
 // secrets directly — credentials live in profiles::ConnectionProfile, which
 // the CLI deliberately redacts in `profiles show`.
 pub mod backup;
+pub mod faro_file;
 pub mod bridge;
 pub mod commands;
 mod agent_host;
@@ -525,6 +526,8 @@ pub fn run() {
             commands::respond_to_auth_prompt,
             commands::importer_default_paths,
             commands::import_openssh,
+            commands::import_faro_file,
+            commands::export_connections,
             commands::import_filezilla,
             commands::import_putty,
             commands::save_imported_profiles,

@@ -48,6 +48,10 @@ pub fn parse(text: &str, source_label: String) -> Vec<ProfilePreview> {
             blocks.extend(current.take());
             let alias = value.split_whitespace().find(|a| !is_pattern(a));
             current = alias.map(|a| HostBlock::new(a.to_string()));
+        } else if key_lc == "match" {
+            // Match blocks aren't imported, but their directives mustn't
+            // land on the Host block before them.
+            blocks.extend(current.take());
         } else if let Some(block) = current.as_mut() {
             // OpenSSH keeps the first value it sees for each directive.
             match key_lc.as_str() {
@@ -67,6 +71,9 @@ pub fn parse(text: &str, source_label: String) -> Vec<ProfilePreview> {
                 }
                 "certificatefile" => {
                     block.certificate.get_or_insert_with(|| expand_tilde(value));
+                }
+                "identityagent" => {
+                    block.agent.get_or_insert_with(|| !value.eq_ignore_ascii_case("none"));
                 }
                 "proxyjump" if block.via.is_none() => {
                     block.via = parse_proxy_jump(value);
@@ -350,6 +357,8 @@ struct HostBlock {
     port: Option<u16>,
     identity: Option<String>,
     certificate: Option<String>,
+    /// `IdentityAgent`, other than `none`.
+    agent: Option<bool>,
     via: Option<Via>,
 }
 
@@ -362,6 +371,7 @@ impl HostBlock {
             port: None,
             identity: None,
             certificate: None,
+            agent: None,
             via: None,
         }
     }
@@ -379,9 +389,21 @@ impl HostBlock {
         p.host = host;
         p.port = self.port.unwrap_or(22);
         p.username = self.user.unwrap_or_default();
-        p.identity_file = self.identity;
-        // A certificate is only used with a key.
-        p.certificate_file = self.certificate.filter(|_| p.identity_file.is_some());
+        // cloudflared's short-lived pair (`~/.cloudflared/%h-cf_key`) behind
+        // `cloudflared access ssh` is Faro's Cloudflare certificate login.
+        let cloudflare = matches!(&self.via, Some(Via::Command(c)) if c.kind == ProxyCommandKind::Cloudflare);
+        let cf_key = self.identity.as_deref().is_some_and(|i| {
+            let i = i.replace('\\', "/");
+            i.contains("/.cloudflared/") && i.ends_with("-cf_key")
+        });
+        if cloudflare && cf_key {
+            p.cloudflare_cert = true;
+        } else {
+            p.identity_file = self.identity;
+            // A certificate is only used with a key.
+            p.certificate_file = self.certificate.filter(|_| p.identity_file.is_some());
+            p.agent = p.identity_file.is_none() && self.agent == Some(true);
+        }
         p.note = Some(format!("from {source_label}"));
         Some(p)
     }

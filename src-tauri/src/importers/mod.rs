@@ -55,6 +55,71 @@ pub struct ProfilePreview {
     pub jump_preview_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_name: Option<String>,
+    /// Log in with the SSH agent (OpenSSH `IdentityAgent`, no `IdentityFile`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent: bool,
+    /// Log in with a Cloudflare short-lived certificate (cloudflared's
+    /// `%h-cf_key` behind `cloudflared access ssh`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloudflare_cert: bool,
+    /// The whole connection, from a `.faro` file: imported as is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ConnectionProfile>,
+    /// A `KeyRef` login's private key, from an encrypted `.faro` file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_material: Option<String>,
+    /// What the connection still needs here (`key`, `password`, `sign-in`,
+    /// `token secret`), shown as badges. See `faro_file::needs`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
+    /// An existing connection with the same name or host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<Conflict>,
+    /// What to do about `conflict`, chosen in the dialog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<Resolution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Conflict {
+    pub id: String,
+    pub name: String,
+    /// Matched by name (else by host, port and user).
+    pub by_name: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Resolution {
+    Skip,
+    /// A new connection, renamed "<name> (copy)" when the names clash.
+    Copy,
+    /// Overwrite the existing connection, keeping its saved secrets when the
+    /// import has none.
+    Replace,
+}
+
+/// Point each preview at an existing connection it would duplicate: same
+/// name (ignoring case), else same protocol, host, port and user.
+pub fn mark_conflicts(previews: &mut [ProfilePreview], existing: &[ConnectionProfile]) {
+    let norm = |s: &str| s.trim().to_lowercase();
+    for p in previews {
+        let by_name = existing.iter().find(|e| norm(&e.name) == norm(&p.name));
+        let by_host = || {
+            existing.iter().find(|e| {
+                !p.host.is_empty()
+                    && norm(&e.host) == norm(&p.host)
+                    && e.port == p.port
+                    && e.username == p.username
+                    && e.protocol == p.protocol
+            })
+        };
+        p.conflict = by_name
+            .map(|e| (e, true))
+            .or_else(|| by_host().map(|e| (e, false)))
+            .map(|(e, by_name)| Conflict { id: e.id.clone(), name: e.name.clone(), by_name });
+    }
 }
 
 impl ProfilePreview {
@@ -75,6 +140,13 @@ impl ProfilePreview {
             proxy_command: None,
             jump_preview_id: None,
             jump_name: None,
+            agent: false,
+            cloudflare_cert: false,
+            profile: None,
+            key_material: None,
+            needs: Vec::new(),
+            conflict: None,
+            resolution: None,
         }
     }
 
@@ -82,7 +154,20 @@ impl ProfilePreview {
     /// further from the connection sidebar; here we just produce a sensible
     /// default with an empty password / passphrase.
     pub fn into_profile(self) -> ConnectionProfile {
-        let auth = if let Some(path) = self.identity_file.clone() {
+        if let Some(mut profile) = self.profile {
+            profile.id = Uuid::new_v4().to_string();
+            profile.name = self.name;
+            // Re-linked by `into_profiles`.
+            profile.jump_profile = None;
+            profile.jump_via = None;
+            profile.sort_order = None;
+            return profile;
+        }
+        let auth = if self.cloudflare_cert {
+            AuthMethod::CloudflareCert
+        } else if self.agent {
+            AuthMethod::Agent
+        } else if let Some(path) = self.identity_file.clone() {
             AuthMethod::Key {
                 path,
                 passphrase: None,
@@ -132,12 +217,48 @@ impl ProfilePreview {
 /// bastion's profile from the same batch, else to an existing SSH profile of
 /// the same name. A bastion found in neither leaves the profile direct.
 pub fn into_profiles(previews: Vec<ProfilePreview>, existing: &[ConnectionProfile]) -> Vec<ConnectionProfile> {
+    into_profiles_with_keys(previews, existing).into_iter().map(|(p, _)| p).collect()
+}
+
+/// [`into_profiles`], applying each preview's conflict resolution (skipped
+/// ones are left out), and returning the private key a `KeyRef` login brought.
+pub fn into_profiles_with_keys(
+    previews: Vec<ProfilePreview>,
+    existing: &[ConnectionProfile],
+) -> Vec<(ConnectionProfile, Option<String>)> {
+    let previews: Vec<ProfilePreview> = previews
+        .into_iter()
+        .filter(|p| !(p.conflict.is_some() && p.resolution == Some(Resolution::Skip)))
+        .collect();
     let links: Vec<(Option<String>, Option<String>)> = previews
         .iter()
         .map(|p| (p.jump_preview_id.clone(), p.jump_name.clone()))
         .collect();
     let ids: Vec<String> = previews.iter().map(|p| p.preview_id.clone()).collect();
-    let mut profiles: Vec<ConnectionProfile> = previews.into_iter().map(ProfilePreview::into_profile).collect();
+    let mut keys: Vec<Option<String>> = Vec::with_capacity(previews.len());
+    let mut profiles: Vec<ConnectionProfile> = previews
+        .into_iter()
+        .map(|mut p| {
+            keys.push(p.key_material.take());
+            let conflict = p.conflict.take();
+            let resolution = p.resolution;
+            let mut profile = p.into_profile();
+            match (conflict, resolution) {
+                (Some(c), Some(Resolution::Replace)) => {
+                    if let Some(old) = existing.iter().find(|e| e.id == c.id) {
+                        keep_secrets(&mut profile, old);
+                        profile.sort_order = old.sort_order;
+                    }
+                    profile.id = c.id;
+                }
+                (Some(c), Some(Resolution::Copy)) if c.by_name => {
+                    profile.name = format!("{} (copy)", profile.name);
+                }
+                _ => {}
+            }
+            profile
+        })
+        .collect();
     let by_preview: HashMap<String, String> = ids
         .into_iter()
         .zip(profiles.iter().map(|p| p.id.clone()))
@@ -153,7 +274,30 @@ pub fn into_profiles(previews: Vec<ProfilePreview>, existing: &[ConnectionProfil
                     .map(|e| e.id.clone())
             });
     }
-    profiles
+    profiles.into_iter().zip(keys).collect()
+}
+
+/// Carry `old`'s saved secrets into a replacement that came without them.
+fn keep_secrets(new: &mut ConnectionProfile, old: &ConnectionProfile) {
+    match (&mut new.auth, &old.auth) {
+        (AuthMethod::Password { password }, AuthMethod::Password { password: kept }) if password.is_empty() => {
+            *password = kept.clone()
+        }
+        (AuthMethod::Key { passphrase, .. }, AuthMethod::Key { passphrase: kept, .. }) if passphrase.is_none() => {
+            *passphrase = kept.clone()
+        }
+        _ => {}
+    }
+    if let (Some(proxy), Some(kept)) = (new.proxy.as_mut(), old.proxy.as_ref()) {
+        if proxy.password.is_none() && proxy.host == kept.host {
+            proxy.password = kept.password.clone();
+        }
+    }
+    if let (Some(cmd), Some(kept)) = (new.proxy_command.as_mut(), old.proxy_command.as_ref()) {
+        if cmd.service_token_secret.is_none() && cmd.service_token_id == kept.service_token_id {
+            cmd.service_token_secret = kept.service_token_secret.clone();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -182,5 +326,62 @@ mod tests {
         let profiles = into_profiles(app.clone(), std::slice::from_ref(&existing));
         assert_eq!(profiles[0].jump_profile.as_deref(), Some("existing-id"));
         assert!(into_profiles(app, &[])[0].jump_profile.is_none());
+    }
+
+    #[test]
+    fn conflicts_skip_copy_or_replace() {
+        let mut existing = ProfilePreview::new("Web").into_profile();
+        existing.host = "web.example".into();
+        existing.auth = AuthMethod::Password { password: "saved".into() };
+        existing.sort_order = Some(4);
+        let mut other = ProfilePreview::new("Other name").into_profile();
+        other.host = "db.example".into();
+        let existing = vec![existing, other];
+
+        let cfg = "Host web\n HostName web.example\nHost db2\n HostName db.example\nHost new\n HostName n\n";
+        let mut previews = openssh::parse(cfg, "t".into());
+        mark_conflicts(&mut previews, &existing);
+        let find = |n: &str| previews.iter().find(|p| p.name == n).unwrap();
+        assert!(find("web").conflict.as_ref().is_some_and(|c| c.by_name && c.id == existing[0].id));
+        assert!(find("db2").conflict.as_ref().is_some_and(|c| !c.by_name && c.id == existing[1].id));
+        assert!(find("new").conflict.is_none());
+
+        let with = |r: Resolution| {
+            let ps: Vec<_> = previews
+                .iter()
+                .cloned()
+                .map(|mut p| {
+                    p.resolution = Some(r);
+                    p
+                })
+                .collect();
+            into_profiles(ps, &existing)
+        };
+        assert_eq!(with(Resolution::Skip).len(), 1, "only the new one");
+        let copies = with(Resolution::Copy);
+        assert!(copies.iter().any(|p| p.name == "web (copy)"));
+        assert!(copies.iter().any(|p| p.name == "db2"), "a host match keeps its name");
+        assert!(copies.iter().all(|p| p.id != existing[0].id));
+        let replaced = with(Resolution::Replace);
+        let web = replaced.iter().find(|p| p.id == existing[0].id).unwrap();
+        assert_eq!(web.name, "web");
+        assert_eq!(web.sort_order, Some(4));
+        assert!(matches!(&web.auth, AuthMethod::Password { password } if password == "saved"));
+    }
+
+    #[test]
+    fn openssh_agent_and_cloudflare_cert_logins() {
+        let cfg = concat!(
+            "Host agent\n HostName a\n IdentityAgent SSH_AUTH_SOCK\n",
+            "Host cf\n HostName c\n ProxyCommand cloudflared access ssh --hostname %h\n",
+            " IdentityFile ~/.cloudflared/%h-cf_key\n CertificateFile ~/.cloudflared/%h-cf_key-cert.pub\n",
+            "Match host c exec \"cloudflared access ssh-gen --hostname %h\"\n",
+            " User not-for-cf\n",
+        );
+        let profiles = into_profiles(openssh::parse(cfg, "t".into()), &[]);
+        let find = |n: &str| profiles.iter().find(|p| p.name == n).unwrap();
+        assert!(matches!(find("agent").auth, AuthMethod::Agent));
+        assert!(matches!(find("cf").auth, AuthMethod::CloudflareCert));
+        assert_eq!(find("cf").username, "", "the Match block's User isn't the Host block's");
     }
 }
