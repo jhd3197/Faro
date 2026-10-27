@@ -11,6 +11,7 @@ import {
   FileTerminal,
   FileType,
   Folder,
+  FolderSymlink,
   Link2,
   PenTool,
   Layers,
@@ -28,6 +29,7 @@ export interface FileIconSpec {
 
 const FOLDER: FileIconSpec = { Icon: Folder, className: "text-accent" };
 const SYMLINK: FileIconSpec = { Icon: Link2, className: "text-info" };
+const FOLDER_LINK: FileIconSpec = { Icon: FolderSymlink, className: "text-accent" };
 const DEFAULT_FILE: FileIconSpec = { Icon: FileText, className: "text-text-muted" };
 
 // Extension (lowercase, no dot) → icon + colour. Colours use Tailwind's default
@@ -185,6 +187,6 @@ export function imageMime(name: string): string | null {
 /** Pick an icon + colour for a directory entry, by kind then file extension. */
 export function fileIcon(entry: DirEntry): FileIconSpec {
   if (entry.kind === "directory") return FOLDER;
-  if (entry.kind === "symlink") return SYMLINK;
+  if (entry.kind === "symlink") return entry.linkDir ? FOLDER_LINK : SYMLINK;
   return BY_EXT[extOf(entry.name)] ?? DEFAULT_FILE;
 }

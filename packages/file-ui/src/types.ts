@@ -14,6 +14,16 @@ export interface DirEntry {
   /** Backend's opaque change token (object stores expose an ETag). Absent for
    *  backends that rely on mtime+size. A change *token*, not a content hash. */
   etag?: string;
+  /** A symlink whose target is a directory (a Windows directory link or
+   *  junction, a link to a folder over SFTP). It opens like a folder; deleting
+   *  it removes only the link. */
+  linkDir?: boolean;
+}
+
+/** Whether double-click opens the entry as a folder: a directory, or a link
+ *  to one. */
+export function opensAsFolder(e: DirEntry): boolean {
+  return e.kind === "directory" || (e.kind === "symlink" && !!e.linkDir);
 }
 
 /** Display-only result: hidden entries do not mean those files are absent. */

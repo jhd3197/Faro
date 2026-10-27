@@ -33,10 +33,12 @@ export function toTransferItem(e: {
   kind: string;
   size?: number;
   modified?: number | null;
+  linkDir?: boolean;
 }): TransferItem {
   return {
     path: e.path,
-    kind: e.kind === "directory" ? "directory" : "file",
+    // A link to a folder copies the folder's contents.
+    kind: e.kind === "directory" || (e.kind === "symlink" && e.linkDir) ? "directory" : "file",
     size: e.size,
     modified: e.modified ?? undefined,
   };
