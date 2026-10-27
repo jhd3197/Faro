@@ -235,7 +235,7 @@ export function InviteDialog({ ids, onClose }: Props) {
                     {result.add ? "Let their certificate log in" : "Stop their certificate logging in"} (root, once per server):
                   </div>
                   {result.plans.map(([p, plan]) => (
-                    <RootStep key={p.id} profile={p} plan={plan} />
+                    <RootStep key={`${p.id}:${plan.rootCommand}`} profile={p} plan={plan} />
                   ))}
                   {result.add && (
                     <>
