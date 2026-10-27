@@ -5,6 +5,7 @@ import {
   Download,
   Upload,
   FileCode,
+  Link2,
   Search,
   Radio,
   Plug,
@@ -52,6 +53,8 @@ import { BRAND_ICONS } from "@/lib/brandIconData";
 import { ServerSites, leaveSiteNavigation } from "./ServerSites";
 import { useSites } from "@/stores/sitesStore";
 import { toastError } from "@/lib/errors";
+import { canLink, connectLink } from "@/lib/connectLink";
+import { toast } from "@/stores/toastStore";
 import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
 import { effectiveAccess, accessSummary } from "@/lib/agentAccess";
 import type { ProfileAccess } from "@/lib/types";
@@ -452,6 +455,23 @@ export function ServerRail() {
         });
       },
     });
+    if (canLink(p)) {
+      items.push({
+        label: "Copy link",
+        icon: <Link2 size={14} />,
+        onClick: () => {
+          navigator.clipboard
+            .writeText(connectLink(p))
+            .then(() =>
+              toast.success(
+                "Link copied",
+                "Opening it in Faro prefills a new connection to this server. No password or key is in the link."
+              )
+            )
+            .catch((e) => toastError(e, "Couldn't copy the link"));
+        },
+      });
+    }
     items.push({
       label: "Export…",
       icon: <Upload size={14} />,

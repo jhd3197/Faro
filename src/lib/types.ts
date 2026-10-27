@@ -331,6 +331,11 @@ export interface DeepLink {
   // faro://grant: issuer base URL + redemption token (docs/grant-links.md).
   issuer?: string;
   token?: string;
+  /** "cloudflare": through Cloudflare Access, `access` = its hostname. */
+  via?: string;
+  access?: string;
+  /** "agent" | "cloudflarecert": a login that needs no secret. */
+  auth?: string;
 }
 
 // ---- Access grants (faro://grant; docs/grant-links.md) ----

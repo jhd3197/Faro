@@ -741,7 +741,21 @@ function deepLinkToPrefill(dl: DeepLink): Partial<ConnectionProfile> {
     endpoint:
       dl.endpoint ?? (protocol === "wordpress" ? (dl.host ?? undefined) : undefined),
     account: dl.account ?? undefined,
+    ...(protocol === "sftp" ? sshRouteFromLink(dl) : {}),
   };
+}
+
+/// A link's Cloudflare Access route and secret-free login (`via`, `access`,
+/// `auth`), as editor seed values. A certificate login needs the route.
+function sshRouteFromLink(dl: DeepLink): Partial<ConnectionProfile> {
+  const cloudflare = dl.via === "cloudflare";
+  const seed: Partial<ConnectionProfile> = {};
+  if (cloudflare) {
+    seed.proxyCommand = { kind: "cloudflare", hostname: dl.access || undefined };
+  }
+  if (dl.auth === "agent") seed.auth = { kind: "agent" };
+  else if (dl.auth === "cloudflarecert" && cloudflare) seed.auth = { kind: "cloudflarecert" };
+  return seed;
 }
 
 /// One notification-center row. Click to expand the full text (selectable)
