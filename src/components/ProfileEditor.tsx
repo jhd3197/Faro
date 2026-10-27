@@ -740,6 +740,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       if (authKind === "password" && !password) setAuthKind("cloudflarecert");
     } else {
       if (r === "direct") setJumpProfile("");
+      // The Cloudflare login only exists through Cloudflare.
+      if (authKind === "cloudflarecert") setAuthKind("password");
       if (proxyCmd.kind === "cloudflare") setProxyCmd({ ...proxyCmd, kind: "" });
     }
   };
@@ -1173,17 +1175,15 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 <option value="agent" disabled={isFtp}>
                   SSH agent{isFtp ? " — SFTP only" : ""}
                 </option>
-                {!isFtp && (
+                {/* Only through Cloudflare (or a saved one that lost its route,
+                    so the select still shows what it has). */}
+                {!isFtp && (cfRoute || authKind === "cloudflarecert") && (
                   <option
                     value="cloudflarecert"
-                    disabled={(!cfRoute || cfServiceToken) && authKind !== "cloudflarecert"}
+                    disabled={cfServiceToken && authKind !== "cloudflarecert"}
                   >
                     Cloudflare identity (short-lived certificate)
-                    {!cfRoute
-                      ? " — choose Through Cloudflare"
-                      : cfServiceToken
-                        ? " — not with a service token"
-                        : ""}
+                    {cfServiceToken ? " — not with a service token" : ""}
                   </option>
                 )}
               </select>
