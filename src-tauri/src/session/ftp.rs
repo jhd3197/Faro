@@ -730,6 +730,11 @@ fn connect_blocking(
                 "FTP does not support ssh-agent auth; switch to password"
             ))
         }
+        AuthMethod::CloudflareCert => {
+            return Err(anyhow!(
+                "FTP does not support Cloudflare certificate auth; switch to password"
+            ))
+        }
         AuthMethod::KeyRef { .. } => {
             return Err(anyhow!(
                 "FTP does not support keychain key auth; switch to password"

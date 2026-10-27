@@ -133,6 +133,10 @@ pub fn refusal(cert: &Certificate, username: &str, issuer: Issuer) -> String {
 /// cloudflared's config folder, with home found the way cloudflared finds it:
 /// `HOME` first, then (on Windows) `USERPROFILE`. `ssh-gen` writes there.
 pub fn cloudflared_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = tests::CLOUDFLARED_DIR.lock().unwrap().clone() {
+        return Some(dir);
+    }
     let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     let home = env("HOME").or_else(|| if cfg!(windows) { env("USERPROFILE") } else { None }).or_else(dirs::home_dir)?;
     Some(home.join(".cloudflared"))
@@ -169,13 +173,16 @@ pub fn take_ssh_gen_output(dir: &Path, hostname: &str) -> Result<(KeyPair, Certi
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    const CA: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
+    const OPENSSH_PEM: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
+
+    /// Stands in for `~/.cloudflared`, so tests never touch the real one.
+    pub(crate) static CLOUDFLARED_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
     /// A CA, a user key and a certificate for it, made with ssh-key.
-    fn issue(principals: &[&str], valid_for: i64) -> (KeyPair, String, ssh_key::PrivateKey) {
+    pub(crate) fn issue(principals: &[&str], valid_for: i64) -> (KeyPair, String, ssh_key::PrivateKey) {
         use ssh_key::{certificate, rand_core::OsRng, Algorithm, PrivateKey};
         let ca = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
         let user = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
@@ -191,7 +198,7 @@ mod tests {
         }
         let cert = b.sign(&ca).unwrap().to_openssh().unwrap();
         let pem = user.to_openssh(ssh_key::LineEnding::LF).unwrap();
-        assert!(pem.starts_with(CA));
+        assert!(pem.starts_with(OPENSSH_PEM));
         (russh_keys::decode_secret_key(&pem, None).unwrap(), cert, user)
     }
 

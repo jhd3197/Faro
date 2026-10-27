@@ -1872,6 +1872,17 @@ async fn authenticate(
                 .context("publickey auth")?
         }
         AuthMethod::Agent => authenticate_with_agent(session, username).await?,
+        AuthMethod::CloudflareCert => {
+            // Minutes-long certificates: a fresh one every connect, never cached.
+            let (bin, hostname) =
+                crate::proxy_command::access_cert_target(profile.proxy_command.as_ref(), &profile.host, profile.port, username)?;
+            let p = prompter.clone();
+            let (key, cert) = crate::cloudflared::ssh_gen(&bin, &hostname, move |url| {
+                p.notice("Finish the Cloudflare Access sign-in in your browser", Some(&url));
+            })
+            .await?;
+            authenticate_key(session, username, Arc::new(key), Some(cert), crate::ssh_cert::Issuer::Cloudflare).await?
+        }
     };
 
     if !authed {

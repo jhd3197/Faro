@@ -60,6 +60,10 @@ pub enum AuthMethod {
     /// path resolves it via `credentials::get_secret` at connect time.
     #[serde(rename_all = "camelCase")]
     KeyRef { key_ref: String },
+    /// A short-lived certificate from Cloudflare Access, issued fresh on every
+    /// connect by `cloudflared access ssh-gen` for the signed-in user. Needs
+    /// the Cloudflare Access route; nothing is stored.
+    CloudflareCert,
 }
 
 /// Client-side proxy a connection's first TCP hop goes through.

@@ -464,3 +464,114 @@ fn unreachable_hosts_say_so() {
     assert_eq!(s.state, AccessState::Unknown);
     assert_eq!(s.message.as_deref(), Some("can't reach https://team.example (check the hostname and your network)"));
 }
+
+// ---- Short-lived SSH certificates (issue #55) --------------------------------
+
+/// `ssh-gen` output goes to a scratch folder (for the fake and for Faro), and
+/// the fake has a certificate for `principal` to hand out for `host`.
+fn sshgen_setup(host: &str, principal: &str) -> PathBuf {
+    let dir = scratch("sshgen-out");
+    cf_state("sshgen-dir", &dir.to_string_lossy());
+    *crate::ssh_cert::tests::CLOUDFLARED_DIR.lock().unwrap() = Some(dir.clone());
+    let (_, cert, user) = crate::ssh_cert::tests::issue(&[principal], 300);
+    cf_state(&format!("sshgen-{host}-key"), &user.to_openssh(ssh_key::LineEnding::LF).unwrap());
+    cf_state(&format!("sshgen-{host}-cert.pub"), &cert);
+    dir
+}
+
+fn sshgen_clear(host: &str) {
+    cf_clear(host);
+    for f in [format!("sshgen-{host}-key"), format!("sshgen-{host}-cert.pub")] {
+        let _ = std::fs::remove_file(fake_cloudflared().parent().unwrap().join(f));
+    }
+}
+
+#[tokio::test]
+async fn ssh_gen_signs_in_then_hands_over_a_fresh_pair() {
+    let host = "cert.faro.test";
+    sshgen_clear(host);
+    let dir = sshgen_setup(host, "jane.doe");
+    cf_state(&format!("login-{host}.json"), r#"{"email":"jane.doe@example.com","delayMs":200}"#);
+    let urls = Arc::new(StdMutex::new(Vec::new()));
+    let u = urls.clone();
+    let (key, cert) = ssh_gen_in(&fake_cloudflared(), host, &dir, move |url| u.lock().unwrap().push(url))
+        .await
+        .unwrap();
+    assert!(crate::ssh_cert::matches(&key, &cert));
+    assert_eq!(cert.valid_principals(), ["jane.doe".to_string()]);
+    assert_eq!(urls.lock().unwrap().len(), 1, "the sign-in page reached the UI");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "the key and certificate are deleted after use");
+
+    // Signed in now: the next one needs no browser.
+    let quiet = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let q = quiet.clone();
+    ssh_gen_in(&fake_cloudflared(), host, &dir, move |url| q.lock().unwrap().push(url)).await.unwrap();
+    assert!(quiet.lock().unwrap().is_empty());
+    sshgen_clear(host);
+}
+
+#[tokio::test]
+async fn ssh_gen_failures_say_what_is_missing() {
+    let host = "noca.faro.test";
+    sshgen_clear(host);
+    let dir = scratch("sshgen-noca");
+    cf_state(&format!("token-{host}.json"), &format!(r#"{{"email":"jane@example.com","exp":{}}}"#, now() + 600));
+    let err = ssh_gen_in(&fake_cloudflared(), host, &dir, |_| {}).await.unwrap_err();
+    assert!(err.to_string().contains("Cloudflare didn't issue an SSH certificate for noca.faro.test"), "{err:#}");
+    assert!(err.to_string().contains("short-lived certificate CA"), "{err:#}");
+
+    cf_state(&format!("notprotected-{host}"), "");
+    let err = ssh_gen_in(&fake_cloudflared(), host, &dir, |_| {}).await.unwrap_err();
+    assert!(err.to_string().contains("has no Cloudflare Access application"), "{err:#}");
+    sshgen_clear(host);
+}
+
+#[test]
+fn certificate_login_needs_the_access_route_and_a_person() {
+    use crate::profiles::{ProxyCommandConfig, ProxyCommandKind};
+    let _ = proxy_command::access_cert_target(None, "h", 22, "u").unwrap_err();
+    let mut cfg = ProxyCommandConfig {
+        kind: ProxyCommandKind::Command,
+        command: "nc %h %p".into(),
+        hostname: None,
+        service_token_id: None,
+        service_token_secret: None,
+    };
+    let err = proxy_command::access_cert_target(Some(&cfg), "h", 22, "u").unwrap_err();
+    assert!(err.to_string().contains("needs the Cloudflare Access route"), "{err:#}");
+    // A cloudflared ProxyCommand counts, with its --hostname.
+    cfg.command = format!("{} access ssh --hostname %h", quoted(&fake_cloudflared()));
+    let (bin, hostname) = proxy_command::access_cert_target(Some(&cfg), "ssh.example.com", 22, "u").unwrap();
+    assert_eq!((bin, hostname.as_str()), (fake_cloudflared(), "ssh.example.com"));
+    // Service tokens carry no person to issue a certificate for.
+    cfg.kind = ProxyCommandKind::Cloudflare;
+    cfg.service_token_id = Some("id.access".into());
+    cfg.service_token_secret = Some("s".into());
+    let err = proxy_command::access_cert_target(Some(&cfg), "h", 22, "u").unwrap_err();
+    assert!(err.to_string().contains("uses an Access service token"), "{err:#}");
+}
+
+/// The whole connect: tunnel, sign-in, certificate. The in-process server
+/// takes no certificates, so this ends at the refusal, which must name the
+/// principal Cloudflare issued and the user the server refused.
+#[tokio::test]
+async fn a_refused_cloudflare_certificate_names_principal_and_user() {
+    let host = "refused.faro.test";
+    sshgen_clear(host);
+    let dir = sshgen_setup(host, "jane.doe");
+    cf_state(&format!("token-{host}.json"), &format!(r#"{{"email":"jane.doe@example.com","exp":{}}}"#, now() + 600));
+    let port = ssh_server().await;
+    let mut p = access_profile(host, port, "");
+    p.username = "deploy".into();
+    p.auth = crate::profiles::AuthMethod::CloudflareCert;
+    let err = match crate::session::ssh_connect(&p, Arc::new(Verifier::default()), Arc::new(Prompter::default())).await {
+        Ok(_) => panic!("the server takes no certificates"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("Cloudflare issued a certificate for `jane.doe`, but the server refused it for user `deploy`"),
+        "{err:#}"
+    );
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    sshgen_clear(host);
+}

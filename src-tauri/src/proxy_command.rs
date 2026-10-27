@@ -136,6 +136,24 @@ pub fn build(cfg: &ProxyCommandConfig, host: &str, port: u16, user: &str) -> Res
     }
 }
 
+/// The `cloudflared` and Access hostname for issuing a short-lived SSH
+/// certificate (`access ssh-gen`) to a profile routed through Cloudflare
+/// Access, as `user` on `host:port`.
+pub fn access_cert_target(cfg: Option<&ProxyCommandConfig>, host: &str, port: u16, user: &str) -> Result<(PathBuf, String)> {
+    let spec = cfg.map(|c| build(c, host, port, user)).transpose()?;
+    let target = spec
+        .as_ref()
+        .filter(|s| s.cloudflared)
+        .and_then(|s| Some((s, s.cloudflare_hostname()?.to_string())));
+    let Some((spec, hostname)) = target else {
+        bail!("Cloudflare certificate login needs the Cloudflare Access route; set Proxy to Cloudflare Access in the connection editor");
+    };
+    if !spec.env.is_empty() {
+        bail!("Cloudflare certificate login needs a signed-in person, and this connection uses an Access service token. Log in with a key or password for unattended connections");
+    }
+    Ok((resolve_program(spec)?, hostname))
+}
+
 /// Split a command line into argv with shell-style quoting: `'…'` is
 /// literal, `"…"` honours `\"` and `\\`, and a backslash elsewhere is
 /// literal unless it escapes whitespace or a quote (so `C:\Program Files`

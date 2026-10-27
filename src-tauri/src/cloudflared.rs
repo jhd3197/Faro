@@ -425,11 +425,17 @@ pub async fn access_status(bin: &Path, hostname: &str) -> AccessStatus {
     }
 }
 
-/// Sign in to `hostname` in the browser (cloudflared opens it; `on_url` gets
-/// the page too) and wait for it, then report the new state.
-pub async fn access_login(bin: &Path, hostname: &str, on_url: impl Fn(String) + Send + Sync + 'static) -> Result<AccessStatus> {
+/// Run `cloudflared <args>` for `hostname`, passing each Access sign-in URL
+/// it prints to `on_url` once, and wait as long as a browser sign-in may take.
+/// Returns whether it succeeded and every line it printed.
+async fn run_with_sign_in(
+    bin: &Path,
+    args: &[&str],
+    hostname: &str,
+    on_url: impl Fn(String) + Send + Sync + 'static,
+) -> Result<(bool, Vec<String>)> {
     let mut child = tokio::process::Command::new(bin)
-        .args(["access", "login", "--quiet", "--auto-close", "--app", &app_url(hostname)])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -472,16 +478,82 @@ pub async fn access_login(bin: &Path, hostname: &str, on_url: impl Fn(String) + 
     let ok = waited.map(|s| s.success()).unwrap_or(false);
     let mut said = out_task.await.unwrap_or_default();
     said.extend(err_task.await.unwrap_or_default());
-    let all = said.join("\n").to_ascii_lowercase();
-    if all.contains("failed to find access application") {
+    Ok((ok, said))
+}
+
+fn no_access_app(said: &[String]) -> bool {
+    said.join("\n").to_ascii_lowercase().contains("failed to find access application")
+}
+
+fn last_line(said: &[String]) -> String {
+    said.iter().rfind(|l| !l.is_empty()).cloned().unwrap_or_default()
+}
+
+/// Sign in to `hostname` in the browser (cloudflared opens it; `on_url` gets
+/// the page too) and wait for it, then report the new state.
+pub async fn access_login(bin: &Path, hostname: &str, on_url: impl Fn(String) + Send + Sync + 'static) -> Result<AccessStatus> {
+    let app = app_url(hostname);
+    let args = ["access", "login", "--quiet", "--auto-close", "--app", &app];
+    let (ok, said) = run_with_sign_in(bin, &args, hostname, on_url).await?;
+    if no_access_app(&said) {
         return Ok(classify_token(hostname, false, "", "failed to find Access application", now()));
     }
     let status = access_status(bin, hostname).await;
     if !ok && status.state != AccessState::LoggedIn {
-        let last = said.iter().rfind(|l| !l.is_empty()).cloned().unwrap_or_default();
-        bail!("the Cloudflare Access sign-in for {hostname} failed: {last}");
+        bail!("the Cloudflare Access sign-in for {hostname} failed: {}", last_line(&said));
     }
     Ok(status)
+}
+
+/// One `ssh-gen` per hostname at a time: its output files have fixed names.
+fn ssh_gen_turn(hostname: &str) -> std::sync::Arc<Mutex<()>> {
+    type Turns = std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Mutex<()>>>>;
+    static TURNS: std::sync::OnceLock<Turns> = std::sync::OnceLock::new();
+    let mut turns = TURNS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    turns.entry(hostname.to_ascii_lowercase()).or_default().clone()
+}
+
+/// A fresh short-lived SSH certificate for the signed-in user, from
+/// `cloudflared access ssh-gen` (signing in first when needed; `on_url` gets
+/// the page). The key and certificate it writes are read, then deleted.
+pub async fn ssh_gen(
+    bin: &Path,
+    hostname: &str,
+    on_url: impl Fn(String) + Send + Sync + Clone + 'static,
+) -> Result<(russh_keys::key::KeyPair, ssh_key::Certificate)> {
+    let dir = crate::ssh_cert::cloudflared_dir().context("couldn't find the home folder cloudflared writes to")?;
+    ssh_gen_in(bin, hostname, &dir, on_url).await
+}
+
+/// `ssh_gen`, reading what cloudflared wrote to `dir`.
+async fn ssh_gen_in(
+    bin: &Path,
+    hostname: &str,
+    dir: &Path,
+    on_url: impl Fn(String) + Send + Sync + Clone + 'static,
+) -> Result<(russh_keys::key::KeyPair, ssh_key::Certificate)> {
+    let turn = ssh_gen_turn(hostname);
+    let _turn = turn.lock().await;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let args = ["access", "ssh-gen", "--hostname", hostname];
+        let (ok, said) = run_with_sign_in(bin, &args, hostname, on_url.clone()).await?;
+        if no_access_app(&said) {
+            bail!("{hostname} has no Cloudflare Access application, so Cloudflare can't issue an SSH certificate for it; log in with a key or password instead");
+        }
+        if !ok {
+            bail!(
+                "Cloudflare didn't issue an SSH certificate for {hostname}: {}. Check that you're signed in and that its Access application has a short-lived certificate CA",
+                last_line(&said)
+            );
+        }
+        match crate::ssh_cert::take_ssh_gen_output(dir, hostname) {
+            // faro-cli may have run ssh-gen for the same host at the same moment.
+            Err(e) if attempt == 1 && e.to_string().contains("doesn't match") => continue,
+            done => return done,
+        }
+    }
 }
 
 // ---- App subsystem ----------------------------------------------------------
