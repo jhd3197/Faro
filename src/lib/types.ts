@@ -471,6 +471,37 @@ export interface RootRun {
   needsPassword: boolean;
 }
 
+export interface CfZone {
+  id: string;
+  name: string;
+}
+
+/** Something setup created in the account (mirrors `cf_setup::Created`). */
+export interface CfCreated {
+  label: string;
+  path: string;
+}
+
+/** After the Cloudflare side of a setup (mirrors `cf_setup::SetupState`). */
+export interface CfSetupState {
+  sshHostname: string;
+  panelHostname?: string | null;
+  tunnelId: string;
+  caPublicKey: string;
+  /** Run once as root on the server. */
+  script: string;
+  undoScript: string;
+  created: CfCreated[];
+}
+
+export interface CfSetupRequest {
+  name: string;
+  zoneId: string;
+  zoneName: string;
+  panelPort?: number;
+  people: string[];
+}
+
 /** An SSH hostname in the connected account. */
 export interface CfSshHostname {
   hostname: string;

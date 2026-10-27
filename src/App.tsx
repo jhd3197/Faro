@@ -19,6 +19,7 @@ import { GrantDialog } from "./components/GrantDialog";
 import { ImportDialog } from "./components/ImportDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { InviteDialog } from "./components/InviteDialog";
+import { MoveToCloudflareDialog } from "./components/MoveToCloudflareDialog";
 import { AboutDialog } from "./components/AboutDialog";
 import { useConnections } from "./stores/connectionsStore";
 import { useTransfers } from "./stores/transfersStore";
@@ -93,6 +94,7 @@ export default function App() {
   const exportRequest = useLayout((s) => s.exportRequest);
   const importFile = useLayout((s) => s.importFile);
   const inviteIds = useLayout((s) => s.inviteIds);
+  const moveProfileId = useLayout((s) => s.moveProfileId);
   const togglePanel = useTransfers((s) => s.togglePanel);
   const transferPanelOpen = useTransfers((s) => s.panelOpen);
   const activeTransfers = useTransfers((s) =>
@@ -167,6 +169,9 @@ export default function App() {
       {dialog === "import" && <ImportDialog key={importFile ?? ""} onClose={closeDialog} />}
       {dialog === "export" && <ExportDialog request={exportRequest} onClose={closeDialog} />}
       {dialog === "invite" && <InviteDialog ids={inviteIds} onClose={closeDialog} />}
+      {dialog === "moveToCloudflare" && moveProfileId && (
+        <MoveToCloudflareDialog profileId={moveProfileId} onClose={closeDialog} />
+      )}
       {dialog === "grant" && <GrantDialog onClose={closeDialog} />}
       {dialog === "about" && <AboutDialog onClose={closeDialog} />}
       <HostKeyModal />

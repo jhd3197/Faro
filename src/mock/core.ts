@@ -266,6 +266,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "cf_account_status":
       return { connected: false, choices: [], permissions: [] };
     case "cf_account_hostnames":
+    case "cf_account_zones":
       return [];
     case "import_faro_file":
       // A canned team file: one duplicate of a demo server, one that needs a key.

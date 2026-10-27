@@ -34,6 +34,10 @@ import type {
   CfAccountStatus,
   CfSshHostname,
   CfInvitePlan,
+  CfZone,
+  CfCreated,
+  CfSetupState,
+  CfSetupRequest,
   RootRun,
   ExportFormat,
   ExportSummary,
@@ -449,6 +453,15 @@ export const ipc = {
   cfAccountHostnames: () => invoke<CfSshHostname[]>("cf_account_hostnames"),
   cfAccountCreateServiceToken: () => invoke<CfAccountStatus>("cf_account_create_service_token"),
   cfAccountDeleteServiceToken: () => invoke<CfAccountStatus>("cf_account_delete_service_token"),
+  cfAccountZones: () => invoke<CfZone[]>("cf_account_zones"),
+  /** The Cloudflare side of moving a server behind Cloudflare. */
+  cfSetupCloudflare: (profileId: string, request: CfSetupRequest) =>
+    invoke<CfSetupState>("cf_setup_cloudflare", { profileId, request }),
+  cfTunnelStatus: (tunnelId: string) => invoke<string>("cf_tunnel_status", { tunnelId }),
+  /** Delete what a setup created; returns what couldn't be deleted. */
+  cfSetupUndo: (created: CfCreated[]) => invoke<string[]>("cf_setup_undo", { created }),
+  /** Which of `ports` on `host` answer from this machine. */
+  checkOpenPorts: (host: string, ports: number[]) => invoke<number[]>("check_open_ports", { host, ports }),
   /** Who a Cloudflare connection's Access application lets in. */
   cfAccessPeople: (profileId: string) => invoke<string[]>("cf_access_people", { profileId }),
   /** Invite (`add`) or remove `email`: Access policy now, root command back. */

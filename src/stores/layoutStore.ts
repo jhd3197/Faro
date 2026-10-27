@@ -12,7 +12,8 @@ export type AppDialog =
   | "agentBridge"
   | "grant"
   | "export"
-  | "invite";
+  | "invite"
+  | "moveToCloudflare";
 
 /** What the Export dialog starts with: the connections to tick and format. */
 export interface ExportRequest {
@@ -70,6 +71,9 @@ interface LayoutState {
   // Connections the Invite dialog shares (one server, or a folder's).
   inviteIds: string[];
   openInvite: (ids: string[]) => void;
+  // The direct connection "Move behind Cloudflare" starts from.
+  moveProfileId: string | null;
+  openMoveToCloudflare: (id: string) => void;
 
   // When true, the file browser shows the LOCAL filesystem instead of the
   // active server. Toggled by the rail's "Local" home bubble; cleared when a
@@ -113,7 +117,7 @@ export const useLayout = create<LayoutState>((set) => ({
   dialog: null,
   openDialog: (d) => set({ dialog: d }),
   closeDialog: () =>
-    set({ dialog: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, inviteIds: [] }),
+    set({ dialog: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, inviteIds: [], moveProfileId: null }),
 
   connectionPrefill: null,
   openNewConnection: (prefill) =>
@@ -128,6 +132,8 @@ export const useLayout = create<LayoutState>((set) => ({
   openImport: (file) => set({ dialog: "import", importFile: file ?? null }),
   inviteIds: [],
   openInvite: (ids) => set({ dialog: "invite", inviteIds: ids }),
+  moveProfileId: null,
+  openMoveToCloudflare: (id) => set({ dialog: "moveToCloudflare", moveProfileId: id }),
 
   browseLocal: false,
   setBrowseLocal: (v) => set({ browseLocal: v }),

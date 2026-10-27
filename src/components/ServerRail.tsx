@@ -7,6 +7,7 @@ import {
   FileCode,
   Link2,
   UserPlus,
+  Cloud,
   Search,
   Radio,
   Plug,
@@ -141,6 +142,7 @@ export function ServerRail() {
   const openExport = useLayout((s) => s.openExport);
   const openImport = useLayout((s) => s.openImport);
   const openInvite = useLayout((s) => s.openInvite);
+  const openMoveToCloudflare = useLayout((s) => s.openMoveToCloudflare);
   const browseLocal = useLayout((s) => s.browseLocal);
   const setBrowseLocal = useLayout((s) => s.setBrowseLocal);
   const browserLayout = useSettings((s) => s.browserLayout);
@@ -462,6 +464,12 @@ export function ServerRail() {
         label: "Invite…",
         icon: <UserPlus size={14} />,
         onClick: () => openInvite([p.id]),
+      });
+    } else if (p.protocol === "sftp" && !p.jumpProfile && !p.proxyCommand && !p.proxy) {
+      items.push({
+        label: "Move behind Cloudflare…",
+        icon: <Cloud size={14} />,
+        onClick: () => openMoveToCloudflare(p.id),
       });
     }
     if (canLink(p)) {

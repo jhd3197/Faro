@@ -547,6 +547,12 @@ pub async fn cf_account_hostnames(app: AppHandle) -> Result<Vec<SshHostname>, St
 }
 
 #[tauri::command]
+pub async fn cf_account_zones(app: AppHandle) -> Result<Vec<Zone>, String> {
+    let (api, account) = connected(&data_dir(&app)?).map_err(err)?;
+    api.zones(&account).await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn cf_account_create_service_token(app: AppHandle, state: State<'_, AppState>) -> Result<AccountStatus, String> {
     let dir = data_dir(&app)?;
     let (api, account) = connected(&dir).map_err(err)?;
