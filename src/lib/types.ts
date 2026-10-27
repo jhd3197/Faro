@@ -400,6 +400,9 @@ export interface ImporterPaths {
   openssh: string | null;
   filezilla: string | null;
   putty: string | null;
+  /** Whether the default files exist; a missing one isn't an error. */
+  opensshExists: boolean;
+  filezillaExists: boolean;
 }
 
 // ---- Sync ----

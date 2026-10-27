@@ -23,7 +23,7 @@ pub fn default_path() -> Option<PathBuf> {
 /// and that's the case we want to cover.
 pub fn parse_file(path: &PathBuf) -> Result<Vec<ProfilePreview>> {
     let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("Couldn't read {}", path.display()))?;
     Ok(parse(&text, path.display().to_string()))
 }
 
@@ -577,5 +577,14 @@ Host cache
         let proxy = ps[0].proxy.as_ref().unwrap();
         assert_eq!((proxy.kind, proxy.host.as_str(), proxy.port), (ProxyKind::Socks5, "127.0.0.1", 1080));
         assert_eq!(ps.len(), 1);
+    }
+
+    #[test]
+    fn unreadable_file_says_why() {
+        let path = std::env::temp_dir().join("faro-no-such-dir").join("config");
+        let e = parse_file(&path).unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(msg.starts_with(&format!("Couldn't read {}: ", path.display())), "{msg}");
+        assert!(msg.len() > format!("Couldn't read {}: ", path.display()).len(), "{msg}");
     }
 }

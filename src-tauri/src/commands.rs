@@ -16,8 +16,11 @@ pub const LOCAL_SESSION: &str = "local";
 
 /// Convert any error to a string for crossing the IPC boundary. The frontend
 /// surfaces these directly to the user, so the Display message must be useful.
+/// The alternate form keeps an `anyhow` error's whole cause chain ("Couldn't
+/// read X: access is denied"); plain `to_string()` would print only "Couldn't
+/// read X".
 fn err<E: std::fmt::Display>(e: E) -> String {
-    e.to_string()
+    format!("{e:#}")
 }
 
 // ---------- Profiles ----------
@@ -1627,13 +1630,22 @@ pub struct ImporterPaths {
     pub openssh: Option<String>,
     pub filezilla: Option<String>,
     pub putty: Option<String>,
+    /// Whether the default files exist. A missing one is normal (no
+    /// `~/.ssh/config` yet, FileZilla never installed), so the UI shows an
+    /// empty state instead of a read error.
+    pub openssh_exists: bool,
+    pub filezilla_exists: bool,
 }
 
 #[tauri::command]
 pub fn importer_default_paths() -> ImporterPaths {
+    let openssh = importers::openssh::default_path();
+    let filezilla = importers::filezilla::default_path();
     ImporterPaths {
-        openssh: importers::openssh::default_path().map(|p| p.display().to_string()),
-        filezilla: importers::filezilla::default_path().map(|p| p.display().to_string()),
+        openssh_exists: openssh.as_ref().is_some_and(|p| p.is_file()),
+        filezilla_exists: filezilla.as_ref().is_some_and(|p| p.is_file()),
+        openssh: openssh.map(|p| p.display().to_string()),
+        filezilla: filezilla.map(|p| p.display().to_string()),
         putty: importers::putty::default_path().map(|p| p.display().to_string()),
     }
 }
@@ -2121,7 +2133,7 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("refusing to open a {} link", parsed.scheme()));
     }
-    crate::proc::open_in_browser(parsed.as_str()).map_err(|e| e.to_string())
+    crate::proc::open_in_browser(parsed.as_str()).map_err(|e| format!("{e:#}"))
 }
 
 /// Faro's fixed app id for WordPress's "Authorize Application" page (it

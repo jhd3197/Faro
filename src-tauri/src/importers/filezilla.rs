@@ -44,7 +44,7 @@ pub fn default_path() -> Option<PathBuf> {
 
 pub fn parse_file(path: &PathBuf) -> Result<Vec<ProfilePreview>> {
     let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("Couldn't read {}", path.display()))?;
     parse(&text)
 }
 

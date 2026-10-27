@@ -256,7 +256,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
 
     // ---- importers ----
     case "importer_default_paths":
-      return { openssh: "~/.ssh/config", filezilla: null, putty: null };
+      return { openssh: "~/.ssh/config", filezilla: null, putty: null, opensshExists: true, filezillaExists: false };
     case "import_openssh":
     case "import_filezilla":
     case "import_putty":

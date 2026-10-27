@@ -139,7 +139,21 @@ function ImporterTab({
     }
   }, [paths, kind, pathTouched]);
 
+  const defaultPath =
+    kind === "openssh" ? paths?.openssh : kind === "filezilla" ? paths?.filezilla : null;
+  const defaultExists =
+    kind === "openssh" ? paths?.opensshExists : kind === "filezilla" ? paths?.filezillaExists : true;
+  // The default file not existing is normal (no ~/.ssh/config yet, FileZilla
+  // never installed): say so plainly instead of showing a read error.
+  const missingDefault = !!paths && !defaultExists && !!path && path === defaultPath;
+
   const scan = useCallback(async () => {
+    if (missingDefault) {
+      setError(null);
+      setPreviews(null);
+      setAutoScanned(true);
+      return;
+    }
     setLoading(true);
     setError(null);
     setSavedCount(null);
@@ -163,7 +177,7 @@ function ImporterTab({
       setLoading(false);
       setAutoScanned(true);
     }
-  }, [kind, path]);
+  }, [kind, path, missingDefault]);
 
   // Auto-scan when the tab opens, but only when the path is autodetected.
   useEffect(() => {
@@ -259,7 +273,17 @@ function ImporterTab({
       )}
 
       <div className="flex-1 overflow-y-auto rounded-md border border-border bg-bg-subtle">
-        {previews === null && !loading && !error && (
+        {missingDefault && previews === null && !loading && !error && (
+          <Empty>
+            No {kind === "openssh" ? "OpenSSH config" : "FileZilla site list"} found at{" "}
+            <code className="break-all font-mono text-[11px] text-text-muted">{path}</code>.{" "}
+            {kind === "openssh"
+              ? "That's normal if you've never created one."
+              : "That's normal if FileZilla isn't installed or has no saved sites."}{" "}
+            Enter another file path, or try another tab.
+          </Empty>
+        )}
+        {!missingDefault && previews === null && !loading && !error && (
           <Empty>
             Click <strong>Scan</strong> to read connections from this source.
           </Empty>
