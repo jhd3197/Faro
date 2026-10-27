@@ -3,8 +3,13 @@
 
 export type AuthMethod =
   | { kind: "password"; password: string }
-  | { kind: "key"; path: string; passphrase?: string }
+  // `certPath`: an OpenSSH user certificate for the key. Absent = the
+  // backend tries `<path>-cert.pub`, as OpenSSH does.
+  | { kind: "key"; path: string; passphrase?: string; certPath?: string }
   | { kind: "agent" }
+  // A fresh Cloudflare Access short-lived certificate on every connect.
+  // Needs the Cloudflare Access route without a service token.
+  | { kind: "cloudflarecert" }
   // Grant-imported profile: the private key lives in the OS keychain under
   // `keyRef`; it never crosses IPC. Not user-selectable in the editor.
   | { kind: "keyref"; keyRef: string };
