@@ -100,6 +100,13 @@ pub fn refusal(cert: &Certificate, username: &str, issuer: Issuer) -> String {
             Issuer::File => "the SSH certificate has expired; get a new one from your SSH CA".into(),
         };
     }
+    // russh offers an RSA certificate only as `ssh-rsa-cert-v01` (SHA-1),
+    // which OpenSSH 8.8 and later refuse.
+    if matches!(cert.algorithm(), ssh_key::Algorithm::Rsa { .. }) {
+        return "the server refused the RSA certificate: Faro can only send RSA certificates signed with SHA-1, \
+                which current OpenSSH servers turn down. Use an Ed25519 or ECDSA key for the certificate"
+            .into();
+    }
     if !principals.is_empty() && !principals.iter().any(|p| p == username) {
         return match issuer {
             Issuer::Cloudflare => format!(
