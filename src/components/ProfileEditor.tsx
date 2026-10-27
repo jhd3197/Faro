@@ -229,8 +229,21 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [proxyPort, setProxyPort] = useState(seed?.proxy?.port ?? 1080);
   const [proxyUser, setProxyUser] = useState(seed?.proxy?.username ?? "");
   const [proxyPass, setProxyPass] = useState(seed?.proxy?.password ?? "");
-  const [proxyCmd, setProxyCmd] = useState(() => proxyCmdDraft(seed?.proxyCommand));
+  const [proxyCmd, setProxyCmd] = useState(() => proxyCmdDraft(seed?.proxyCommand, seed?.host));
   const [jumpProfile, setJumpProfile] = useState(seed?.jumpProfile ?? "");
+  // "How do you reach this server?" (SFTP). A layout over the same data:
+  // `jumpProfile` for a jump host, a Cloudflare `proxyCommand` for Cloudflare.
+  const [reach, setReach] = useState<Reach>(() =>
+    seed?.jumpProfile ? "jump" : seed?.proxyCommand?.kind === "cloudflare" ? "cloudflare" : "direct"
+  );
+  // Through Cloudflare, the host is an optional detail: absent = the server.
+  const sshHost =
+    protocol === "sftp" && reach === "cloudflare" ? host.trim() || proxyCmd.hostname.trim() : host;
+  // The SSH host follows the Cloudflare server unless it was set apart.
+  const setCfServer = (v: string) => {
+    if (!host.trim() || host.trim() === proxyCmd.hostname.trim()) setHost(v);
+    setProxyCmd({ ...proxyCmd, hostname: v });
+  };
   const [group, setGroup] = useState(seed?.group ?? "");
   // Custom rail bubble glyph: emoji/short string, or a bundled Iconify key
   // (picked via the IconPicker grid; custom keys still possible via search).
@@ -522,7 +535,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                   ? normalizeDynamicsUrl(host)
                   : isWordPress
                     ? hostFromUrl(endpoint)
-                    : host,
+                    : sshHost,
       port: isWordPress ? portFromUrl(endpoint) : port,
       username: isAzure
         ? azureAccount
@@ -565,7 +578,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       ftpMaxConnections: isFtp && ftpMaxConnections !== 2 ? ftpMaxConnections : undefined,
       ftpSegments: isFtp && ftpSegments !== 1 ? ftpSegments : undefined,
       // A jump host brings its own proxy settings.
-      proxy: protocol === "sftp" && jumpProfile ? undefined : buildProxy(),
+      proxy: protocol === "sftp" && (jumpProfile || reach === "cloudflare") ? undefined : buildProxy(),
       proxyCommand: buildProxyCommand(),
       jumpProfile: protocol === "sftp" && jumpProfile ? jumpProfile : undefined,
       oauthClientId: isCloudOAuth ? oauthClientId.trim() || undefined : undefined,
@@ -581,9 +594,11 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
     }
     if (proxyCmd.kind === "cloudflare") {
       const tokenId = proxyCmd.serviceTokenId.trim();
+      const server = proxyCmd.hostname.trim();
       return {
         kind: "cloudflare",
-        hostname: proxyCmd.hostname.trim() || undefined,
+        // Absent = the connection's host, which is the usual case.
+        hostname: server && server !== sshHost ? server : undefined,
         serviceTokenId: tokenId || undefined,
         serviceTokenSecret: tokenId && proxyCmd.serviceTokenSecret ? proxyCmd.serviceTokenSecret : undefined,
       };
@@ -713,7 +728,21 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const gcsCredOk = authKind === "key" ? !!keyPath : !!password;
   // Cloudflare certificates need the Access route, and a person to sign in:
   // a service token has no email to issue a certificate for.
-  const cfRoute = protocol === "sftp" && !jumpProfile && proxyCmd.kind === "cloudflare";
+  const changeReach = (r: Reach) => {
+    setReach(r);
+    if (r === "cloudflare") {
+      setJumpProfile("");
+      setProxyKind("");
+      setProxyCmd({ ...proxyCmd, kind: "cloudflare", hostname: proxyCmd.hostname || host.trim() });
+      // Cloudflare identity is the login to have here; keep a chosen one.
+      if (authKind === "password" && !password) setAuthKind("cloudflarecert");
+    } else {
+      if (r === "direct") setJumpProfile("");
+      if (proxyCmd.kind === "cloudflare") setProxyCmd({ ...proxyCmd, kind: "" });
+    }
+  };
+  const cfRoute = protocol === "sftp" && reach === "cloudflare" && proxyCmd.kind === "cloudflare";
+  const jumpMissing = protocol === "sftp" && reach === "jump" && !jumpProfile;
   const cfServiceToken = cfRoute && !!proxyCmd.serviceTokenId.trim();
   const cfCertBlocked =
     protocol === "sftp" && authKind === "cloudflarecert" && (!cfRoute || cfServiceToken);
@@ -739,7 +768,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 ? cloudAuthed
                 : isAgent
                   ? !!host && !!agentKey
-                  : !!host && !!username && !cfCertBlocked;
+                  : !!sshHost && !!username && !cfCertBlocked && !jumpMissing;
   // Name what's still required so a disabled Save isn't a dead end.
   const missing = (
     isS3
@@ -781,12 +810,13 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 : isAgent
                   ? [!host && "host", !agentKey && "pairing"]
                   : [
-                      !host && "host",
+                      !sshHost && (cfRoute ? "server" : "host"),
+                      jumpMissing && "jump host",
                       !username && "username",
                       cfCertBlocked &&
                         (cfServiceToken
                           ? "a login other than Cloudflare certificate (service token)"
-                          : "the Cloudflare Access route"),
+                          : "Through Cloudflare (above)"),
                     ]
   ).filter(Boolean);
 
@@ -1048,8 +1078,38 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           />
         ) : (
           <>
+            {protocol === "sftp" && (
+              <ReachPicker
+                value={reach}
+                onChange={changeReach}
+              />
+            )}
+            {protocol === "sftp" && reach === "jump" && (
+              <JumpHostField
+                profileId={id}
+                profiles={profiles}
+                jumpProfile={jumpProfile}
+                setJumpProfile={setJumpProfile}
+              />
+            )}
+            {cfRoute ? (
+              <CloudflareServerFields
+                server={proxyCmd.hostname}
+                setServer={setCfServer}
+                host={host}
+                setHost={setHost}
+                port={port}
+                setPort={(p) => {
+                  setPort(p);
+                  setPortTouched(true);
+                }}
+                certLogin={authKind === "cloudflarecert"}
+                serviceTokenId={proxyCmd.serviceTokenId}
+                onRemoveToken={() => setProxyCmd({ ...proxyCmd, serviceTokenId: "", serviceTokenSecret: "" })}
+              />
+            ) : (
             <div className="flex gap-2">
-              <Field label="Host" className="flex-1">
+              <Field label={reach === "jump" && protocol === "sftp" ? "Host (as the jump host sees it)" : "Host"} className="flex-1">
                 <input
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
@@ -1071,8 +1131,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 />
               </Field>
             </div>
+            )}
 
-            <Field label="Username">
+            <Field label={cfRoute ? "Log in as" : "Username"}>
               <input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -1115,9 +1176,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                     value="cloudflarecert"
                     disabled={(!cfRoute || cfServiceToken) && authKind !== "cloudflarecert"}
                   >
-                    Cloudflare short-lived certificate
+                    Cloudflare identity (short-lived certificate)
                     {!cfRoute
-                      ? " — set Proxy to Cloudflare Access"
+                      ? " — choose Through Cloudflare"
                       : cfServiceToken
                         ? " — not with a service token"
                         : ""}
@@ -1263,9 +1324,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           setProxyPass={setProxyPass}
           proxyCmd={proxyCmd}
           setProxyCmd={setProxyCmd}
-          host={host}
-          jumpProfile={jumpProfile}
-          setJumpProfile={setJumpProfile}
+          reach={protocol === "sftp" ? reach : "direct"}
           ftpActiveMode={isFtp && ftpActiveMode}
         />
 
@@ -1416,9 +1475,8 @@ function CloudflareCertHint({
   if (!routed) {
     return (
       <Hint tone="warn">
-        Cloudflare issues these certificates through Access. Set{" "}
-        <span className="font-medium text-text">Proxy</span> to Cloudflare Access
-        under Proxy &amp; jump host below.
+        Cloudflare issues these certificates through Access. Choose{" "}
+        <span className="font-medium text-text">Through Cloudflare</span> above.
       </Hint>
     );
   }
@@ -1463,8 +1521,7 @@ function CloudflareCertHint({
         </span>
       ) : (
         <span className="mt-1 block">
-          Sign in under Proxy &amp; jump host to see which user the certificate
-          is for.
+          Sign in above to see which user the certificate is for.
         </span>
       )}
     </Hint>
@@ -3279,22 +3336,226 @@ interface ProxyCmdDraft {
   serviceTokenSecret: string;
 }
 
-function proxyCmdDraft(c?: ProxyCommandConfig): ProxyCmdDraft {
+function proxyCmdDraft(c?: ProxyCommandConfig, host?: string): ProxyCmdDraft {
   return {
     kind: c?.kind ?? "",
     command: c?.command ?? "",
-    hostname: c?.hostname ?? "",
+    // The editor's Cloudflare "Server": the Access hostname, else the host.
+    hostname: c?.hostname || (c?.kind === "cloudflare" ? host ?? "" : ""),
     serviceTokenId: c?.serviceTokenId ?? "",
     serviceTokenSecret: c?.serviceTokenSecret ?? "",
   };
 }
 
-/// Collapsible "Proxy & jump host" block: a SOCKS5 / HTTP CONNECT proxy for
-/// any connection, and (SFTP only) another SSH connection to jump through.
-function NetworkSection({
+type Reach = "direct" | "cloudflare" | "jump";
+
+const REACH_OPTIONS: { id: Reach; label: string; hint: string }[] = [
+  { id: "direct", label: "Direct", hint: "Its SSH port is open to you" },
+  { id: "cloudflare", label: "Through Cloudflare", hint: "Port closed, Access in front" },
+  { id: "jump", label: "Through a jump host", hint: "Via another SSH server" },
+];
+
+/// "How do you reach this server?" at the top of an SFTP form.
+function ReachPicker({ value, onChange }: { value: Reach; onChange: (r: Reach) => void }) {
+  return (
+    <div className="mb-3">
+      <div className="mb-1 text-[11px] font-medium text-text-muted">How do you reach this server?</div>
+      <div role="radiogroup" aria-label="How do you reach this server?" className="grid grid-cols-3 gap-1.5">
+        {REACH_OPTIONS.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={value === o.id}
+            onClick={() => onChange(o.id)}
+            className={cn(
+              "rounded-md border px-2.5 py-1.5 text-left",
+              value === o.id ? "border-accent bg-accent-soft" : "border-border bg-bg-subtle hover:bg-bg-hover"
+            )}
+          >
+            <span className="block text-[12px] font-medium text-text">{o.label}</span>
+            <span className="block truncate text-[10.5px] text-text-dim">{o.hint}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/// The jump host to go through (another saved SSH connection).
+function JumpHostField({
   profileId,
-  protocol,
   profiles,
+  jumpProfile,
+  setJumpProfile,
+}: {
+  profileId: string;
+  profiles: ConnectionProfile[];
+  jumpProfile: string;
+  setJumpProfile: (v: string) => void;
+}) {
+  const byId = new Map(profiles.map((p) => [p.id, p]));
+  // A profile that already jumps through this one would make a loop.
+  const jumpsThrough = (p: ConnectionProfile | undefined) => {
+    for (let i = 0; p && i < 10; i++) {
+      if (p.id === profileId) return true;
+      p = p.jumpProfile ? byId.get(p.jumpProfile) : undefined;
+    }
+    return false;
+  };
+  const candidates = profiles.filter(
+    (p) => p.protocol === "sftp" && p.id !== profileId && !jumpsThrough(p)
+  );
+  const missing = !!jumpProfile && !byId.has(jumpProfile);
+  return (
+    <>
+      <Field label="Jump host">
+        <select value={jumpProfile} onChange={(e) => setJumpProfile(e.target.value)} className={inputCls}>
+          <option value="">Choose a saved SSH connection…</option>
+          {missing && <option value={jumpProfile}>(deleted connection)</option>}
+          {candidates.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.username ? `${p.username}@` : ""}
+              {p.host})
+            </option>
+          ))}
+        </select>
+      </Field>
+      {candidates.length === 0 && !jumpProfile ? (
+        <Hint tone="warn">Save the jump host as an SSH connection first, then pick it here.</Hint>
+      ) : (
+        <Hint>
+          Faro signs in to the jump host with its own login, then opens this server through it. A
+          proxy, if needed, goes on the jump host's connection.
+        </Hint>
+      )}
+    </>
+  );
+}
+
+/// "Through Cloudflare": the server's Access hostname, the sign-in status,
+/// and the SSH host and port as optional details.
+function CloudflareServerFields({
+  server,
+  setServer,
+  host,
+  setHost,
+  port,
+  setPort,
+  certLogin,
+  serviceTokenId,
+  onRemoveToken,
+}: {
+  server: string;
+  setServer: (v: string) => void;
+  host: string;
+  setHost: (v: string) => void;
+  port: number;
+  setPort: (v: number) => void;
+  certLogin: boolean;
+  serviceTokenId: string;
+  onRemoveToken: () => void;
+}) {
+  const hostnames = useCloudflareHostnames();
+  const listId = useId();
+  const custom = (!!host.trim() && host.trim() !== server.trim()) || port !== 22;
+  const [details, setDetails] = useState(custom);
+  const known = hostnames.find((h) => h.hostname === server.trim());
+  return (
+    <>
+      <Field label="Server">
+        <input
+          value={server}
+          onChange={(e) => setServer(e.target.value)}
+          placeholder="ssh.example.com"
+          list={listId}
+          autoComplete="off"
+          spellCheck={false}
+          className={inputCls}
+        />
+        <datalist id={listId}>
+          {hostnames.map((h) => (
+            <option key={h.hostname} value={h.hostname}>
+              {h.label}
+            </option>
+          ))}
+        </datalist>
+      </Field>
+      <InstallCloudflared />
+      {server.trim() && (
+        <div className="mb-3 rounded-md border border-border px-2.5 py-2" data-testid="editor-access-signin">
+          <AccessSignIn
+            hostname={server.trim()}
+            compact
+            extra={(signedIn) => (
+              <>
+                {known?.tunnelStatus && (
+                  <span data-testid="cf-tunnel-status">
+                    {" "}
+                    · tunnel {known.tunnelStatus === "healthy" ? "healthy" : known.tunnelStatus}
+                  </span>
+                )}
+                {certLogin && signedIn && <span> · certificate login ready</span>}
+              </>
+            )}
+          />
+        </div>
+      )}
+      {serviceTokenId.trim() && (
+        <Hint tone="warn">
+          This connection still carries its own service token (
+          <span className="font-mono">{serviceTokenId}</span>). Faro now keeps one service token
+          for the whole Cloudflare account, in Settings › Cloudflare, for faro-cli and the Agent
+          Bridge.{" "}
+          <button type="button" onClick={onRemoveToken} className="font-medium text-accent hover:underline">
+            Remove it from this connection
+          </button>
+        </Hint>
+      )}
+      <button
+        type="button"
+        onClick={() => setDetails((d) => !d)}
+        aria-expanded={details}
+        className="mb-2 flex items-center gap-1 text-[11px] text-text-muted hover:text-text"
+      >
+        <ChevronRight size={11} className={cn("transition-transform", details && "rotate-90")} />
+        SSH host and port{custom ? `: ${host.trim() || server.trim()}:${port}` : " (optional)"}
+      </button>
+      {details && (
+        <div className="flex gap-2">
+          <Field label="SSH host, if not the server" className="flex-1">
+            <input
+              value={host === server ? "" : host}
+              onChange={(e) => setHost(e.target.value || server)}
+              placeholder={server.trim() || "same as the server"}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Port" className="w-24">
+            <input
+              type="number"
+              value={port}
+              onChange={(e) => setPort(parseInt(e.target.value) || 22)}
+              className={inputCls}
+            />
+          </Field>
+        </div>
+      )}
+    </>
+  );
+}
+
+/// SSH hostnames from the connected Cloudflare account, for the Server
+/// dropdown; empty without an account.
+function useCloudflareHostnames(): { hostname: string; label: string; tunnelStatus?: string }[] {
+  return [];
+}
+
+/// Collapsible "Proxy" block for a direct connection: a SOCKS5 / HTTP
+/// CONNECT proxy for any connection, or (SFTP) a ProxyCommand. Cloudflare and
+/// jump hosts are chosen in "How do you reach this server?" instead.
+function NetworkSection({
+  protocol,
   proxyKind,
   setProxyKind,
   proxyHost,
@@ -3307,9 +3568,7 @@ function NetworkSection({
   setProxyPass,
   proxyCmd,
   setProxyCmd,
-  host,
-  jumpProfile,
-  setJumpProfile,
+  reach,
   ftpActiveMode,
 }: {
   profileId: string;
@@ -3327,33 +3586,16 @@ function NetworkSection({
   setProxyPass: (v: string) => void;
   proxyCmd: ProxyCmdDraft;
   setProxyCmd: (v: ProxyCmdDraft) => void;
-  host: string;
-  jumpProfile: string;
-  setJumpProfile: (v: string) => void;
+  reach: Reach;
   ftpActiveMode: boolean;
 }) {
   const isSsh = protocol === "sftp";
-  const cmdKind = isSsh ? proxyCmd.kind : "";
-  const [open, setOpen] = useState(!!proxyKind || !!cmdKind || (isSsh && !!jumpProfile));
-  const byId = new Map(profiles.map((p) => [p.id, p]));
-  // A profile that already jumps through this one would make a loop.
-  const jumpsThrough = (p: ConnectionProfile | undefined) => {
-    for (let i = 0; p && i < 10; i++) {
-      if (p.id === profileId) return true;
-      p = p.jumpProfile ? byId.get(p.jumpProfile) : undefined;
-    }
-    return false;
-  };
-  const candidates = profiles.filter(
-    (p) => p.protocol === "sftp" && p.id !== profileId && !jumpsThrough(p)
-  );
-  const missingJump = isSsh && !!jumpProfile && !byId.has(jumpProfile);
-  const viaJump = isSsh && !!jumpProfile;
+  const cmdKind = isSsh && proxyCmd.kind === "command" ? "command" : "";
+  const [open, setOpen] = useState(!!proxyKind || !!cmdKind);
+  if (reach !== "direct") return null;
   const summary = [
-    !viaJump && proxyKind && proxyHost.trim() ? `${proxyKind === "socks5" ? "SOCKS5" : "HTTP"} proxy` : "",
-    !viaJump && cmdKind === "cloudflare" ? "Cloudflare Access" : "",
-    !viaJump && cmdKind === "command" && proxyCmd.command.trim() ? "Proxy command" : "",
-    isSsh && jumpProfile ? `via ${byId.get(jumpProfile)?.name ?? "a deleted connection"}` : "",
+    proxyKind && proxyHost.trim() ? `${proxyKind === "socks5" ? "SOCKS5" : "HTTP"} proxy` : "",
+    cmdKind && proxyCmd.command.trim() ? "Proxy command" : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -3367,7 +3609,7 @@ function NetworkSection({
   };
   // One select for both: a TCP proxy, or (SSH) a command that carries SSH.
   const changeRoute = (v: string) => {
-    if (v === "cloudflare" || v === "command") {
+    if (v === "command") {
       setProxyKind("");
       setProxyCmd({ ...proxyCmd, kind: v });
     } else {
@@ -3389,90 +3631,50 @@ function NetworkSection({
           size={12}
           className={cn("shrink-0 text-text-dim transition-transform", open && "rotate-90")}
         />
-        {isSsh ? "Proxy & jump host" : "Proxy"}
+        Proxy
         <span className="ml-auto truncate font-normal text-text-dim">
-          {summary || "Direct connection"}
+          {summary || "None"}
         </span>
       </button>
       {open && (
         <div className="border-t border-border px-2.5 pt-3">
-          {isSsh && (
-            <Field label="Jump host">
+          <div className="flex gap-3">
+            <Field label="Proxy" className={cn("shrink-0", isSsh ? "w-40" : "w-32")}>
               <select
-                value={jumpProfile}
-                onChange={(e) => setJumpProfile(e.target.value)}
+                value={cmdKind || proxyKind}
+                onChange={(e) => changeRoute(e.target.value)}
                 className={inputCls}
               >
-                <option value="">None — connect directly</option>
-                {missingJump && <option value={jumpProfile}>(deleted connection)</option>}
-                {candidates.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.username ? `${p.username}@` : ""}
-                    {p.host})
-                  </option>
-                ))}
+                <option value="">None</option>
+                <option value="socks5">SOCKS5</option>
+                <option value="http">HTTP</option>
+                {isSsh && <option value="command">Command</option>}
               </select>
             </Field>
-          )}
-          {viaJump && (
-            <Hint>
-              Faro signs in to the jump host with its own login, then opens this
-              server through it. A proxy, if needed, goes on the jump host's
-              connection.
-            </Hint>
-          )}
-          {!viaJump && (
-            <div className="flex gap-3">
-              <Field label="Proxy" className={cn("shrink-0", isSsh ? "w-40" : "w-32")}>
-                <select
-                  value={cmdKind || proxyKind}
-                  onChange={(e) => changeRoute(e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="">None</option>
-                  <option value="socks5">SOCKS5</option>
-                  <option value="http">HTTP</option>
-                  {isSsh && <option value="cloudflare">Cloudflare Access</option>}
-                  {isSsh && <option value="command">Command</option>}
-                </select>
-              </Field>
-              {cmdKind === "cloudflare" && (
-                <Field label="Access hostname" className="min-w-0 flex-1">
+            {proxyKind && (
+              <>
+                <Field label="Proxy host" className="min-w-0 flex-1">
                   <input
-                    value={proxyCmd.hostname}
-                    onChange={(e) => setCmd({ hostname: e.target.value })}
-                    placeholder={host.trim() || "ssh.example.com"}
-                    autoComplete="off"
-                    spellCheck={false}
+                    value={proxyHost}
+                    onChange={(e) => setProxyHost(e.target.value)}
+                    placeholder="proxy.example.com"
                     className={inputCls}
                   />
                 </Field>
-              )}
-              {proxyKind && (
-                <>
-                  <Field label="Proxy host" className="min-w-0 flex-1">
-                    <input
-                      value={proxyHost}
-                      onChange={(e) => setProxyHost(e.target.value)}
-                      placeholder="proxy.example.com"
-                      className={inputCls}
-                    />
-                  </Field>
-                  <Field label="Port" className="w-24 shrink-0">
-                    <input
-                      type="number"
-                      min={1}
-                      max={65535}
-                      value={proxyPort}
-                      onChange={(e) => setProxyPort(Number(e.target.value) || 0)}
-                      className={inputCls}
-                    />
-                  </Field>
-                </>
-              )}
-            </div>
-          )}
-          {!viaJump && proxyKind && (
+                <Field label="Port" className="w-24 shrink-0">
+                  <input
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={proxyPort}
+                    onChange={(e) => setProxyPort(Number(e.target.value) || 0)}
+                    className={inputCls}
+                  />
+                </Field>
+              </>
+            )}
+          </div>
+          {proxyKind && (
             <div className="flex gap-3">
               <Field label="Proxy username (optional)" className="min-w-0 flex-1">
                 <input
@@ -3487,43 +3689,7 @@ function NetworkSection({
               </Field>
             </div>
           )}
-          {!viaJump && cmdKind === "cloudflare" && (
-            <>
-              <InstallCloudflared />
-              {(proxyCmd.hostname.trim() || host.trim()) && (
-                <div className="mb-3 rounded-md border border-border px-2.5 py-2" data-testid="editor-access-signin">
-                  <AccessSignIn hostname={proxyCmd.hostname.trim() || host.trim()} compact />
-                </div>
-              )}
-              <div className="flex gap-3">
-                <Field label="Service token ID (optional)" className="min-w-0 flex-1">
-                  <input
-                    value={proxyCmd.serviceTokenId}
-                    onChange={(e) => setCmd({ serviceTokenId: e.target.value })}
-                    placeholder="xxxxxxxx.access"
-                    autoComplete="off"
-                    spellCheck={false}
-                    className={inputCls}
-                  />
-                </Field>
-                <Field label="Service token secret" className="min-w-0 flex-1">
-                  <PasswordInput
-                    value={proxyCmd.serviceTokenSecret}
-                    onChange={(v) => setCmd({ serviceTokenSecret: v })}
-                    generate={false}
-                  />
-                </Field>
-              </div>
-              <Hint>
-                Faro runs <code>cloudflared access ssh</code> for this server, so
-                its SSH port can stay closed. The first connect opens a Cloudflare
-                sign-in in your browser. A service token lets faro-cli and the
-                Agent Bridge connect when nobody is there to sign in. Leave the
-                hostname empty to use the server's host.
-              </Hint>
-            </>
-          )}
-          {!viaJump && cmdKind === "command" && (
+          {cmdKind === "command" && (
             <>
               <Field label="Command">
                 <input
@@ -3544,7 +3710,7 @@ function NetworkSection({
               </Hint>
             </>
           )}
-          {!viaJump && proxyKind && ftpActiveMode && (
+          {proxyKind && ftpActiveMode && (
             <Hint tone="warn">
               Active mode can't work through a proxy. Switch the transfer mode to passive.
             </Hint>

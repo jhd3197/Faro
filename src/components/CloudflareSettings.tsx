@@ -48,7 +48,16 @@ function describe(s: AccessStatus): { text: string; ok: boolean; canLogin: boole
 }
 
 /** One Access hostname's sign-in state, with Log in / Log in again. */
-export function AccessSignIn({ hostname, compact }: { hostname: string; compact?: boolean }) {
+export function AccessSignIn({
+  hostname,
+  compact,
+  extra,
+}: {
+  hostname: string;
+  compact?: boolean;
+  /** More status after the sign-in text (the editor's tunnel and login). */
+  extra?: (signedIn: boolean) => React.ReactNode;
+}) {
   const [status, setStatus] = useState<AccessStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,6 +112,7 @@ export function AccessSignIn({ hostname, compact }: { hostname: string; compact?
       {!compact && <span className="shrink-0 font-medium text-text">{hostname}</span>}
       <span className="min-w-0 truncate text-text-muted" data-access-state={status.state}>
         {d.text}
+        {extra?.(status.state === "loggedIn")}
       </span>
       {d.canLogin && (
         <button
