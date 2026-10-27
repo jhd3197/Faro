@@ -90,6 +90,7 @@ export default function App() {
   const closeDialog = useLayout((s) => s.closeDialog);
   const connectionPrefill = useLayout((s) => s.connectionPrefill);
   const exportRequest = useLayout((s) => s.exportRequest);
+  const importFile = useLayout((s) => s.importFile);
   const togglePanel = useTransfers((s) => s.togglePanel);
   const transferPanelOpen = useTransfers((s) => s.panelOpen);
   const activeTransfers = useTransfers((s) =>
@@ -161,7 +162,7 @@ export default function App() {
           onClose={closeDialog}
         />
       )}
-      {dialog === "import" && <ImportDialog onClose={closeDialog} />}
+      {dialog === "import" && <ImportDialog key={importFile ?? ""} onClose={closeDialog} />}
       {dialog === "export" && <ExportDialog request={exportRequest} onClose={closeDialog} />}
       {dialog === "grant" && <GrantDialog onClose={closeDialog} />}
       {dialog === "about" && <AboutDialog onClose={closeDialog} />}

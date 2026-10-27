@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Download,
   FileText,
+  FileJson,
+  FolderOpen,
   Server,
   Terminal as TerminalIcon,
   ShieldOff,
@@ -12,11 +15,16 @@ import {
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
+  Lock,
 } from "lucide-react";
 import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
+import { useLayout } from "@/stores/layoutStore";
+import { toast } from "@/stores/toastStore";
 import { useDialog } from "@/hooks/useDialog";
 import type {
+  ImportNeed,
+  ImportResolution,
   ImporterKind,
   ImporterPaths,
   ProfilePreview,
@@ -28,11 +36,20 @@ interface Props {
   onClose: () => void;
 }
 
+const TABS = [
+  { id: "faro", label: "Faro file", icon: FileJson },
+  { id: "openssh", label: "OpenSSH config", icon: TerminalIcon },
+  { id: "filezilla", label: "FileZilla", icon: Server },
+  { id: "putty", label: "PuTTY", icon: ShieldCheck },
+] as const;
+
 // Tabbed import dialog. Each tab auto-loads the importer's default-path
 // listing on first activation; the user picks which entries to actually
 // import. Selection state is per-tab so switching tabs doesn't lose work.
+// The Faro tab reads `.faro` files from Export (or dropped on the window).
 export function ImportDialog({ onClose }: Props) {
-  const [tab, setTab] = useState<ImporterKind>("openssh");
+  const importFile = useLayout((s) => s.importFile);
+  const [tab, setTab] = useState<ImporterKind>("faro");
   const [paths, setPaths] = useState<ImporterPaths | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -49,14 +66,11 @@ export function ImportDialog({ onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="anim-modal flex max-h-[85vh] w-[36rem] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
+        className="anim-modal flex max-h-[85vh] w-[38rem] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
       >
         <div className="flex items-center gap-2 border-b border-border bg-bg-subtle px-4 py-3">
           <Download size={14} className="text-accent" />
-          <span id={titleId} className="text-sm font-semibold">Import connections</span>
-          <span className="text-[11px] text-text-dim">
-            from another client
-          </span>
+          <span id={titleId} className="text-sm font-semibold">Import</span>
           <div className="flex-1" />
           <button
             onClick={onClose}
@@ -66,16 +80,12 @@ export function ImportDialog({ onClose }: Props) {
           </button>
         </div>
 
-        <div className="flex border-b border-border bg-bg-panel px-2 pt-2">
-          {(
-            [
-              { id: "openssh", label: "OpenSSH config", icon: TerminalIcon },
-              { id: "filezilla", label: "FileZilla", icon: Server },
-              { id: "putty", label: "PuTTY", icon: ShieldCheck },
-            ] as const
-          ).map(({ id, label, icon: Icon }) => (
+        <div role="tablist" className="flex border-b border-border bg-bg-panel px-2 pt-2">
+          {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
+              role="tab"
+              aria-selected={tab === id}
               onClick={() => setTab(id)}
               className={cn(
                 "flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-1.5 text-[12px] transition-colors",
@@ -90,12 +100,13 @@ export function ImportDialog({ onClose }: Props) {
           ))}
         </div>
 
-        {(["openssh", "filezilla", "putty"] as const).map((kind) => (
+        {TABS.map(({ id }) => (
           <ImporterTab
-            key={kind}
-            active={tab === kind}
-            kind={kind}
+            key={id}
+            active={tab === id}
+            kind={id}
             paths={paths}
+            initialPath={id === "faro" ? importFile ?? undefined : undefined}
             onDone={onClose}
           />
         ))}
@@ -108,27 +119,36 @@ function ImporterTab({
   active,
   kind,
   paths,
+  initialPath,
   onDone,
 }: {
   active: boolean;
   kind: ImporterKind;
   paths: ImporterPaths | null;
+  initialPath?: string;
   onDone: () => void;
 }) {
   const loadProfiles = useConnections((s) => s.loadProfiles);
-  const [path, setPath] = useState<string>("");
-  const [pathTouched, setPathTouched] = useState(false);
+  const [path, setPath] = useState<string>(initialPath ?? "");
+  const [pathTouched, setPathTouched] = useState(!!initialPath);
   const [previews, setPreviews] = useState<ProfilePreview[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [resolutions, setResolutions] = useState<Record<string, ImportResolution>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedCount, setSavedCount] = useState<number | null>(null);
   const [autoScanned, setAutoScanned] = useState(false);
+  // Faro tab: an encrypted file waiting for (or holding) its passphrase.
+  const [locked, setLocked] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
+  const [withSecrets, setWithSecrets] = useState(false);
+  // A Faro file picked with Browse (or dropped) is opened right away.
+  const [openRequested, setOpenRequested] = useState(!!initialPath);
 
   // Pre-populate the path from the auto-detected default the moment paths arrive.
   useEffect(() => {
-    if (paths && !pathTouched) {
+    if (paths && !pathTouched && kind !== "faro") {
       const next =
         kind === "openssh"
           ? paths.openssh ?? ""
@@ -147,6 +167,16 @@ function ImporterTab({
   // never installed): say so plainly instead of showing a read error.
   const missingDefault = !!paths && !defaultExists && !!path && path === defaultPath;
 
+  const show = (result: ProfilePreview[]) => {
+    setPreviews(result);
+    // Select everything by default — users usually want to bring it all in
+    // and then drop the few they don't. Duplicates default to Skip.
+    setSelected(new Set(result.map((p) => p.previewId)));
+    setResolutions(
+      Object.fromEntries(result.filter((p) => p.conflict).map((p) => [p.previewId, "skip" as const]))
+    );
+  };
+
   const scan = useCallback(async () => {
     if (missingDefault) {
       setError(null);
@@ -158,18 +188,19 @@ function ImporterTab({
     setError(null);
     setSavedCount(null);
     try {
-      let result: ProfilePreview[];
-      if (kind === "openssh") {
-        result = await ipc.importOpenssh(path || undefined);
+      if (kind === "faro") {
+        const r = await ipc.importFaroFile(path, passphrase || undefined);
+        setLocked(r.encrypted);
+        setWithSecrets(r.secrets);
+        if (r.previews) show(r.previews);
+        else setPreviews(null);
+      } else if (kind === "openssh") {
+        show(await ipc.importOpenssh(path || undefined));
       } else if (kind === "filezilla") {
-        result = await ipc.importFilezilla(path || undefined);
+        show(await ipc.importFilezilla(path || undefined));
       } else {
-        result = await ipc.importPutty();
+        show(await ipc.importPutty());
       }
-      setPreviews(result);
-      // Select everything by default — users usually want to bring it all in
-      // and then drop the few they don't.
-      setSelected(new Set(result.map((p) => p.previewId)));
     } catch (e) {
       setError(String(e));
       setPreviews(null);
@@ -177,14 +208,42 @@ function ImporterTab({
       setLoading(false);
       setAutoScanned(true);
     }
-  }, [kind, path, missingDefault]);
+  }, [kind, path, missingDefault, passphrase]);
 
   // Auto-scan when the tab opens, but only when the path is autodetected.
   useEffect(() => {
-    if (active && !autoScanned && !pathTouched && (kind === "putty" || path)) {
+    if (active && !autoScanned && kind !== "faro" && !pathTouched && (kind === "putty" || path)) {
       scan();
     }
   }, [active, autoScanned, kind, path, pathTouched, scan]);
+
+  useEffect(() => {
+    if (active && openRequested && path) {
+      setOpenRequested(false);
+      scan();
+    }
+  }, [active, openRequested, path, scan]);
+
+  const browse = async () => {
+    const picked = await open({
+      title: kind === "faro" ? "Choose a Faro connections file" : "Choose a file to import",
+      multiple: false,
+      filters:
+        kind === "faro"
+          ? [{ name: "Faro connections", extensions: ["faro"] }]
+          : kind === "filezilla"
+            ? [{ name: "FileZilla sites", extensions: ["xml"] }]
+            : undefined,
+    });
+    if (typeof picked !== "string") return;
+    setPath(picked);
+    setPathTouched(true);
+    setPreviews(null);
+    setLocked(false);
+    setPassphrase("");
+    setError(null);
+    setOpenRequested(true);
+  };
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -199,16 +258,32 @@ function ImporterTab({
     [previews, selected]
   );
 
+  // What Import will actually save: ticked rows, minus duplicates set to Skip.
+  const toImport = useMemo(
+    () =>
+      (previews ?? [])
+        .filter((p) => selected.has(p.previewId))
+        .filter((p) => !p.conflict || resolutions[p.previewId] !== "skip"),
+    [previews, selected, resolutions]
+  );
+
   const importSelected = async () => {
-    if (!previews) return;
-    const chosen = previews.filter((p) => selected.has(p.previewId));
-    if (chosen.length === 0) return;
+    if (toImport.length === 0) return;
     setSaving(true);
     setError(null);
     try {
-      const n = await ipc.saveImportedProfiles(chosen);
+      const n = await ipc.saveImportedProfiles(
+        toImport.map((p) => ({ ...p, resolution: p.conflict ? resolutions[p.previewId] : undefined }))
+      );
       setSavedCount(n);
       await loadProfiles();
+      const unfinished = toImport.filter((p) => p.needs?.length).length;
+      if (unfinished) {
+        toast.info(
+          `${unfinished} imported connection${unfinished === 1 ? " needs" : "s need"} a credential`,
+          "Open them from the rail to pick a key, enter a password or sign in."
+        );
+      }
       // Auto-close after a moment so the user sees the success state.
       setTimeout(onDone, 900);
     } catch (e) {
@@ -219,9 +294,11 @@ function ImporterTab({
   };
 
   const isRegistry = kind === "putty" && path.startsWith("HKCU\\");
+  const conflicts = (previews ?? []).filter((p) => p.conflict).length;
 
   return (
     <div
+      role="tabpanel"
       className={cn(
         "flex flex-1 flex-col overflow-hidden px-4 py-3",
         !active && "hidden"
@@ -237,12 +314,25 @@ function ImporterTab({
             onChange={(e) => {
               setPath(e.target.value);
               setPathTouched(true);
+              setLocked(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && path) scan();
             }}
             disabled={isRegistry}
             className="w-full rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 font-mono text-[11.5px] outline-none focus:border-accent disabled:opacity-60"
             placeholder={hintFor(kind)}
           />
         </label>
+        {kind !== "putty" && (
+          <button
+            onClick={browse}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-[12px] hover:bg-bg-hover"
+          >
+            <FolderOpen size={12} />
+            Browse…
+          </button>
+        )}
         <button
           onClick={scan}
           disabled={loading || (kind !== "putty" && !path)}
@@ -254,19 +344,52 @@ function ImporterTab({
           ) : (
             <RefreshCw size={12} />
           )}
-          Scan
+          {kind === "faro" ? "Open" : "Scan"}
         </button>
       </div>
 
+      {kind === "faro" && locked && previews === null && (
+        <form
+          className="mb-3 flex items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (passphrase) scan();
+          }}
+        >
+          <label className="flex-1">
+            <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-text-muted">
+              <Lock size={10} />
+              This file is encrypted
+            </div>
+            <input
+              type="password"
+              aria-label="Passphrase"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              autoFocus
+              placeholder="Passphrase"
+              className="w-full rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={loading || !passphrase}
+            className="btn-accent rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            Unlock
+          </button>
+        </form>
+      )}
+
       {error && (
-        <div className="mb-2 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-2 text-[11.5px] text-text">
+        <div role="alert" className="mb-2 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-2 text-[11.5px] text-text">
           <AlertTriangle size={12} className="mt-0.5 shrink-0 text-danger" />
           <span className="break-all">{error}</span>
         </div>
       )}
 
       {savedCount !== null && (
-        <div className="mb-2 flex items-center gap-2 rounded-md border border-accent/30 bg-accent-soft px-2.5 py-2 text-[11.5px]">
+        <div role="status" className="mb-2 flex items-center gap-2 rounded-md border border-accent/30 bg-accent-soft px-2.5 py-2 text-[11.5px]">
           <CheckCircle2 size={12} className="text-accent" />
           Imported {savedCount} connection{savedCount === 1 ? "" : "s"}.
         </div>
@@ -280,22 +403,32 @@ function ImporterTab({
             {kind === "openssh"
               ? "That's normal if you've never created one."
               : "That's normal if FileZilla isn't installed or has no saved sites."}{" "}
-            Enter another file path, or try another tab.
+            Choose a file, or try another tab.
           </Empty>
         )}
-        {!missingDefault && previews === null && !loading && !error && (
+        {!missingDefault && previews === null && !loading && !error && !locked && (
           <Empty>
-            Click <strong>Scan</strong> to read connections from this source.
+            {kind === "faro" ? (
+              <>
+                Choose a <strong>.faro</strong> file exported from Faro, or drop one onto the window.
+              </>
+            ) : (
+              <>
+                Click <strong>Scan</strong> to read connections from this source.
+              </>
+            )}
           </Empty>
         )}
         {previews && previews.length === 0 && (
           <Empty>
             No connections found.{" "}
-            {kind === "openssh"
-              ? "Try editing the path — or check that ~/.ssh/config exists."
-              : kind === "filezilla"
-                ? "Check that FileZilla has any saved sites."
-                : "No PuTTY sessions are registered for this user."}
+            {kind === "faro"
+              ? "The file is empty."
+              : kind === "openssh"
+                ? "Try editing the path — or check that ~/.ssh/config exists."
+                : kind === "filezilla"
+                  ? "Check that FileZilla has any saved sites."
+                  : "No PuTTY sessions are registered for this user."}
           </Empty>
         )}
         {previews && previews.length > 0 && (
@@ -316,6 +449,15 @@ function ImporterTab({
               <span>
                 {selected.size} of {previews.length} selected
               </span>
+              <div className="flex-1" />
+              {kind === "faro" && (
+                <span className="text-text-dim">{withSecrets ? "with secrets" : "no secrets in this file"}</span>
+              )}
+              {conflicts > 0 && (
+                <span className="text-text-dim">
+                  · {conflicts} already exist{conflicts === 1 ? "s" : ""}
+                </span>
+              )}
             </div>
             {previews.map((p) => (
               <PreviewRow
@@ -323,6 +465,8 @@ function ImporterTab({
                 preview={p}
                 checked={selected.has(p.previewId)}
                 onToggle={() => toggle(p.previewId)}
+                resolution={resolutions[p.previewId]}
+                onResolve={(r) => setResolutions((prev) => ({ ...prev, [p.previewId]: r }))}
               />
             ))}
           </>
@@ -338,7 +482,7 @@ function ImporterTab({
         </button>
         <button
           onClick={importSelected}
-          disabled={saving || !previews || selected.size === 0}
+          disabled={saving || toImport.length === 0}
           className="btn-accent flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
         >
           {saving ? (
@@ -346,59 +490,106 @@ function ImporterTab({
           ) : (
             <Download size={11} />
           )}
-          Import {selected.size > 0 ? `(${selected.size})` : ""}
+          Import {toImport.length > 0 ? `(${toImport.length})` : ""}
         </button>
       </div>
     </div>
   );
 }
 
+const NEED_LABEL: Record<ImportNeed, string> = {
+  key: "needs a key",
+  password: "needs a password",
+  "sign-in": "needs sign-in",
+  "token secret": "needs token secret",
+};
+
+const NEED_HINT: Record<ImportNeed, string> = {
+  key: "No key file at this path on this machine; pick one in the connection editor.",
+  password: "The password didn't come along; you'll be asked for it, or can save it in the editor.",
+  "sign-in": "Sign in to this cloud account again after importing.",
+  "token secret": "The Access service token secret didn't come along; enter it in the editor.",
+};
+
 function PreviewRow({
   preview: p,
   checked,
   onToggle,
+  resolution,
+  onResolve,
 }: {
   preview: ProfilePreview;
   checked: boolean;
   onToggle: () => void;
+  resolution?: ImportResolution;
+  onResolve: (r: ImportResolution) => void;
 }) {
   return (
-    <label
+    <div
+      data-testid="import-row"
       className={cn(
-        "flex cursor-pointer items-center gap-2.5 border-b border-border-subtle px-3 py-2 hover:bg-bg-hover",
+        "border-b border-border-subtle px-3 py-2 hover:bg-bg-hover",
         checked ? "bg-bg-panel" : ""
       )}
     >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onToggle}
-        className="accent-accent"
-      />
-      <ProtocolBadge protocol={p.protocol} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12.5px] font-medium">{p.name}</div>
-        <div className="truncate font-mono text-[11px] text-text-dim">
-          {p.username ? `${p.username}@` : ""}
-          {p.host}
-          {p.port && p.port !== defaultPortFor(p.protocol)
-            ? `:${p.port}`
-            : ""}
+      <label className="flex cursor-pointer items-center gap-2.5">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggle}
+          className="accent-accent"
+        />
+        <ProtocolBadge protocol={p.protocol} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-medium">{p.name}</div>
+          <div className="truncate font-mono text-[11px] text-text-dim">
+            {p.username ? `${p.username}@` : ""}
+            {p.host}
+            {p.port && p.port !== defaultPortFor(p.protocol)
+              ? `:${p.port}`
+              : ""}
+          </div>
         </div>
-      </div>
-      {p.identityFile && (
-        <span
-          title={p.identityFile}
-          className="rounded bg-bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-text-dim"
-        >
-          <FileText size={10} className="mr-0.5 inline align-text-bottom" />
-          key
-        </span>
+        {p.needs?.map((n) => (
+          <span
+            key={n}
+            title={NEED_HINT[n]}
+            className="shrink-0 rounded bg-warning-soft px-1.5 py-0.5 text-[10px] text-text"
+          >
+            {NEED_LABEL[n]}
+          </span>
+        ))}
+        {p.identityFile && !p.needs?.includes("key") && (
+          <span
+            title={p.identityFile}
+            className="rounded bg-bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-text-dim"
+          >
+            <FileText size={10} className="mr-0.5 inline align-text-bottom" />
+            key
+          </span>
+        )}
+        {p.note && (
+          <span className="max-w-[9rem] truncate text-[10px] text-text-dim">{p.note}</span>
+        )}
+      </label>
+      {p.conflict && checked && (
+        <div className="mt-1.5 flex items-center gap-2 pl-6 text-[11px] text-text-muted">
+          <span className="min-w-0 truncate">
+            {p.conflict.byName ? "A connection named" : "Same server as"} “{p.conflict.name}” already exists.
+          </span>
+          <select
+            aria-label={`What to do with ${p.name}`}
+            value={resolution ?? "skip"}
+            onChange={(e) => onResolve(e.target.value as ImportResolution)}
+            className="ml-auto rounded border border-border bg-bg-subtle px-1.5 py-0.5 text-[11px] outline-none focus:border-accent"
+          >
+            <option value="skip">Skip</option>
+            <option value="copy">Import as copy</option>
+            <option value="replace">Replace</option>
+          </select>
+        </div>
       )}
-      {p.note && (
-        <span className="text-[10px] text-text-dim">{p.note}</span>
-      )}
-    </label>
+    </div>
   );
 }
 

@@ -35,7 +35,6 @@ import { useBridge } from "@/stores/bridgeStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSettings } from "@/stores/settingsStore";
 import { ProfileEditor } from "./ProfileEditor";
-import { ImportDialog } from "./ImportDialog";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { ConfirmModal } from "./ConfirmModal";
 import { Tooltip } from "./ui/Tooltip";
@@ -136,6 +135,7 @@ export function ServerRail() {
   const openDialog = useLayout((s) => s.openDialog);
   const openNewConnection = useLayout((s) => s.openNewConnection);
   const openExport = useLayout((s) => s.openExport);
+  const openImport = useLayout((s) => s.openImport);
   const browseLocal = useLayout((s) => s.browseLocal);
   const setBrowseLocal = useLayout((s) => s.setBrowseLocal);
   const browserLayout = useSettings((s) => s.browserLayout);
@@ -155,7 +155,6 @@ export function ServerRail() {
   const stopBridge = useBridge((s) => s.stop);
 
   const [editing, setEditing] = useState<ConnectionProfile | "new" | null>(null);
-  const [importing, setImporting] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchToggleRef = useRef<HTMLDivElement>(null);
   // Which profile we last asked to connect — localizes the global
@@ -884,8 +883,8 @@ export function ServerRail() {
         </RailIconButton>
         <RailIconButton
           expanded={expanded}
-          label="Import from PuTTY, OpenSSH, FileZilla…"
-          onClick={() => setImporting(true)}
+          label="Import connections…"
+          onClick={() => openImport()}
         >
           <Download size={16} />
         </RailIconButton>
@@ -927,7 +926,6 @@ export function ServerRail() {
           onClose={() => setEditing(null)}
         />
       )}
-      {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {groupPrompt && (
         <GroupNameDialog
           title={
