@@ -254,6 +254,10 @@ fn handle(fake: &Fake, method: &str, path: &str, query: &str, auth: &str, body: 
         ("DELETE", Some(id)) => {
             let items = store.get_mut(&collection).unwrap();
             items.retain(|i| i["id"] != id);
+            // What hangs off it goes too (a tunnel's configuration, an app's
+            // policies and CA), as in Cloudflare.
+            let prefix = format!("{collection}/{id}/");
+            store.retain(|k, _| !k.starts_with(&prefix));
             ok(json!({ "id": id }))
         }
         _ => fail("404 Not Found", 7003, "Could not route to that path"),
