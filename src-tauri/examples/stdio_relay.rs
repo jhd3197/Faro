@@ -52,6 +52,10 @@ fn main() {
             // The app's own `access ssh --hostname H`, relayed to `target-H`.
             Some("ssh") => {
                 if let Ok(target) = std::fs::read_to_string(state_file(&format!("target-{host}"))) {
+                    // Which service token it was given (issue #57), if any.
+                    if let Ok(id) = std::env::var("TUNNEL_SERVICE_TOKEN_ID") {
+                        let _ = std::fs::write(state_file(&format!("envlog-{host}")), id);
+                    }
                     access_ready(&host);
                     relay(target.trim(), None);
                     std::process::exit(0);
@@ -201,7 +205,9 @@ fn access_ssh_gen(host: &str) -> ! {
         eprintln!("failed to generate SSH certificate: 404 Not Found (no short-lived certificate CA for {host})");
         std::process::exit(1)
     };
-    let dir = std::fs::read_to_string(state_file("sshgen-dir"))
+    // Per host first, so tests running side by side don't share a folder.
+    let dir = std::fs::read_to_string(state_file(&format!("sshgen-dir-{host}")))
+        .or_else(|_| std::fs::read_to_string(state_file("sshgen-dir")))
         .map(|d| std::path::PathBuf::from(d.trim()))
         .unwrap_or_else(|_| {
             let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap();

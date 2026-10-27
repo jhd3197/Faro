@@ -434,11 +434,11 @@ async fn import_connection(
 ) -> Result<ConnectionProfile, String> {
     let id = Uuid::new_v4().to_string();
     let key_ref = format!("{GRANT_KEY_PREFIX}{id}");
-    crate::credentials::set_secret(&key_ref, pem).map_err(|e| e.to_string())?;
+    crate::credentials::set_secret(&key_ref, pem).map_err(|e| format!("{e:#}"))?;
     state
         .db
         .record_keychain(crate::credentials::SERVICE, &key_ref)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"))?;
 
     let profile = ConnectionProfile {
         id,

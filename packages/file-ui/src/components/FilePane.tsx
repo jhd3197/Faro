@@ -43,7 +43,7 @@ import type {
   SessionId,
   SortField,
 } from "../types";
-import { LOCAL_SESSION } from "../types";
+import { LOCAL_SESSION, opensAsFolder } from "../types";
 import { useFileUi } from "../context";
 import { usePathHistory } from "../hooks/usePathHistory";
 import { cn } from "../lib/cn";
@@ -347,9 +347,9 @@ export function FilePane({
       .filter((e) => q === "" || e.name.toLowerCase().includes(q))
       .slice()
       .sort((a, b) => {
-        // Directories always come before files regardless of sort.
-        if (a.kind === "directory" && b.kind !== "directory") return -1;
-        if (a.kind !== "directory" && b.kind === "directory") return 1;
+        // Directories (and links to them) always come before files.
+        if (opensAsFolder(a) && !opensAsFolder(b)) return -1;
+        if (!opensAsFolder(a) && opensAsFolder(b)) return 1;
         let cmp = 0;
         if (sortField === "size") {
           cmp = a.size - b.size;
@@ -552,7 +552,7 @@ export function FilePane({
   };
 
   const onRowActivate = (entry: DirEntry) => {
-    if (entry.kind === "directory") {
+    if (opensAsFolder(entry)) {
       onPathChange(entry.path);
       return;
     }
@@ -645,7 +645,7 @@ export function FilePane({
     const items: MenuItem[] = [];
     if (single) {
       items.push({
-        label: single.kind === "directory" ? "Open" : transferLabel,
+        label: opensAsFolder(single) ? "Open" : transferLabel,
         onClick: () => onRowActivate(single),
       });
       if (single.kind === "directory" && isRemote && onSaveSite) {
@@ -1538,7 +1538,7 @@ const Row = memo(function Row({
     ? "bg-accent/15 hover:bg-accent/20"
     : "hover:bg-bg-hover";
   const title =
-    entry.kind === "file"
+    !opensAsFolder(entry)
       ? "Double-click to transfer • Right-click for more"
       : "Double-click to open • Right-click for more";
   // Prefer a Material Icon Theme SVG for known file types; fall back to the

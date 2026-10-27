@@ -60,4 +60,5 @@ export {
   type PaneViewMode,
   type PaneDensity,
   type ArchiveFormat,
+  opensAsFolder,
 } from "./types";

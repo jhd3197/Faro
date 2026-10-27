@@ -30,6 +30,17 @@ import type {
   AccessStatus,
   CloudflaredStatus,
   ImporterPaths,
+  FaroImport,
+  CfAccountStatus,
+  CfSshHostname,
+  CfInvitePlan,
+  CfZone,
+  CfCreated,
+  CfSetupState,
+  CfSetupRequest,
+  RootRun,
+  ExportFormat,
+  ExportSummary,
   ProfilePreview,
   SessionId,
   SyncDirection,
@@ -433,6 +444,46 @@ export const ipc = {
 
   saveImportedProfiles: (previews: ProfilePreview[]) =>
     invoke<number>("save_imported_profiles", { previews }),
+
+  // ---- Cloudflare account (issue #57) ----
+  cfAccountStatus: () => invoke<CfAccountStatus>("cf_account_status"),
+  cfAccountConnect: (token: string, accountId?: string) =>
+    invoke<CfAccountStatus>("cf_account_connect", { token, accountId }),
+  cfAccountDisconnect: () => invoke<void>("cf_account_disconnect"),
+  cfAccountHostnames: () => invoke<CfSshHostname[]>("cf_account_hostnames"),
+  cfAccountCreateServiceToken: () => invoke<CfAccountStatus>("cf_account_create_service_token"),
+  cfAccountDeleteServiceToken: () => invoke<CfAccountStatus>("cf_account_delete_service_token"),
+  cfAccountZones: () => invoke<CfZone[]>("cf_account_zones"),
+  /** The Cloudflare side of moving a server behind Cloudflare. */
+  cfSetupCloudflare: (profileId: string, request: CfSetupRequest) =>
+    invoke<CfSetupState>("cf_setup_cloudflare", { profileId, request }),
+  cfTunnelStatus: (tunnelId: string) => invoke<string>("cf_tunnel_status", { tunnelId }),
+  /** Delete what a setup created; returns what couldn't be deleted. */
+  cfSetupUndo: (created: CfCreated[]) => invoke<string[]>("cf_setup_undo", { created }),
+  /** Which of `ports` on `host` answer from this machine. */
+  checkOpenPorts: (host: string, ports: number[]) => invoke<number[]>("check_open_ports", { host, ports }),
+  /** Who a Cloudflare connection's Access application lets in. */
+  cfAccessPeople: (profileId: string) => invoke<string[]>("cf_access_people", { profileId }),
+  /** Invite (`add`) or remove `email`: Access policy now, root command back. */
+  cfInvite: (profileId: string, email: string, add: boolean) =>
+    invoke<CfInvitePlan>("cf_invite", { profileId, email, add }),
+  /** Run a root command on a live SSH session: as root, sudo -n, or sudo with `password`. */
+  sshRunAsRoot: (sessionId: string, script: string, password?: string) =>
+    invoke<RootRun>("ssh_run_as_root", { sessionId, script, password }),
+
+  /** Read a `.faro` connections file; an encrypted one needs `passphrase`. */
+  importFaroFile: (path: string, passphrase?: string) =>
+    invoke<FaroImport>("import_faro_file", { path, passphrase }),
+
+  /** Write connections (and their jump hosts) as a `.faro` file or an
+   *  OpenSSH config. Secrets only with `includeSecrets`, encrypted. */
+  exportConnections: (args: {
+    ids: string[];
+    path: string;
+    format: ExportFormat;
+    includeSecrets: boolean;
+    passphrase?: string;
+  }) => invoke<ExportSummary>("export_connections", args),
 
   // ---- Access grants (faro://grant; docs/grant-links.md) ----
   /** Fetch the manifest a grant token offers (before consent). */

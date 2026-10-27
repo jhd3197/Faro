@@ -66,8 +66,10 @@ impl std::error::Error for FaroError {}
 
 impl From<anyhow::Error> for FaroError {
     fn from(e: anyhow::Error) -> Self {
-        let kind = classify_chain(&e, &e.to_string());
-        FaroError { kind, message: e.to_string() }
+        // `{:#}` keeps the cause chain, not just the outermost context.
+        let message = format!("{e:#}");
+        let kind = classify_chain(&e, &message);
+        FaroError { kind, message }
     }
 }
 
@@ -198,6 +200,8 @@ mod tests {
         let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
         let e: FaroError = anyhow::Error::new(io).context("while listing").into();
         assert_eq!(e.kind, ErrorKind::NotFound);
+        // The message keeps the cause, not just the outermost context.
+        assert_eq!(e.message, "while listing: missing");
     }
 
     #[test]

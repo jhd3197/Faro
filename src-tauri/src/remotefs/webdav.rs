@@ -247,6 +247,7 @@ fn parse_multistatus(xml: &str, base_path: &str, request_path: &str) -> Vec<DirE
                             if let Some((entry_path, name)) = href_to_path(&h, base_path) {
                                 if entry_path != request_norm {
                                     out.push(DirEntry {
+                                        link_dir: false,
                                         name,
                                         path: entry_path,
                                         kind: if is_collection {

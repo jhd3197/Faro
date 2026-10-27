@@ -148,23 +148,7 @@ pub fn export(dir: &Path, db: &Db, password: &str, dest: &Path) -> Result<Backup
     let summary = archive.summary();
 
     let plaintext = serde_json::to_vec(&archive).context("serialize archive")?;
-    let gz = gzip(&plaintext).context("gzip archive")?;
-
-    // Fresh random salt + nonce for every export.
-    let mut salt = [0u8; SALT_LEN];
-    let mut nonce = [0u8; NONCE_LEN];
-    rand::rngs::OsRng.fill_bytes(&mut salt);
-    rand::rngs::OsRng.fill_bytes(&mut nonce);
-
-    let header = build_header(&salt, &nonce);
-    let key = derive_key(password, &salt)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), Payload { msg: &gz, aad: &header })
-        .map_err(|_| anyhow!("encryption failed"))?;
-
-    let mut out = header;
-    out.extend_from_slice(&ciphertext);
+    let out = seal(MAGIC, password, &plaintext)?;
     std::fs::write(dest, &out).with_context(|| format!("write backup to {}", dest.display()))?;
 
     Ok(summary)
@@ -246,9 +230,58 @@ fn stage_opt(dir: &Path, name: &str, content: Option<&str>) -> Result<()> {
 
 // ---- Crypto helpers ----
 
-fn build_header(salt: &[u8; SALT_LEN], nonce: &[u8; NONCE_LEN]) -> Vec<u8> {
-    let mut h = Vec::with_capacity(MAGIC.len() + 1 + SALT_LEN + NONCE_LEN);
-    h.extend_from_slice(MAGIC);
+/// Encrypt `plaintext` into the container format above, under `magic`. Also
+/// used by `.faro` connection files (`faro_file.rs`), with their own magic.
+pub(crate) fn seal(magic: &[u8; 8], password: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+    let gz = gzip(plaintext).context("gzip archive")?;
+
+    // Fresh random salt + nonce for every export.
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce = [0u8; NONCE_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+    rand::rngs::OsRng.fill_bytes(&mut nonce);
+
+    let header = build_header(magic, &salt, &nonce);
+    let key = derive_key(password, &salt)?;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: &gz, aad: &header })
+        .map_err(|_| anyhow!("encryption failed"))?;
+    let mut out = header;
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Decrypt a container written by [`seal`] with the same `magic`. `what`
+/// names the file in errors ("a Faro backup file").
+pub(crate) fn unseal(magic: &[u8; 8], what: &str, password: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+    let header_len = magic.len() + 1 + SALT_LEN + NONCE_LEN;
+    if bytes.len() < header_len + 16 {
+        bail!("not {what} (too short)");
+    }
+    if &bytes[..magic.len()] != magic {
+        bail!("not {what} (bad magic)");
+    }
+    let version = bytes[magic.len()];
+    if version != VERSION {
+        bail!("unsupported {what} version {version}");
+    }
+    let salt = &bytes[magic.len() + 1..magic.len() + 1 + SALT_LEN];
+    let nonce = &bytes[magic.len() + 1 + SALT_LEN..header_len];
+    let header = &bytes[..header_len];
+    let ciphertext = &bytes[header_len..];
+
+    let key = derive_key(password, salt)?;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let gz = cipher
+        .decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad: header })
+        .map_err(|_| anyhow!("wrong password, or the file is corrupt"))?;
+    gunzip(&gz).context("gunzip archive")
+}
+
+fn build_header(magic: &[u8; 8], salt: &[u8; SALT_LEN], nonce: &[u8; NONCE_LEN]) -> Vec<u8> {
+    let mut h = Vec::with_capacity(magic.len() + 1 + SALT_LEN + NONCE_LEN);
+    h.extend_from_slice(magic);
     h.push(VERSION);
     h.extend_from_slice(salt);
     h.extend_from_slice(nonce);
@@ -268,28 +301,7 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; 32]> {
 
 fn decrypt(password: &str, src: &Path) -> Result<Archive> {
     let bytes = std::fs::read(src).with_context(|| format!("read backup {}", src.display()))?;
-    let header_len = MAGIC.len() + 1 + SALT_LEN + NONCE_LEN;
-    if bytes.len() < header_len + 16 {
-        bail!("not a Faro backup file (too short)");
-    }
-    if &bytes[..MAGIC.len()] != MAGIC {
-        bail!("not a Faro backup file (bad magic)");
-    }
-    let version = bytes[MAGIC.len()];
-    if version != VERSION {
-        bail!("unsupported backup version {version}");
-    }
-    let salt = &bytes[MAGIC.len() + 1..MAGIC.len() + 1 + SALT_LEN];
-    let nonce = &bytes[MAGIC.len() + 1 + SALT_LEN..header_len];
-    let header = &bytes[..header_len];
-    let ciphertext = &bytes[header_len..];
-
-    let key = derive_key(password, salt)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    let gz = cipher
-        .decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad: header })
-        .map_err(|_| anyhow!("wrong password, or the backup is corrupt"))?;
-    let plaintext = gunzip(&gz).context("gunzip archive")?;
+    let plaintext = unseal(MAGIC, "a Faro backup file", password, &bytes)?;
     serde_json::from_slice(&plaintext).context("parse archive")
 }
 

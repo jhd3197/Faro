@@ -256,13 +256,30 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
 
     // ---- importers ----
     case "importer_default_paths":
-      return { openssh: "~/.ssh/config", filezilla: null, putty: null };
+      return { openssh: "~/.ssh/config", filezilla: null, putty: null, opensshExists: true, filezillaExists: false };
     case "import_openssh":
     case "import_filezilla":
     case "import_putty":
       return [];
     case "save_imported_profiles":
       return 0;
+    case "cf_account_status":
+      return { connected: false, choices: [], permissions: [] };
+    case "cf_account_hostnames":
+    case "cf_account_zones":
+      return [];
+    case "import_faro_file":
+      // A canned team file: one duplicate of a demo server, one that needs a key.
+      return {
+        encrypted: false,
+        secrets: false,
+        previews: [
+          { previewId: "f1", name: "Bastion", protocol: "sftp", host: "bastion.demo.dev", port: 22, username: "ops", note: "group: Prod" },
+          { previewId: "f2", name: "App server", protocol: "sftp", host: "app.internal", port: 22, username: "deploy", identityFile: "~/.ssh/team_ed25519", needs: ["key"], jumpPreviewId: "f1", jumpName: "Bastion", note: "group: Prod" },
+        ],
+      };
+    case "export_connections":
+      return { connections: (a.ids as string[] | undefined)?.length ?? 0, addedJumps: [], skipped: [] };
 
     // ---- access grants (faro://grant) ----
     // A canned two-server manifest so the consent dialog renders end-to-end

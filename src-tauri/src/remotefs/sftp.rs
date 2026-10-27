@@ -53,7 +53,12 @@ impl RemoteFs for SftpFs {
                         FileKind::Other
                     };
                     let full_path = format!("{base}/{name}");
+                    // A link to a folder opens like one (stat follows it). A
+                    // broken link stays a plain link.
+                    let link_dir = kind == FileKind::Symlink
+                        && sftp.metadata(&full_path).await.is_ok_and(|m| m.is_dir());
                     out.push(DirEntry {
+                        link_dir,
                         name,
                         path: full_path,
                         kind,

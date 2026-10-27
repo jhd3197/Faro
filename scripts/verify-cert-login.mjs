@@ -6,7 +6,7 @@
 //      connection logging in with no SSH key installed for the user.
 //   2. A user whose principals file doesn't list the certificate's principal:
 //      the hint and the error both name the principal and the user.
-//   3. A service token rules the auth type out; Save says why.
+//   3. No service token on the form (it lives with the Cloudflare account).
 //   4. Save: profiles.json keeps the auth type, the rail tooltip names it.
 // The fake cloudflared (examples/stdio_relay.rs copied as cloudflared) needs,
 // next to it: token-lab.faro.test.json, target-lab.faro.test (the lab's
@@ -126,15 +126,10 @@ try {
   await type("Host", HOST);
   await type("Username", "jane.doe");
   const before = await authOption();
-  check(
-    "without the Access route the certificate auth type is unavailable",
-    before?.disabled && before.text.includes("set Proxy to Cloudflare Access"),
-    JSON.stringify(before)
-  );
-  await clickButton("Proxy & jump host", '[role="dialog"]');
-  await (await field("Proxy", "select")).select("cloudflare");
-  const after = await authOption();
-  check("with the Access route it can be picked", after && !after.disabled, JSON.stringify(after));
+  check("a direct connection doesn't offer the certificate login", before === null, JSON.stringify(before));
+  await clickButton("Through Cloudflare", '[role="dialog"] [role="radiogroup"]');
+  const after = await waitFor(authOption, 5000);
+  check("through Cloudflare it's offered", after && !after.disabled, JSON.stringify(after));
   await (await field("Auth", "select")).select("cloudflarecert");
   const principal = await waitFor(async () => {
     const t = await text('[data-testid="cf-cert-principal"]');
@@ -168,21 +163,11 @@ try {
   );
   await page.screenshot({ path: path.join(OUT, "cert-test-refused.png") });
 
-  // ---- 3. Service tokens rule it out ---------------------------------------
-  await type("Service token ID (optional)", "ci.access");
-  const blocked = await authOption();
-  check("with a service token the auth type says why it can't be used", (blocked?.text ?? "").includes("not with a service token"), JSON.stringify(blocked));
-  const saveDisabled = await page.evaluate(() => {
-    const b = [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "Save");
-    return b?.disabled ?? null;
-  });
-  check("Save is held back", saveDisabled === true, String(saveDisabled));
+  // ---- 3. Service tokens are no longer on the form (issue #57) -------------
   check(
-    "and the dialog says what to change",
-    (await page.evaluate(() => document.querySelector('[role="dialog"]').innerText)).includes("service token"),
+    "the form asks for no service token",
+    !/Service token ID|Service token secret/.test(await page.evaluate(() => document.querySelector('[role="dialog"]').innerText))
   );
-  await page.screenshot({ path: path.join(OUT, "cert-service-token.png") });
-  await type("Service token ID (optional)", "");
 
   // ---- 4. Save ---------------------------------------------------------------
   await type("Username", "shared");

@@ -9,12 +9,15 @@ use tauri::Manager;
 // secrets directly — credentials live in profiles::ConnectionProfile, which
 // the CLI deliberately redacts in `profiles show`.
 pub mod backup;
+pub mod faro_file;
 pub mod bridge;
 pub mod commands;
 mod agent_host;
 mod app_updater;
 pub mod cli_updater;
 pub mod cloudflared;
+pub mod cloudflare_api;
+pub mod cf_setup;
 pub mod credentials;
 pub mod db;
 mod deeplink;
@@ -491,6 +494,20 @@ pub fn run() {
             cloudflared::cloudflared_set_custom_path,
             cloudflared::cf_access_status,
             cloudflared::cf_access_login,
+            cloudflare_api::cf_account_status,
+            cloudflare_api::cf_account_connect,
+            cloudflare_api::cf_account_disconnect,
+            cloudflare_api::cf_account_hostnames,
+            cloudflare_api::cf_account_create_service_token,
+            cloudflare_api::cf_account_delete_service_token,
+            cf_setup::cf_access_people,
+            cf_setup::cf_invite,
+            cf_setup::ssh_run_as_root,
+            cf_setup::cf_setup_cloudflare,
+            cf_setup::cf_tunnel_status,
+            cf_setup::cf_setup_undo,
+            cf_setup::check_open_ports,
+            cloudflare_api::cf_account_zones,
             path_integration::path_status,
             path_integration::path_add,
             path_integration::path_remove,
@@ -525,6 +542,8 @@ pub fn run() {
             commands::respond_to_auth_prompt,
             commands::importer_default_paths,
             commands::import_openssh,
+            commands::import_faro_file,
+            commands::export_connections,
             commands::import_filezilla,
             commands::import_putty,
             commands::save_imported_profiles,

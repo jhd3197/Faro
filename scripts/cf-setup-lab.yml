@@ -1,0 +1,50 @@
+# "Move behind Cloudflare" lab (issue #57): a plain sshd for Faro to set up.
+#
+#   deploy / lab-pass   logs in with a password, may sudo without one
+#
+# Its `cloudflared` is a stand-in: `service install <token>` tells the fake
+# Cloudflare API (examples/fake_cloudflare.rs, on the host at port 8787) that
+# the tunnel is up, which is all the setup flow waits for. Everything else the
+# setup script does is real: the CA file, the principals, the sshd_config
+# change behind `sshd -t`, the reload.
+#   docker compose -f scripts/cf-setup-lab.yml up -d
+# scripts/verify-cf-setup.mjs drives the app against it.
+services:
+  sshd:
+    image: alpine:3.20
+    ports:
+      - "127.0.0.1:2224:22"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache openssh sudo curl >/dev/null
+        ssh-keygen -A >/dev/null
+        adduser -D -s /bin/sh deploy
+        echo 'deploy:lab-pass' | chpasswd
+        echo 'deploy ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/deploy
+        cat > /usr/local/bin/cloudflared <<'EOF'
+        #!/bin/sh
+        # Lab stand-in for cloudflared's service commands.
+        case "$$1 $$2" in
+          "service install")
+            id=$${3#tunnel-token-}
+            curl -fsS -X POST "http://host.docker.internal:8787/__fake/tunnels/$$id/connect" >/dev/null
+            echo "cloudflared service installed (lab)" ;;
+          "service uninstall") echo "cloudflared service uninstalled (lab)" ;;
+          *) echo "lab cloudflared: $$*" ;;
+        esac
+        EOF
+        chmod 755 /usr/local/bin/cloudflared
+        cat > /etc/ssh/sshd_config <<'EOF'
+        PasswordAuthentication yes
+        KbdInteractiveAuthentication no
+        Subsystem sftp internal-sftp
+        PidFile /run/sshd.pid
+        LogLevel VERBOSE
+        EOF
+        sshd -t
+        exec /usr/sbin/sshd -D -e

@@ -16,8 +16,11 @@ pub const LOCAL_SESSION: &str = "local";
 
 /// Convert any error to a string for crossing the IPC boundary. The frontend
 /// surfaces these directly to the user, so the Display message must be useful.
+/// The alternate form keeps an `anyhow` error's whole cause chain ("Couldn't
+/// read X: access is denied"); plain `to_string()` would print only "Couldn't
+/// read X".
 fn err<E: std::fmt::Display>(e: E) -> String {
-    e.to_string()
+    format!("{e:#}")
 }
 
 // ---------- Profiles ----------
@@ -1627,38 +1630,96 @@ pub struct ImporterPaths {
     pub openssh: Option<String>,
     pub filezilla: Option<String>,
     pub putty: Option<String>,
+    /// Whether the default files exist. A missing one is normal (no
+    /// `~/.ssh/config` yet, FileZilla never installed), so the UI shows an
+    /// empty state instead of a read error.
+    pub openssh_exists: bool,
+    pub filezilla_exists: bool,
 }
 
 #[tauri::command]
 pub fn importer_default_paths() -> ImporterPaths {
+    let openssh = importers::openssh::default_path();
+    let filezilla = importers::filezilla::default_path();
     ImporterPaths {
-        openssh: importers::openssh::default_path().map(|p| p.display().to_string()),
-        filezilla: importers::filezilla::default_path().map(|p| p.display().to_string()),
+        openssh_exists: openssh.as_ref().is_some_and(|p| p.is_file()),
+        filezilla_exists: filezilla.as_ref().is_some_and(|p| p.is_file()),
+        openssh: openssh.map(|p| p.display().to_string()),
+        filezilla: filezilla.map(|p| p.display().to_string()),
         putty: importers::putty::default_path().map(|p| p.display().to_string()),
     }
 }
 
+/// Previews with any existing connection they'd duplicate marked.
+async fn with_conflicts(
+    mut previews: Vec<ProfilePreview>,
+    state: &State<'_, AppState>,
+) -> Result<Vec<ProfilePreview>, String> {
+    let existing = state.profiles.list().await.map_err(err)?;
+    importers::mark_conflicts(&mut previews, &existing);
+    Ok(previews)
+}
+
 #[tauri::command]
-pub fn import_openssh(path: Option<String>) -> Result<Vec<ProfilePreview>, String> {
+pub async fn import_openssh(
+    path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ProfilePreview>, String> {
     let path = path
         .map(std::path::PathBuf::from)
         .or_else(importers::openssh::default_path)
         .ok_or_else(|| "could not determine ~/.ssh/config location".to_string())?;
-    importers::openssh::parse_file(&path).map_err(err)
+    with_conflicts(importers::openssh::parse_file(&path).map_err(err)?, &state).await
 }
 
 #[tauri::command]
-pub fn import_filezilla(path: Option<String>) -> Result<Vec<ProfilePreview>, String> {
+pub async fn import_filezilla(
+    path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ProfilePreview>, String> {
     let path = path
         .map(std::path::PathBuf::from)
         .or_else(importers::filezilla::default_path)
         .ok_or_else(|| "could not determine FileZilla sitemanager.xml location".to_string())?;
-    importers::filezilla::parse_file(&path).map_err(err)
+    with_conflicts(importers::filezilla::parse_file(&path).map_err(err)?, &state).await
 }
 
 #[tauri::command]
-pub fn import_putty() -> Result<Vec<ProfilePreview>, String> {
-    importers::putty::parse_default().map_err(err)
+pub async fn import_putty(state: State<'_, AppState>) -> Result<Vec<ProfilePreview>, String> {
+    with_conflicts(importers::putty::parse_default().map_err(err)?, &state).await
+}
+
+/// A `.faro` file read for the Import dialog. `previews` is absent while an
+/// encrypted file waits for its passphrase.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaroImport {
+    pub encrypted: bool,
+    pub secrets: bool,
+    pub previews: Option<Vec<ProfilePreview>>,
+}
+
+#[tauri::command]
+pub async fn import_faro_file(
+    path: String,
+    passphrase: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<FaroImport, String> {
+    let path = std::path::PathBuf::from(path);
+    let bytes = std::fs::read(&path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
+    let encrypted = crate::faro_file::is_encrypted(&bytes);
+    let passphrase = passphrase.filter(|p| !p.is_empty());
+    if encrypted && passphrase.is_none() {
+        return Ok(FaroImport { encrypted, secrets: true, previews: None });
+    }
+    // Argon2 takes a moment; keep it off the async runtime.
+    let file = tauri::async_runtime::spawn_blocking(move || crate::faro_file::decode(&bytes, passphrase.as_deref()))
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    let secrets = file.secrets;
+    let previews = with_conflicts(crate::faro_file::previews(file), &state).await?;
+    Ok(FaroImport { encrypted, secrets, previews: Some(previews) })
 }
 
 #[tauri::command]
@@ -1666,12 +1727,64 @@ pub async fn save_imported_profiles(
     previews: Vec<ProfilePreview>,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    let n = previews.len();
     let existing = state.profiles.list().await.map_err(err)?;
-    for profile in crate::importers::into_profiles(previews, &existing) {
+    let profiles = crate::importers::into_profiles_with_keys(previews, &existing);
+    let n = profiles.len();
+    for (mut profile, key) in profiles {
+        // A keychain-held key from an encrypted `.faro` file goes back into
+        // this machine's keychain, under the new profile's id.
+        if let Some(pem) = key.filter(|_| matches!(profile.auth, AuthMethod::KeyRef { .. })) {
+            let key_ref = format!("{}{}", crate::grant::GRANT_KEY_PREFIX, profile.id);
+            crate::credentials::set_secret(&key_ref, &pem).map_err(err)?;
+            state.db.record_keychain(crate::credentials::SERVICE, &key_ref).map_err(err)?;
+            profile.auth = AuthMethod::KeyRef { key_ref };
+        }
+        if state.profiles.keychain_enabled() {
+            crate::profiles::sync_profile_secret(&profile, &state.db, false).map_err(err)?;
+        }
         state.profiles.upsert(profile).await.map_err(err)?;
     }
     Ok(n)
+}
+
+/// Write the connections `ids` (and the jump hosts they go through) to
+/// `path`: a `.faro` file (`format = "faro"`), encrypted with `passphrase`
+/// when `include_secrets`, or an OpenSSH config (`format = "openssh"`).
+#[tauri::command]
+pub async fn export_connections(
+    ids: Vec<String>,
+    path: String,
+    format: String,
+    include_secrets: bool,
+    passphrase: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<crate::faro_file::ExportSummary, String> {
+    let all = state.profiles.list().await.map_err(err)?;
+    let path = std::path::PathBuf::from(path);
+    let (bytes, summary) = match format.as_str() {
+        "openssh" => {
+            let (text, summary) = crate::faro_file::to_openssh_config(&all, &ids);
+            (text.into_bytes(), summary)
+        }
+        "faro" => {
+            let (file, summary) = crate::faro_file::build(&all, &ids, include_secrets, |key_ref| {
+                crate::credentials::get_secret(key_ref).ok().flatten()
+            });
+            let bytes = tauri::async_runtime::spawn_blocking(move || {
+                crate::faro_file::encode(&file, passphrase.as_deref())
+            })
+            .await
+            .map_err(err)?
+            .map_err(err)?;
+            (bytes, summary)
+        }
+        other => return Err(format!("unknown export format '{other}'")),
+    };
+    if summary.connections == 0 {
+        return Err("None of these connections can be exported in this format.".into());
+    }
+    crate::fsutil::write_atomic(&path, &bytes).map_err(|e| format!("Couldn't write {}: {e:#}", path.display()))?;
+    Ok(summary)
 }
 
 // ---------- Sync ----------
@@ -2121,7 +2234,7 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("refusing to open a {} link", parsed.scheme()));
     }
-    crate::proc::open_in_browser(parsed.as_str()).map_err(|e| e.to_string())
+    crate::proc::open_in_browser(parsed.as_str()).map_err(|e| format!("{e:#}"))
 }
 
 /// Faro's fixed app id for WordPress's "Authorize Application" page (it

@@ -188,6 +188,7 @@ pub fn resolve_rest(namespaces: &[String], routes: &[RouteInfo], segs: &[String]
 
 fn dir_entry(base: &str, name: &str) -> DirEntry {
     DirEntry {
+        link_dir: false,
         name: name.to_string(),
         path: join(base, name),
         kind: FileKind::Directory,
@@ -200,6 +201,7 @@ fn dir_entry(base: &str, name: &str) -> DirEntry {
 
 fn file_entry(base: &str, name: &str, size: u64, modified: Option<i64>) -> DirEntry {
     DirEntry {
+        link_dir: false,
         name: name.to_string(),
         path: join(base, name),
         kind: FileKind::File,

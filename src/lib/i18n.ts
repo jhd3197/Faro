@@ -566,6 +566,27 @@ const ZH: Record<string, string> = {
   "cancels,": "取消，",
   "resets to default. File-browser keys apply while a file pane is focused; they never fire while you're typing.": "恢复默认。文件浏览器快捷键仅在文件面板获得焦点时生效，输入文字时不会触发。",
   "Allow paired controllers to modify this machine's filesystem. Reads and directory listings are always allowed once paired.": "允许已配对的控制端修改本机文件系统。配对后始终允许读取和列出目录。",
+  // Import / Export (issue #58)
+  Import: "导入",
+  Export: "导出",
+  "Export…": "导出…",
+  "Export as OpenSSH config…": "导出为 OpenSSH 配置…",
+  "Export group…": "导出分组…",
+  "Export all connections…": "导出所有连接…",
+  "Faro file": "Faro 文件",
+  "Include secrets": "包含机密信息",
+  "Browse…": "浏览…",
+  Open: "打开",
+  Unlock: "解锁",
+  "Import as copy": "作为副本导入",
+  Replace: "替换",
+  Passphrase: "密码短语",
+  "Confirm passphrase": "确认密码短语",
+  "This file is encrypted": "此文件已加密",
+  "needs a key": "需要密钥",
+  "needs a password": "需要密码",
+  "needs sign-in": "需要登录",
+  "needs token secret": "需要令牌密钥",
 };
 
 const ATTRIBUTES = ["title", "aria-label", "placeholder", "alt"];

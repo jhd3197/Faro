@@ -130,6 +130,7 @@ impl RemoteFs for ShopifyFs {
                 .themes()
                 .into_iter()
                 .map(|t| DirEntry {
+                    link_dir: false,
                     name: t.display_name(),
                     path: format!("/{}", t.display_name()),
                     kind: FileKind::Directory,
@@ -271,6 +272,7 @@ fn children(base: &str, prefix: &str, assets: &[AssetMeta]) -> Vec<DirEntry> {
                     .any(|e| e.kind == FileKind::Directory && e.name == dir)
                 {
                     out.push(DirEntry {
+                        link_dir: false,
                         name: dir.to_string(),
                         path: format!("{base}/{dir}"),
                         kind: FileKind::Directory,
@@ -296,6 +298,7 @@ fn children(base: &str, prefix: &str, assets: &[AssetMeta]) -> Vec<DirEntry> {
 fn file_entry(a: &AssetMeta, base: &str) -> DirEntry {
     let name = a.key.rsplit('/').next().unwrap_or(&a.key).to_string();
     DirEntry {
+        link_dir: false,
         path: format!("{base}/{name}"),
         name,
         kind: FileKind::File,

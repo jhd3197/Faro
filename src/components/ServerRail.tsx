@@ -3,6 +3,11 @@ import { createPortal } from "react-dom";
 import {
   Plus,
   Download,
+  Upload,
+  FileCode,
+  Link2,
+  UserPlus,
+  Cloud,
   Search,
   Radio,
   Plug,
@@ -33,7 +38,6 @@ import { useBridge } from "@/stores/bridgeStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSettings } from "@/stores/settingsStore";
 import { ProfileEditor } from "./ProfileEditor";
-import { ImportDialog } from "./ImportDialog";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { ConfirmModal } from "./ConfirmModal";
 import { Tooltip } from "./ui/Tooltip";
@@ -51,6 +55,8 @@ import { BRAND_ICONS } from "@/lib/brandIconData";
 import { ServerSites, leaveSiteNavigation } from "./ServerSites";
 import { useSites } from "@/stores/sitesStore";
 import { toastError } from "@/lib/errors";
+import { canLink, connectLink } from "@/lib/connectLink";
+import { toast } from "@/stores/toastStore";
 import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
 import { effectiveAccess, accessSummary } from "@/lib/agentAccess";
 import type { ProfileAccess } from "@/lib/types";
@@ -133,6 +139,10 @@ export function ServerRail() {
   const setTerminalOpen = useLayout((s) => s.setTerminalOpen);
   const openDialog = useLayout((s) => s.openDialog);
   const openNewConnection = useLayout((s) => s.openNewConnection);
+  const openExport = useLayout((s) => s.openExport);
+  const openImport = useLayout((s) => s.openImport);
+  const openInvite = useLayout((s) => s.openInvite);
+  const openMoveToCloudflare = useLayout((s) => s.openMoveToCloudflare);
   const browseLocal = useLayout((s) => s.browseLocal);
   const setBrowseLocal = useLayout((s) => s.setBrowseLocal);
   const browserLayout = useSettings((s) => s.browserLayout);
@@ -152,7 +162,6 @@ export function ServerRail() {
   const stopBridge = useBridge((s) => s.stop);
 
   const [editing, setEditing] = useState<ConnectionProfile | "new" | null>(null);
-  const [importing, setImporting] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchToggleRef = useRef<HTMLDivElement>(null);
   // Which profile we last asked to connect — localizes the global
@@ -449,8 +458,51 @@ export function ServerRail() {
           account: oauthAccount ? undefined : p.account,
         });
       },
-      separatorAfter: true,
     });
+    if (p.protocol === "sftp" && p.proxyCommand?.kind === "cloudflare") {
+      items.push({
+        label: "Invite…",
+        icon: <UserPlus size={14} />,
+        onClick: () => openInvite([p.id]),
+      });
+    } else if (p.protocol === "sftp" && !p.jumpProfile && !p.proxyCommand && !p.proxy) {
+      items.push({
+        label: "Move behind Cloudflare…",
+        icon: <Cloud size={14} />,
+        onClick: () => openMoveToCloudflare(p.id),
+      });
+    }
+    if (canLink(p)) {
+      items.push({
+        label: "Copy link",
+        icon: <Link2 size={14} />,
+        onClick: () => {
+          navigator.clipboard
+            .writeText(connectLink(p))
+            .then(() =>
+              toast.success(
+                "Link copied",
+                "Opening it in Faro prefills a new connection to this server. No password or key is in the link."
+              )
+            )
+            .catch((e) => toastError(e, "Couldn't copy the link"));
+        },
+      });
+    }
+    items.push({
+      label: "Export…",
+      icon: <Upload size={14} />,
+      onClick: () => openExport({ ids: [p.id], format: "faro", label: p.name }),
+      separatorAfter: p.protocol !== "sftp",
+    });
+    if (p.protocol === "sftp") {
+      items.push({
+        label: "Export as OpenSSH config…",
+        icon: <FileCode size={14} />,
+        onClick: () => openExport({ ids: [p.id], format: "openssh", label: p.name }),
+        separatorAfter: true,
+      });
+    }
     const siblings = flatOrder().filter(item => (item.group || undefined) === (p.group || undefined));
     const position = siblings.findIndex(item => item.id === p.id);
     const move = (offset: number) => {
@@ -570,7 +622,22 @@ export function ServerRail() {
         icon: <FolderMinus size={14} />,
         onClick: () =>
           void saveProfiles(members.map((m) => ({ ...m, group: undefined }))),
+        separatorAfter: true,
       },
+      {
+        label: "Export group…",
+        icon: <Upload size={14} />,
+        onClick: () => openExport({ ids: members.map((m) => m.id), format: "faro", label: name }),
+      },
+      ...(members.some((m) => m.protocol === "sftp" && m.proxyCommand?.kind === "cloudflare")
+        ? [
+            {
+              label: "Invite to group…",
+              icon: <UserPlus size={14} />,
+              onClick: () => openInvite(members.map((m) => m.id)),
+            },
+          ]
+        : []),
     ]);
   };
 
@@ -862,8 +929,8 @@ export function ServerRail() {
         </RailIconButton>
         <RailIconButton
           expanded={expanded}
-          label="Import from PuTTY, OpenSSH, FileZilla…"
-          onClick={() => setImporting(true)}
+          label="Import connections…"
+          onClick={() => openImport()}
         >
           <Download size={16} />
         </RailIconButton>
@@ -905,7 +972,6 @@ export function ServerRail() {
           onClose={() => setEditing(null)}
         />
       )}
-      {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {groupPrompt && (
         <GroupNameDialog
           title={

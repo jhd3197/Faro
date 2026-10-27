@@ -331,6 +331,11 @@ export interface DeepLink {
   // faro://grant: issuer base URL + redemption token (docs/grant-links.md).
   issuer?: string;
   token?: string;
+  /** "cloudflare": through Cloudflare Access, `access` = its hostname. */
+  via?: string;
+  access?: string;
+  /** "agent" | "cloudflarecert": a login that needs no secret. */
+  auth?: string;
 }
 
 // ---- Access grants (faro://grant; docs/grant-links.md) ----
@@ -392,14 +397,139 @@ export interface ProfilePreview {
   proxyCommand?: ProxyCommandConfig;
   jumpPreviewId?: string;
   jumpName?: string;
+  /** SSH agent login (OpenSSH `IdentityAgent`). */
+  agent?: boolean;
+  /** Cloudflare short-lived certificate login. */
+  cloudflareCert?: boolean;
+  /** The whole connection, from a `.faro` file. */
+  profile?: ConnectionProfile;
+  /** A keychain-held key, from an encrypted `.faro` file. */
+  keyMaterial?: string;
+  /** What it still needs on this machine. */
+  needs?: ImportNeed[];
+  /** An existing connection with the same name or host. */
+  conflict?: ImportConflict;
+  resolution?: ImportResolution;
 }
 
-export type ImporterKind = "openssh" | "filezilla" | "putty";
+export type ImportNeed = "key" | "password" | "sign-in" | "token secret";
+
+export interface ImportConflict {
+  id: string;
+  name: string;
+  /** Matched by name, else by host, port and user. */
+  byName: boolean;
+}
+
+export type ImportResolution = "skip" | "copy" | "replace";
+
+/** A `.faro` file read for import (mirrors `commands::FaroImport`).
+ *  `previews` is absent while an encrypted file waits for its passphrase. */
+export interface FaroImport {
+  encrypted: boolean;
+  secrets: boolean;
+  previews?: ProfilePreview[] | null;
+}
+
+export type ExportFormat = "faro" | "openssh";
+
+// ---- Cloudflare account (mirrors src-tauri/src/cloudflare_api.rs) ----
+
+export interface CfAccount {
+  id: string;
+  name: string;
+}
+
+export interface CfAccountStatus {
+  connected: boolean;
+  accountId?: string | null;
+  accountName?: string | null;
+  serviceTokenClientId?: string | null;
+  /** Several accounts behind the token, none chosen yet. */
+  choices: CfAccount[];
+  /** The API token permissions Faro needs. */
+  permissions: string[];
+}
+
+/** An invite's steps 1 and 2 (mirrors `cf_setup::InvitePlan`). */
+export interface CfInvitePlan {
+  email: string;
+  principal: string;
+  username: string;
+  hostname: string;
+  policyChanged: boolean;
+  /** Run as root on the server: the principals file change. */
+  rootCommand: string;
+}
+
+/** A root command run over SSH (mirrors `cf_setup::RootRun`). */
+export interface RootRun {
+  ok: boolean;
+  output: string;
+  exitCode?: number | null;
+  /** sudo wants a password and none was given. */
+  needsPassword: boolean;
+}
+
+export interface CfZone {
+  id: string;
+  name: string;
+}
+
+/** Something setup created in the account (mirrors `cf_setup::Created`). */
+export interface CfCreated {
+  label: string;
+  path: string;
+}
+
+/** After the Cloudflare side of a setup (mirrors `cf_setup::SetupState`). */
+export interface CfSetupState {
+  sshHostname: string;
+  panelHostname?: string | null;
+  tunnelId: string;
+  caPublicKey: string;
+  /** Run once as root on the server. */
+  script: string;
+  undoScript: string;
+  created: CfCreated[];
+}
+
+export interface CfSetupRequest {
+  name: string;
+  zoneId: string;
+  zoneName: string;
+  panelPort?: number;
+  people: string[];
+}
+
+/** An SSH hostname in the connected account. */
+export interface CfSshHostname {
+  hostname: string;
+  label: string;
+  tunnelId?: string;
+  /** "healthy" | "degraded" | "down" | "inactive". */
+  tunnelStatus?: string;
+  appId?: string;
+}
+
+/** What an export wrote (mirrors `faro_file::ExportSummary`). */
+export interface ExportSummary {
+  connections: number;
+  /** Jump hosts added because a chosen connection goes through them. */
+  addedJumps: string[];
+  /** Left out: not SSH (OpenSSH export). */
+  skipped: string[];
+}
+
+export type ImporterKind = "faro" | "openssh" | "filezilla" | "putty";
 
 export interface ImporterPaths {
   openssh: string | null;
   filezilla: string | null;
   putty: string | null;
+  /** Whether the default files exist; a missing one isn't an error. */
+  opensshExists: boolean;
+  filezillaExists: boolean;
 }
 
 // ---- Sync ----

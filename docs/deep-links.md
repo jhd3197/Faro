@@ -66,6 +66,13 @@ site's REST API (`protocol=wordpress`, `host` = the site address).
 | `region`   | S3 region                                            | `us-east-1`             |
 | `endpoint` | S3-compatible endpoint (R2/B2/MinIO)                 | `https://…r2.cloudflarestorage.com` |
 | `account`  | Azure storage account                                | `mystorageacct`         |
+| `via`      | `cloudflare`: reach the server through Cloudflare Access (SFTP) | `cloudflare` |
+| `access`   | Access hostname, when it isn't `host`                | `ssh.example.com`       |
+| `auth`     | A login that needs no secret: `agent`, or `cloudflarecert` (with `via=cloudflare`) | `cloudflarecert` |
+
+A connection's rail menu has **Copy link**, which writes exactly these
+parameters for it: the fastest way to hand a teammate a server. For a whole
+group, with jump hosts, use **Export…** (a `.faro` file) instead.
 
 **Example — a WordPress site's REST API (no FTP/SSH needed; the admin pastes
 an Application Password in Faro):**
@@ -78,6 +85,13 @@ faro://connect?protocol=wordpress&host=https%3A%2F%2Fexample.com&username=admin&
 
 ```
 faro://connect?protocol=sftp&host=wp-prod.example.com&port=22&username=wp_deploy&path=%2Fhome%2Fwp%2Fpublic_html&name=My%20WordPress%20(prod)
+```
+
+**Example — a server behind Cloudflare Access, logging in with a short-lived
+certificate (nothing to install or type):**
+
+```
+faro://connect?protocol=sftp&host=ssh.example.com&username=jane.doe&via=cloudflare&auth=cloudflarecert&name=Prod%20box
 ```
 
 ### `faro://pair` — pair a Faro Agent machine

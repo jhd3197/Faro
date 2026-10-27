@@ -49,6 +49,12 @@ pub struct DeepLink {
     // manifest; the user consents before anything is imported.
     pub issuer: Option<String>,
     pub token: Option<String>,
+    /// `via=cloudflare`: reach the server through Cloudflare Access, with
+    /// `access` the Access hostname when it isn't `host`.
+    pub via: Option<String>,
+    pub access: Option<String>,
+    /// Login type that needs no secret: `agent` or `cloudflarecert`.
+    pub auth: Option<String>,
 }
 
 /// Parse one `faro://…` URL. Returns `None` for a non-`faro` scheme or an
@@ -87,6 +93,9 @@ pub fn parse(raw: &str) -> Option<DeepLink> {
             "account" => dl.account = Some(v),
             "issuer" => dl.issuer = Some(v),
             "token" => dl.token = Some(v),
+            "via" => dl.via = Some(v.to_lowercase()),
+            "access" => dl.access = Some(v),
+            "auth" => dl.auth = Some(v.to_lowercase()),
             // Deliberately ignored — links must not carry credentials.
             "password" | "secret" | "passphrase" => {
                 tracing::warn!("ignoring credential param '{k}' in a faro:// link");
@@ -140,6 +149,15 @@ mod tests {
         assert_eq!(dl.username.as_deref(), Some("me"));
         assert_eq!(dl.path.as_deref(), Some("/var/www"));
         assert_eq!(dl.name.as_deref(), Some("My Site"));
+    }
+
+    #[test]
+    fn parses_cloudflare_route_and_auth() {
+        let dl = parse("faro://connect?host=box&username=jane&via=Cloudflare&access=ssh.example.com&auth=cloudflarecert")
+            .unwrap();
+        assert_eq!(dl.via.as_deref(), Some("cloudflare"));
+        assert_eq!(dl.access.as_deref(), Some("ssh.example.com"));
+        assert_eq!(dl.auth.as_deref(), Some("cloudflarecert"));
     }
 
     #[test]

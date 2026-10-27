@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { onNativeFileDrop } from "@/lib/ipc";
 import { useTransfers } from "@/stores/transfersStore";
 import { toast } from "@/stores/toastStore";
+import { useLayout } from "@/stores/layoutStore";
 
 /** Native paths are authoritative; HTML DataTransfer is only used by the
  * existing internal pane drag. This listener never consumes HTML drops. */
@@ -17,15 +18,26 @@ export function NativeFileDrop() {
       highlighted = [];
       setDestination(null);
     };
+    // Only `enter` and `drop` carry the paths; `over` is position only.
+    let dragged: string[] = [];
     onNativeFileDrop((event) => {
       reset();
       if (event.type === "leave") return;
+      if (event.type === "enter" || event.type === "drop") dragged = event.paths;
       // Native coordinates are physical; DOM hit testing uses CSS pixels.
       const element = document.elementFromPoint(
         event.position.x / window.devicePixelRatio,
         event.position.y / window.devicePixelRatio);
       const pane = element?.closest<HTMLElement>('[data-file-pane="remote"]');
       const session = pane?.dataset.fileSession;
+      // A `.faro` connections file dropped anywhere but a remote pane (where
+      // it uploads like any file) opens in Import.
+      const faroFile = dragged.length === 1 && /\.faro$/i.test(dragged[0]) ? dragged[0] : null;
+      if (faroFile && (!pane || !session)) {
+        if (event.type === "drop") useLayout.getState().openImport(faroFile);
+        else setDestination("Drop to import these connections");
+        return;
+      }
       if (!pane || !session) {
         if (event.type !== "drop") setDestination("Drop unavailable — choose a connected remote pane");
         return;

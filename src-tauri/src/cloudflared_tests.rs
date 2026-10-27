@@ -469,9 +469,17 @@ fn unreachable_hosts_say_so() {
 
 /// `ssh-gen` output goes to a scratch folder (for the fake and for Faro), and
 /// the fake has a certificate for `principal` to hand out for `host`.
+/// Held by each test that points Faro at an ssh-gen folder: that override
+/// (`ssh_cert::tests::CLOUDFLARED_DIR`) is one global.
+static SSHGEN_LOCK: StdMutex<()> = StdMutex::new(());
+
+fn sshgen_lock() -> std::sync::MutexGuard<'static, ()> {
+    SSHGEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn sshgen_setup(host: &str, principal: &str) -> PathBuf {
-    let dir = scratch("sshgen-out");
-    cf_state("sshgen-dir", &dir.to_string_lossy());
+    let dir = scratch(&format!("sshgen-out-{host}"));
+    cf_state(&format!("sshgen-dir-{host}"), &dir.to_string_lossy());
     *crate::ssh_cert::tests::CLOUDFLARED_DIR.lock().unwrap() = Some(dir.clone());
     let (_, cert, user) = crate::ssh_cert::tests::issue(&[principal], 300);
     cf_state(&format!("sshgen-{host}-key"), &user.to_openssh(ssh_key::LineEnding::LF).unwrap());
@@ -490,6 +498,7 @@ fn sshgen_clear(host: &str) {
 async fn ssh_gen_signs_in_then_hands_over_a_fresh_pair() {
     let host = "cert.faro.test";
     sshgen_clear(host);
+    let _serial = sshgen_lock();
     let dir = sshgen_setup(host, "jane.doe");
     cf_state(&format!("login-{host}.json"), r#"{"email":"jane.doe@example.com","delayMs":200}"#);
     let urls = Arc::new(StdMutex::new(Vec::new()));
@@ -558,6 +567,7 @@ fn certificate_login_needs_the_access_route_and_a_person() {
 async fn a_refused_cloudflare_certificate_names_principal_and_user() {
     let host = "refused.faro.test";
     sshgen_clear(host);
+    let _serial = sshgen_lock();
     let dir = sshgen_setup(host, "jane.doe");
     cf_state(&format!("token-{host}.json"), &format!(r#"{{"email":"jane.doe@example.com","exp":{}}}"#, now() + 600));
     let port = ssh_server().await;
@@ -718,6 +728,7 @@ async fn live_cert_cloudflare_short_lived_certificate() {
     let lab = cert_lab();
     let host = "lab.faro.test";
     sshgen_clear(host);
+    let _serial = sshgen_lock();
     let out = sshgen_setup(host, "unused");
     cf_state(&format!("token-{host}.json"), &format!(r#"{{"email":"jane.doe@example.com","exp":{}}}"#, now() + 600));
     let issue = |valid_for: i64| {

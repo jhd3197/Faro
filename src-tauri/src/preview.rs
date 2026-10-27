@@ -461,7 +461,7 @@ pub async fn preview_thumbnail(
         .preview
         .thumbnail(&state.db, session, &session_id, &path, file_size, &signal)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[cfg(test)]

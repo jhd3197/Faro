@@ -124,7 +124,16 @@ pub fn build(cfg: &ProxyCommandConfig, host: &str, port: u16, user: &str) -> Res
                 (None, Some(_)) => {
                     bail!("the Cloudflare Access service token has a secret but no ID; enter the ID in the connection editor")
                 }
-                (None, None) => Vec::new(),
+                // No token of its own: the connected account's, when the
+                // process runs unattended (faro-cli). The app signs in instead.
+                (None, None) => fallback_service_token()
+                    .map(|(id, secret)| {
+                        vec![
+                            ("TUNNEL_SERVICE_TOKEN_ID".into(), id),
+                            ("TUNNEL_SERVICE_TOKEN_SECRET".into(), secret),
+                        ]
+                    })
+                    .unwrap_or_default(),
             };
             Ok(CommandSpec {
                 program: "cloudflared".into(),
@@ -287,6 +296,21 @@ fn extra_dirs(cloudflared: bool) -> Vec<PathBuf> {
 /// Faro installed). Wins over PATH for a bare `cloudflared`. Set by
 /// `cloudflared::configure` in the app and in faro-cli.
 static CLOUDFLARED_PATH: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// The Cloudflare account's service token (client id, secret), used by
+/// Cloudflare routes that carry none. Set only by faro-cli: nobody is there to
+/// sign in in a browser. See `cloudflare_api::service_token`.
+static FALLBACK_SERVICE_TOKEN: std::sync::RwLock<Option<(String, String)>> = std::sync::RwLock::new(None);
+
+pub fn set_fallback_service_token(token: Option<(String, String)>) {
+    if let Ok(mut t) = FALLBACK_SERVICE_TOKEN.write() {
+        *t = token;
+    }
+}
+
+fn fallback_service_token() -> Option<(String, String)> {
+    FALLBACK_SERVICE_TOKEN.read().ok()?.clone()
+}
 
 pub fn set_cloudflared_path(path: Option<PathBuf>) {
     if let Ok(mut p) = CLOUDFLARED_PATH.write() {
