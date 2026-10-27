@@ -10,7 +10,16 @@ export type AppDialog =
   | "import"
   | "about"
   | "agentBridge"
-  | "grant";
+  | "grant"
+  | "export";
+
+/** What the Export dialog starts with: the connections to tick and format. */
+export interface ExportRequest {
+  ids: string[];
+  format: "faro" | "openssh";
+  /** Names the file, e.g. the connection or group exported. */
+  label?: string;
+}
 
 /** Seed for the grant consent dialog, parsed from a faro://grant deep link. */
 export interface GrantPrefill {
@@ -50,6 +59,13 @@ interface LayoutState {
   // the dialog closes.
   grantPrefill: GrantPrefill | null;
   openGrant: (prefill: GrantPrefill) => void;
+
+  // Seed for the Export dialog; null = every connection. The Import dialog's
+  // `importFile` opens it on the Faro tab with that file (a dropped `.faro`).
+  exportRequest: ExportRequest | null;
+  openExport: (req?: ExportRequest) => void;
+  importFile: string | null;
+  openImport: (file?: string) => void;
 
   // When true, the file browser shows the LOCAL filesystem instead of the
   // active server. Toggled by the rail's "Local" home bubble; cleared when a
@@ -93,7 +109,7 @@ export const useLayout = create<LayoutState>((set) => ({
   dialog: null,
   openDialog: (d) => set({ dialog: d }),
   closeDialog: () =>
-    set({ dialog: null, connectionPrefill: null, grantPrefill: null }),
+    set({ dialog: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null }),
 
   connectionPrefill: null,
   openNewConnection: (prefill) =>
@@ -101,6 +117,11 @@ export const useLayout = create<LayoutState>((set) => ({
 
   grantPrefill: null,
   openGrant: (prefill) => set({ dialog: "grant", grantPrefill: prefill }),
+
+  exportRequest: null,
+  openExport: (req) => set({ dialog: "export", exportRequest: req ?? null }),
+  importFile: null,
+  openImport: (file) => set({ dialog: "import", importFile: file ?? null }),
 
   browseLocal: false,
   setBrowseLocal: (v) => set({ browseLocal: v }),

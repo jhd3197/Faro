@@ -392,9 +392,52 @@ export interface ProfilePreview {
   proxyCommand?: ProxyCommandConfig;
   jumpPreviewId?: string;
   jumpName?: string;
+  /** SSH agent login (OpenSSH `IdentityAgent`). */
+  agent?: boolean;
+  /** Cloudflare short-lived certificate login. */
+  cloudflareCert?: boolean;
+  /** The whole connection, from a `.faro` file. */
+  profile?: ConnectionProfile;
+  /** A keychain-held key, from an encrypted `.faro` file. */
+  keyMaterial?: string;
+  /** What it still needs on this machine. */
+  needs?: ImportNeed[];
+  /** An existing connection with the same name or host. */
+  conflict?: ImportConflict;
+  resolution?: ImportResolution;
 }
 
-export type ImporterKind = "openssh" | "filezilla" | "putty";
+export type ImportNeed = "key" | "password" | "sign-in" | "token secret";
+
+export interface ImportConflict {
+  id: string;
+  name: string;
+  /** Matched by name, else by host, port and user. */
+  byName: boolean;
+}
+
+export type ImportResolution = "skip" | "copy" | "replace";
+
+/** A `.faro` file read for import (mirrors `commands::FaroImport`).
+ *  `previews` is absent while an encrypted file waits for its passphrase. */
+export interface FaroImport {
+  encrypted: boolean;
+  secrets: boolean;
+  previews?: ProfilePreview[] | null;
+}
+
+export type ExportFormat = "faro" | "openssh";
+
+/** What an export wrote (mirrors `faro_file::ExportSummary`). */
+export interface ExportSummary {
+  connections: number;
+  /** Jump hosts added because a chosen connection goes through them. */
+  addedJumps: string[];
+  /** Left out: not SSH (OpenSSH export). */
+  skipped: string[];
+}
+
+export type ImporterKind = "faro" | "openssh" | "filezilla" | "putty";
 
 export interface ImporterPaths {
   openssh: string | null;

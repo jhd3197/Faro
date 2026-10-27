@@ -263,6 +263,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return [];
     case "save_imported_profiles":
       return 0;
+    case "export_connections":
+      return { connections: (a.ids as string[] | undefined)?.length ?? 0, addedJumps: [], skipped: [] };
 
     // ---- access grants (faro://grant) ----
     // A canned two-server manifest so the consent dialog renders end-to-end

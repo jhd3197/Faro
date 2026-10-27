@@ -17,6 +17,7 @@ import { TitleBar } from "./components/TitleBar";
 import { ProfileEditor } from "./components/ProfileEditor";
 import { GrantDialog } from "./components/GrantDialog";
 import { ImportDialog } from "./components/ImportDialog";
+import { ExportDialog } from "./components/ExportDialog";
 import { AboutDialog } from "./components/AboutDialog";
 import { useConnections } from "./stores/connectionsStore";
 import { useTransfers } from "./stores/transfersStore";
@@ -88,6 +89,7 @@ export default function App() {
   const dialog = useLayout((s) => s.dialog);
   const closeDialog = useLayout((s) => s.closeDialog);
   const connectionPrefill = useLayout((s) => s.connectionPrefill);
+  const exportRequest = useLayout((s) => s.exportRequest);
   const togglePanel = useTransfers((s) => s.togglePanel);
   const transferPanelOpen = useTransfers((s) => s.panelOpen);
   const activeTransfers = useTransfers((s) =>
@@ -160,6 +162,7 @@ export default function App() {
         />
       )}
       {dialog === "import" && <ImportDialog onClose={closeDialog} />}
+      {dialog === "export" && <ExportDialog request={exportRequest} onClose={closeDialog} />}
       {dialog === "grant" && <GrantDialog onClose={closeDialog} />}
       {dialog === "about" && <AboutDialog onClose={closeDialog} />}
       <HostKeyModal />

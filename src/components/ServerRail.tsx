@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import {
   Plus,
   Download,
+  Upload,
+  FileCode,
   Search,
   Radio,
   Plug,
@@ -133,6 +135,7 @@ export function ServerRail() {
   const setTerminalOpen = useLayout((s) => s.setTerminalOpen);
   const openDialog = useLayout((s) => s.openDialog);
   const openNewConnection = useLayout((s) => s.openNewConnection);
+  const openExport = useLayout((s) => s.openExport);
   const browseLocal = useLayout((s) => s.browseLocal);
   const setBrowseLocal = useLayout((s) => s.setBrowseLocal);
   const browserLayout = useSettings((s) => s.browserLayout);
@@ -449,8 +452,21 @@ export function ServerRail() {
           account: oauthAccount ? undefined : p.account,
         });
       },
-      separatorAfter: true,
     });
+    items.push({
+      label: "Export…",
+      icon: <Upload size={14} />,
+      onClick: () => openExport({ ids: [p.id], format: "faro", label: p.name }),
+      separatorAfter: p.protocol !== "sftp",
+    });
+    if (p.protocol === "sftp") {
+      items.push({
+        label: "Export as OpenSSH config…",
+        icon: <FileCode size={14} />,
+        onClick: () => openExport({ ids: [p.id], format: "openssh", label: p.name }),
+        separatorAfter: true,
+      });
+    }
     const siblings = flatOrder().filter(item => (item.group || undefined) === (p.group || undefined));
     const position = siblings.findIndex(item => item.id === p.id);
     const move = (offset: number) => {
@@ -570,6 +586,12 @@ export function ServerRail() {
         icon: <FolderMinus size={14} />,
         onClick: () =>
           void saveProfiles(members.map((m) => ({ ...m, group: undefined }))),
+        separatorAfter: true,
+      },
+      {
+        label: "Export group…",
+        icon: <Upload size={14} />,
+        onClick: () => openExport({ ids: members.map((m) => m.id), format: "faro", label: name }),
       },
     ]);
   };

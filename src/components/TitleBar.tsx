@@ -10,6 +10,7 @@ import {
   X,
   Plus,
   Download,
+  Upload,
   TerminalSquare,
   ArrowDownUp,
   Github,
@@ -52,6 +53,7 @@ export function TitleBar() {
   const setUiZoom = useSettings((s) => s.setUiZoom);
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
   const openDialog = useLayout((s) => s.openDialog);
+  const openExport = useLayout((s) => s.openExport);
   const togglePalette = useLayout((s) => s.togglePalette);
   const setShortcutsOpen = useLayout((s) => s.setShortcutsOpen);
   const togglePanel = useTransfers((s) => s.togglePanel);
@@ -98,6 +100,11 @@ export function TitleBar() {
           label: "Import connections…",
           icon: <Download size={11} />,
           onClick: () => openDialog("import"),
+        },
+        {
+          label: "Export all connections…",
+          icon: <Upload size={11} />,
+          onClick: () => openExport(),
         },
         { kind: "sep" },
         {

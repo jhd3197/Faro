@@ -426,6 +426,8 @@ function defaultPortFor(p: Protocol): number {
 
 function hintFor(kind: ImporterKind): string {
   switch (kind) {
+    case "faro":
+      return "connections.faro";
     case "openssh":
       return "~/.ssh/config";
     case "filezilla":

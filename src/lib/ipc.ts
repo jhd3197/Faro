@@ -30,6 +30,9 @@ import type {
   AccessStatus,
   CloudflaredStatus,
   ImporterPaths,
+  FaroImport,
+  ExportFormat,
+  ExportSummary,
   ProfilePreview,
   SessionId,
   SyncDirection,
@@ -433,6 +436,20 @@ export const ipc = {
 
   saveImportedProfiles: (previews: ProfilePreview[]) =>
     invoke<number>("save_imported_profiles", { previews }),
+
+  /** Read a `.faro` connections file; an encrypted one needs `passphrase`. */
+  importFaroFile: (path: string, passphrase?: string) =>
+    invoke<FaroImport>("import_faro_file", { path, passphrase }),
+
+  /** Write connections (and their jump hosts) as a `.faro` file or an
+   *  OpenSSH config. Secrets only with `includeSecrets`, encrypted. */
+  exportConnections: (args: {
+    ids: string[];
+    path: string;
+    format: ExportFormat;
+    includeSecrets: boolean;
+    passphrase?: string;
+  }) => invoke<ExportSummary>("export_connections", args),
 
   // ---- Access grants (faro://grant; docs/grant-links.md) ----
   /** Fetch the manifest a grant token offers (before consent). */
