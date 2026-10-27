@@ -5,6 +5,7 @@ import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
 import { toastError } from "@/lib/errors";
 import type { AccessStatus, CloudflaredStatus, ConnectionProfile } from "@/lib/types";
+import { CloudflareAccountCard } from "./CloudflareAccount";
 
 const SOURCE_LABEL: Record<CloudflaredStatus["source"], string> = {
   custom: "your own copy",
@@ -208,6 +209,8 @@ export function CloudflareSettings() {
           folder, no admin rights) and keep it up to date.
         </p>
       </div>
+
+      <CloudflareAccountCard />
 
       <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm" data-testid="cloudflared-status">
         {!s ? (

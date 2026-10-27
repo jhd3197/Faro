@@ -433,6 +433,34 @@ export interface FaroImport {
 
 export type ExportFormat = "faro" | "openssh";
 
+// ---- Cloudflare account (mirrors src-tauri/src/cloudflare_api.rs) ----
+
+export interface CfAccount {
+  id: string;
+  name: string;
+}
+
+export interface CfAccountStatus {
+  connected: boolean;
+  accountId?: string | null;
+  accountName?: string | null;
+  serviceTokenClientId?: string | null;
+  /** Several accounts behind the token, none chosen yet. */
+  choices: CfAccount[];
+  /** The API token permissions Faro needs. */
+  permissions: string[];
+}
+
+/** An SSH hostname in the connected account. */
+export interface CfSshHostname {
+  hostname: string;
+  label: string;
+  tunnelId?: string;
+  /** "healthy" | "degraded" | "down" | "inactive". */
+  tunnelStatus?: string;
+  appId?: string;
+}
+
 /** What an export wrote (mirrors `faro_file::ExportSummary`). */
 export interface ExportSummary {
   connections: number;

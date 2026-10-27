@@ -31,6 +31,8 @@ import type {
   CloudflaredStatus,
   ImporterPaths,
   FaroImport,
+  CfAccountStatus,
+  CfSshHostname,
   ExportFormat,
   ExportSummary,
   ProfilePreview,
@@ -436,6 +438,15 @@ export const ipc = {
 
   saveImportedProfiles: (previews: ProfilePreview[]) =>
     invoke<number>("save_imported_profiles", { previews }),
+
+  // ---- Cloudflare account (issue #57) ----
+  cfAccountStatus: () => invoke<CfAccountStatus>("cf_account_status"),
+  cfAccountConnect: (token: string, accountId?: string) =>
+    invoke<CfAccountStatus>("cf_account_connect", { token, accountId }),
+  cfAccountDisconnect: () => invoke<void>("cf_account_disconnect"),
+  cfAccountHostnames: () => invoke<CfSshHostname[]>("cf_account_hostnames"),
+  cfAccountCreateServiceToken: () => invoke<CfAccountStatus>("cf_account_create_service_token"),
+  cfAccountDeleteServiceToken: () => invoke<CfAccountStatus>("cf_account_delete_service_token"),
 
   /** Read a `.faro` connections file; an encrypted one needs `passphrase`. */
   importFaroFile: (path: string, passphrase?: string) =>

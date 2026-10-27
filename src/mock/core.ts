@@ -263,6 +263,10 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return [];
     case "save_imported_profiles":
       return 0;
+    case "cf_account_status":
+      return { connected: false, choices: [], permissions: [] };
+    case "cf_account_hostnames":
+      return [];
     case "import_faro_file":
       // A canned team file: one duplicate of a demo server, one that needs a key.
       return {

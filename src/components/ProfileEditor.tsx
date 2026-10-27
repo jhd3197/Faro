@@ -47,6 +47,8 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
 import { BrandIcon, protocolIcon } from "@/lib/brandIcons";
 import { AccessSignIn, InstallCloudflared } from "./CloudflareSettings";
+import type { CfSshHostname } from "@/lib/types";
+import { TunnelHealth } from "./CloudflareAccount";
 import { BRAND_ICONS } from "@/lib/brandIconData";
 import { monogram } from "@/lib/format";
 import { IconPicker } from "./IconPicker";
@@ -3491,8 +3493,8 @@ function CloudflareServerFields({
               <>
                 {known?.tunnelStatus && (
                   <span data-testid="cf-tunnel-status">
-                    {" "}
-                    · tunnel {known.tunnelStatus === "healthy" ? "healthy" : known.tunnelStatus}
+                    {" · "}
+                    <TunnelHealth status={known.tunnelStatus} />
                   </span>
                 )}
                 {certLogin && signedIn && <span> · certificate login ready</span>}
@@ -3547,8 +3549,19 @@ function CloudflareServerFields({
 
 /// SSH hostnames from the connected Cloudflare account, for the Server
 /// dropdown; empty without an account.
-function useCloudflareHostnames(): { hostname: string; label: string; tunnelStatus?: string }[] {
-  return [];
+function useCloudflareHostnames(): CfSshHostname[] {
+  const [list, setList] = useState<CfSshHostname[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    ipc
+      .cfAccountHostnames()
+      .then((l) => !cancelled && setList(l))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return list;
 }
 
 /// Collapsible "Proxy" block for a direct connection: a SOCKS5 / HTTP

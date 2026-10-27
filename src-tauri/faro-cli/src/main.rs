@@ -660,6 +660,9 @@ async fn run(cli: Cli) -> Result<()> {
     let store = open_store()?;
     // The cloudflared picked in the app (custom or Faro-managed copy).
     faro_lib::cloudflared::configure(&default_data_dir()?);
+    // No browser here: Cloudflare routes without a token of their own use
+    // the connected account's service token.
+    faro_lib::proxy_command::set_fallback_service_token(faro_lib::cloudflare_api::service_token(&default_data_dir()?));
 
     match cli.command {
         Cmd::Ls { target, bytes } => cmd_ls(&store, &target, bytes).await,
