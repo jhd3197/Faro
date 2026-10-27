@@ -348,6 +348,7 @@ fn children(
                     .any(|e| e.kind == FileKind::Directory && e.name == dir)
                 {
                     out.push(DirEntry {
+                        link_dir: false,
                         name: dir.to_string(),
                         path: format!("{base}/{dir}"),
                         kind: FileKind::Directory,
@@ -364,6 +365,7 @@ fn children(
                 }
                 let name = r.name.rsplit('/').next().unwrap_or(&r.name).to_string();
                 out.push(DirEntry {
+                    link_dir: false,
                     path: format!("{base}/{name}"),
                     name,
                     kind: FileKind::File,

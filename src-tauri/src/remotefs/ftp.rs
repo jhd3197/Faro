@@ -52,6 +52,7 @@ fn entry_from_listing(parent: &str, line: &str) -> Option<DirEntry> {
         .ok();
     let mode = posix.then(|| posix_mode(&f));
     Some(DirEntry {
+        link_dir: false,
         name,
         path,
         kind,
@@ -122,6 +123,7 @@ fn entry_from_mlsd(parent: &str, line: &str) -> Option<DirEntry> {
         }
     }
     Some(DirEntry {
+        link_dir: false,
         name: name.to_string(),
         path: join(parent, name),
         kind,

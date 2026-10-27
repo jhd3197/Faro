@@ -157,6 +157,7 @@ fn entry_from_json(e: &serde_json::Value) -> Option<DirEntry> {
         .and_then(|r| r.as_str())
         .map(|s| s.to_string());
     Some(DirEntry {
+        link_dir: false,
         name,
         path,
         kind,

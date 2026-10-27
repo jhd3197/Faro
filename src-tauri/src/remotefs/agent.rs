@@ -32,6 +32,7 @@ fn convert(e: ProtoEntry) -> DirEntry {
         ProtoKind::Other => FileKind::Other,
     };
     DirEntry {
+        link_dir: false,
         name: e.name,
         path: e.path,
         kind,

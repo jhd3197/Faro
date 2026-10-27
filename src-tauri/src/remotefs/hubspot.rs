@@ -306,6 +306,7 @@ impl RemoteFs for HubSpotFs {
             return Ok(dirs
                 .into_iter()
                 .map(|d| DirEntry {
+                    link_dir: false,
                     name: d.to_string(),
                     path: format!("/{d}"),
                     kind: FileKind::Directory,
@@ -468,6 +469,7 @@ fn children(base: &str, nodes: &[NodeMeta]) -> Vec<DirEntry> {
         .iter()
         .filter(|n| n.folder || n.name != KEEP_NAME)
         .map(|n| DirEntry {
+            link_dir: false,
             name: n.name.clone(),
             path: format!("{base}/{}", n.name),
             kind: if n.folder {
@@ -489,6 +491,7 @@ fn file_entries(base: &str, entries: &[FileEntry]) -> Vec<DirEntry> {
     entries
         .iter()
         .map(|e| DirEntry {
+            link_dir: false,
             name: e.name.clone(),
             path: format!("{base}/{}", e.name),
             kind: if e.folder {
@@ -513,6 +516,7 @@ fn hubdb_entries(base: &str, tables: &[HubDbTable]) -> Vec<DirEntry> {
     tables
         .iter()
         .map(|t| DirEntry {
+            link_dir: false,
             name: format!("{}.csv", t.name),
             path: format!("{base}/{}.csv", t.name),
             kind: FileKind::File,

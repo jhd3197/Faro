@@ -63,6 +63,7 @@ impl RemoteFs for HttpFs {
             let url = self.session.url_for(path, false);
             let (size, modified, etag) = self.head_meta(&url).await;
             return Ok(vec![DirEntry {
+                link_dir: false,
                 name: name.clone(),
                 path: format!("/{name}"),
                 kind: FileKind::File,
@@ -209,6 +210,7 @@ fn entry_from_href(href: &str, tail: &str, request_path: &str) -> Option<DirEntr
     }
     let size = if is_dir { 0 } else { size_from_tail(tail) };
     Some(DirEntry {
+        link_dir: false,
         name: name.clone(),
         path: child_path(request_path, &name),
         kind: if is_dir {
@@ -299,6 +301,7 @@ fn parse_nginx_json(body: &str, request_path: &str) -> Vec<DirEntry> {
             }
             let is_dir = it.typ.as_deref() == Some("directory");
             Some(DirEntry {
+                link_dir: false,
                 path: child_path(request_path, &it.name),
                 name: it.name,
                 kind: if is_dir {

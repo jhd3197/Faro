@@ -43,6 +43,11 @@ pub struct DirEntry {
     /// mtime+size instead. See [`ChangeSignal`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
+    /// A symlink whose target is a directory (a Windows directory link or
+    /// junction, or a link to a folder over SFTP): the browser opens it like
+    /// a folder, while deleting it removes only the link.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub link_dir: bool,
 }
 
 /// Browser-only listing. Skipped entries must stay visible as a warning;

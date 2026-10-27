@@ -40,6 +40,7 @@ fn entry_for_object(
 ) -> DirEntry {
     let name = key.rsplit('/').next().unwrap_or(key).to_string();
     DirEntry {
+        link_dir: false,
         name,
         path: format!("/{key}"),
         kind: FileKind::File,
@@ -54,6 +55,7 @@ fn entry_for_prefix(prefix: &str) -> DirEntry {
     let trimmed = prefix.trim_end_matches('/');
     let name = trimmed.rsplit('/').next().unwrap_or(trimmed).to_string();
     DirEntry {
+        link_dir: false,
         name,
         path: format!("/{trimmed}"),
         kind: FileKind::Directory,

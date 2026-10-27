@@ -159,6 +159,7 @@ fn entry_from_json(f: &serde_json::Value, request_path: &str) -> Option<(DirEntr
     };
     Some((
         DirEntry {
+            link_dir: false,
             name,
             path,
             kind: if is_folder {

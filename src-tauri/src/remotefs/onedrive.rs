@@ -203,6 +203,7 @@ fn entry_from_json(item: &serde_json::Value, request_path: &str) -> Option<DirEn
         format!("/{base}/{name}")
     };
     Some(DirEntry {
+        link_dir: false,
         name,
         path,
         kind,
