@@ -1,0 +1,47 @@
+# SSH certificate lab (issue #55): an sshd that trusts only an SSH CA. No
+# authorized_keys and no passwords, so a login works only with a certificate.
+#
+#   jane.doe  logs in with a certificate whose principal is jane.doe
+#   shared    a team account: its principals file lists jane.doe
+#   deploy    its principals file lists only ci, so jane.doe is refused
+#
+# Make the CA first (the live tests sign their own certificates with it):
+#   mkdir -p scripts/.cert-lab && ssh-keygen -t ed25519 -N "" -f scripts/.cert-lab/ca
+#   docker compose -f scripts/cert-lab.yml up -d
+# Then run the ignored live tests in src-tauri/src/cloudflared_tests.rs with
+# FARO_LIVE_CERT=127.0.0.1:2223 FARO_LIVE_CERT_CA=scripts/.cert-lab/ca.
+services:
+  sshd:
+    image: alpine:3.20
+    ports:
+      - "127.0.0.1:2223:22"
+    volumes:
+      - ./.cert-lab/ca.pub:/etc/ssh/ca.pub:ro
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache openssh >/dev/null
+        ssh-keygen -A >/dev/null
+        for u in jane.doe shared deploy; do
+          adduser -D -s /bin/sh "$$u"
+          # A locked account (`!`) can't log in at all, even with a key.
+          passwd -u "$$u" >/dev/null 2>&1 || sed -i "s/^$$u:!/$$u:*/" /etc/shadow
+        done
+        mkdir -p /etc/ssh/principals
+        echo jane.doe > /etc/ssh/principals/jane.doe
+        printf 'jane.doe\nana\n' > /etc/ssh/principals/shared
+        echo ci > /etc/ssh/principals/deploy
+        cat > /etc/ssh/sshd_config <<'EOF'
+        PubkeyAuthentication yes
+        PasswordAuthentication no
+        KbdInteractiveAuthentication no
+        AuthorizedKeysFile none
+        TrustedUserCAKeys /etc/ssh/ca.pub
+        AuthorizedPrincipalsFile /etc/ssh/principals/%u
+        Subsystem sftp internal-sftp
+        LogLevel VERBOSE
+        EOF
+        sshd -t
+        exec /usr/sbin/sshd -D -e

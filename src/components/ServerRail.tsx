@@ -100,7 +100,8 @@ function profileRoute(p: ConnectionProfile, profiles: ConnectionProfile[]): stri
   }
   if (p.proxyCommand?.kind === "cloudflare") {
     // A service token is a standing credential; say so.
-    return `via Cloudflare Access${p.proxyCommand.serviceTokenId ? " · service token" : ""}`;
+    const login = p.auth.kind === "cloudflarecert" ? " · Cloudflare certificate" : "";
+    return `via Cloudflare Access${p.proxyCommand.serviceTokenId ? " · service token" : login}`;
   }
   if (p.proxyCommand?.kind === "command") return "via proxy command";
   return "";

@@ -13,7 +13,8 @@ pub fn default_path() -> Option<PathBuf> {
 /// skipped — they're configuration scaffolding, not actual targets.
 ///
 /// We support a small but sufficient subset of OpenSSH directives:
-/// Host, Hostname, User, Port, IdentityFile, ProxyJump, and ProxyCommand:
+/// Host, Hostname, User, Port, IdentityFile, CertificateFile, ProxyJump, and
+/// ProxyCommand:
 /// the common forms (`nc -X`, `ncat --proxy`, `connect -S/-H`, `ssh -W`)
 /// become a Faro proxy or jump host, `cloudflared access ssh` becomes
 /// Cloudflare Access, and any other command is kept as the SSH transport.
@@ -63,6 +64,9 @@ pub fn parse(text: &str, source_label: String) -> Vec<ProfilePreview> {
                 }
                 "identityfile" => {
                     block.identity.get_or_insert_with(|| expand_tilde(value));
+                }
+                "certificatefile" => {
+                    block.certificate.get_or_insert_with(|| expand_tilde(value));
                 }
                 "proxyjump" if block.via.is_none() => {
                     block.via = parse_proxy_jump(value);
@@ -345,6 +349,7 @@ struct HostBlock {
     user: Option<String>,
     port: Option<u16>,
     identity: Option<String>,
+    certificate: Option<String>,
     via: Option<Via>,
 }
 
@@ -356,6 +361,7 @@ impl HostBlock {
             user: None,
             port: None,
             identity: None,
+            certificate: None,
             via: None,
         }
     }
@@ -374,6 +380,8 @@ impl HostBlock {
         p.port = self.port.unwrap_or(22);
         p.username = self.user.unwrap_or_default();
         p.identity_file = self.identity;
+        // A certificate is only used with a key.
+        p.certificate_file = self.certificate.filter(|_| p.identity_file.is_some());
         p.note = Some(format!("from {source_label}"));
         Some(p)
     }
@@ -395,6 +403,26 @@ mod tests {
 ";
         let ps = parse(cfg, "test".into());
         assert_eq!(by_name(&ps, "web").identity_file.as_deref(), Some("/keys/my key"));
+    }
+
+    #[test]
+    fn certificate_file_rides_with_the_key() {
+        let cfg = "Host ca
+  HostName ca.example
+  IdentityFile /keys/id_ed25519
+  CertificateFile /keys/id_ed25519-cert.pub
+
+Host nokey
+  CertificateFile /keys/stray-cert.pub
+";
+        let ps = parse(cfg, "test".into());
+        assert_eq!(by_name(&ps, "ca").certificate_file.as_deref(), Some("/keys/id_ed25519-cert.pub"));
+        assert!(by_name(&ps, "nokey").certificate_file.is_none());
+        let profile = by_name(&ps, "ca").clone().into_profile();
+        assert!(matches!(
+            profile.auth,
+            crate::profiles::AuthMethod::Key { cert_path: Some(ref c), .. } if c == "/keys/id_ed25519-cert.pub"
+        ));
     }
 
     #[test]

@@ -21,6 +21,7 @@ import {
   type ProxyKind,
   type ProxyCommandConfig,
   type ProxyCommandKind,
+  type AccessStatus,
 } from "@/lib/types";
 import {
   ShieldOff,
@@ -209,6 +210,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   );
   const [passphrase, setPassphrase] = useState(
     seedAuth?.kind === "key" ? seedAuth.passphrase ?? "" : ""
+  );
+  const [certPath, setCertPath] = useState(
+    seedAuth?.kind === "key" ? seedAuth.certPath ?? "" : ""
   );
   const [defaultRemotePath, setDefaultRemotePath] = useState(
     seed?.defaultRemotePath ?? "."
@@ -462,7 +466,14 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
     } else if (authKind === "password") {
       auth = { kind: "password", password };
     } else if (authKind === "key") {
-      auth = { kind: "key", path: keyPath, passphrase: passphrase || undefined };
+      auth = {
+        kind: "key",
+        path: keyPath,
+        passphrase: passphrase || undefined,
+        certPath: certPath.trim() || undefined,
+      };
+    } else if (authKind === "cloudflarecert") {
+      auth = { kind: "cloudflarecert" };
     } else {
       auth = { kind: "agent" };
     }
@@ -700,6 +711,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   };
 
   const gcsCredOk = authKind === "key" ? !!keyPath : !!password;
+  // Cloudflare certificates need the Access route, and a person to sign in:
+  // a service token has no email to issue a certificate for.
+  const cfRoute = protocol === "sftp" && !jumpProfile && proxyCmd.kind === "cloudflare";
+  const cfServiceToken = cfRoute && !!proxyCmd.serviceTokenId.trim();
+  const cfCertBlocked =
+    protocol === "sftp" && authKind === "cloudflarecert" && (!cfRoute || cfServiceToken);
   const canSave = isS3
     ? !!bucket && !!username && !!password
     : isAzure
@@ -722,7 +739,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 ? cloudAuthed
                 : isAgent
                   ? !!host && !!agentKey
-                  : !!host && !!username;
+                  : !!host && !!username && !cfCertBlocked;
   // Name what's still required so a disabled Save isn't a dead end.
   const missing = (
     isS3
@@ -763,7 +780,14 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 ? [!cloudAuthed && `${PROTOCOL_LABEL[protocol]} authorization`]
                 : isAgent
                   ? [!host && "host", !agentKey && "pairing"]
-                  : [!host && "host", !username && "username"]
+                  : [
+                      !host && "host",
+                      !username && "username",
+                      cfCertBlocked &&
+                        (cfServiceToken
+                          ? "a login other than Cloudflare certificate (service token)"
+                          : "the Cloudflare Access route"),
+                    ]
   ).filter(Boolean);
 
   return (
@@ -1086,8 +1110,30 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 <option value="agent" disabled={isFtp}>
                   SSH agent{isFtp ? " — SFTP only" : ""}
                 </option>
+                {!isFtp && (
+                  <option
+                    value="cloudflarecert"
+                    disabled={(!cfRoute || cfServiceToken) && authKind !== "cloudflarecert"}
+                  >
+                    Cloudflare short-lived certificate
+                    {!cfRoute
+                      ? " — set Proxy to Cloudflare Access"
+                      : cfServiceToken
+                        ? " — not with a service token"
+                        : ""}
+                  </option>
+                )}
               </select>
             </Field>
+
+            {authKind === "cloudflarecert" && (
+              <CloudflareCertHint
+                hostname={proxyCmd.hostname.trim() || host.trim()}
+                username={username.trim()}
+                routed={cfRoute}
+                serviceToken={cfServiceToken}
+              />
+            )}
 
             {authKind === "agent" && (
               <Hint>
@@ -1115,6 +1161,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 setKeyPath={setKeyPath}
                 passphrase={passphrase}
                 setPassphrase={setPassphrase}
+                certPath={certPath}
+                setCertPath={setCertPath}
                 username={username}
                 host={host}
               />
@@ -1334,6 +1382,95 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   );
 }
 
+/// "Cloudflare short-lived certificate" auth: who the certificate will be for.
+/// cloudflared names the principal after the user part of the signed-in
+/// email, and the server has to accept that principal for `username`.
+function CloudflareCertHint({
+  hostname,
+  username,
+  routed,
+  serviceToken,
+}: {
+  hostname: string;
+  username: string;
+  routed: boolean;
+  serviceToken: boolean;
+}) {
+  const [status, setStatus] = useState<AccessStatus | null>(null);
+  useEffect(() => {
+    if (!routed || serviceToken || !hostname) return;
+    let cancelled = false;
+    // Typing in the hostname field shouldn't run cloudflared per keystroke.
+    const t = setTimeout(() => {
+      ipc
+        .cfAccessStatus(hostname)
+        .then((s) => !cancelled && setStatus(s))
+        .catch(() => !cancelled && setStatus(null));
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [hostname, routed, serviceToken]);
+
+  if (!routed) {
+    return (
+      <Hint tone="warn">
+        Cloudflare issues these certificates through Access. Set{" "}
+        <span className="font-medium text-text">Proxy</span> to Cloudflare Access
+        under Proxy &amp; jump host below.
+      </Hint>
+    );
+  }
+  if (serviceToken) {
+    return (
+      <Hint tone="warn">
+        A service token has no person to issue a certificate for. Connections
+        that faro-cli or the Agent Bridge use unattended should log in with a
+        key or password and keep the service token.
+      </Hint>
+    );
+  }
+  if (status?.state === "notProtected") {
+    return (
+      <Hint tone="warn">
+        {hostname} has no Access application, so Cloudflare can't issue a
+        certificate for it.
+      </Hint>
+    );
+  }
+  const principal =
+    status?.state === "loggedIn" && status.identity?.includes("@")
+      ? status.identity.split("@")[0]
+      : null;
+  return (
+    <Hint>
+      Logs in with your Cloudflare identity: no key to choose or store. Each
+      connect gets a certificate valid for a few minutes, and removing you from
+      the Access policy removes your access.
+      {principal ? (
+        <span className="mt-1 block" data-testid="cf-cert-principal">
+          Certificate for <span className="font-mono text-text">{principal}</span>{" "}
+          ({status?.identity}).
+          {username && username !== principal && (
+            <>
+              {" "}
+              To log in as <span className="font-mono text-text">{username}</span>, the
+              server must accept <span className="font-mono text-text">{principal}</span>{" "}
+              for that user (its AuthorizedPrincipalsFile).
+            </>
+          )}
+        </span>
+      ) : (
+        <span className="mt-1 block">
+          Sign in under Proxy &amp; jump host to see which user the certificate
+          is for.
+        </span>
+      )}
+    </Hint>
+  );
+}
+
 /// SFTP private-key auth: the key path + passphrase, plus the "no more PuTTYgen"
 /// helpers — generate a fresh keypair in place, or copy the public half of an
 /// existing key to install on the server. Generating writes the private key (and
@@ -1344,6 +1481,8 @@ function KeyAuthSection({
   setKeyPath,
   passphrase,
   setPassphrase,
+  certPath,
+  setCertPath,
   username,
   host,
 }: {
@@ -1351,6 +1490,8 @@ function KeyAuthSection({
   setKeyPath: (v: string) => void;
   passphrase: string;
   setPassphrase: (v: string) => void;
+  certPath: string;
+  setCertPath: (v: string) => void;
   username: string;
   host: string;
 }) {
@@ -1391,6 +1532,15 @@ function KeyAuthSection({
       directory: false,
     });
     if (typeof picked === "string") setKeyPath(picked);
+  };
+
+  const browseCertificate = async () => {
+    const picked = await open({
+      title: "Select the key's SSH certificate",
+      multiple: false,
+      directory: false,
+    });
+    if (typeof picked === "string") setCertPath(picked);
   };
 
   const browseSaveLocation = async () => {
@@ -1508,6 +1658,32 @@ function KeyAuthSection({
           className={inputCls}
         />
       </Field>
+
+      <Field label="Certificate (optional)">
+        <div className="flex gap-1.5">
+          <input
+            value={certPath}
+            onChange={(e) => setCertPath(e.target.value)}
+            placeholder={keyPath.trim() ? `${keyPath.trim()}-cert.pub` : "~/.ssh/id_ed25519-cert.pub"}
+            spellCheck={false}
+            className={cn(inputCls, "flex-1")}
+          />
+          <button
+            type="button"
+            onClick={browseCertificate}
+            title="Browse for the key's SSH certificate"
+            aria-label="Browse for the key's SSH certificate"
+            className="flex shrink-0 items-center rounded-md border border-border bg-bg-subtle px-2.5 text-text-muted hover:bg-bg-hover hover:text-text"
+          >
+            <FolderOpen size={14} />
+          </button>
+        </div>
+      </Field>
+      <Hint>
+        For servers that trust an SSH certificate authority. Empty uses the
+        key's <span className="font-mono">-cert.pub</span> when there is one.
+        Faro offers the certificate first, then the key on its own.
+      </Hint>
 
       {/* Make a new key, or copy the public half of an existing one. */}
       <div className="mb-3 flex flex-wrap gap-2">

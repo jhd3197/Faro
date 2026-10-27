@@ -20,6 +20,8 @@
 //! `login-H.json` is what a browser sign-in yields (plus `delayMs`), and
 //! `notprotected-H` means no Access application. `access ssh --access` without a
 //! valid token signs in first (if it can), then relays to `--target`.
+//! `access ssh-gen` does the same check, then writes a short-lived key and
+//! certificate (see `access_ssh_gen`).
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
@@ -42,9 +44,18 @@ fn main() {
         match args.get(1).map(String::as_str) {
             Some("token") => access_token(&host),
             Some("login") => access_login(&host),
+            Some("ssh-gen") => access_ssh_gen(&host),
             // Opt-in, so the plain relay tests keep their fake cloudflared.
             Some("ssh") if args.iter().any(|a| a == "--access") => {
                 access_ready(&host);
+            }
+            // The app's own `access ssh --hostname H`, relayed to `target-H`.
+            Some("ssh") => {
+                if let Ok(target) = std::fs::read_to_string(state_file(&format!("target-{host}"))) {
+                    access_ready(&host);
+                    relay(target.trim(), None);
+                    std::process::exit(0);
+                }
             }
             _ => {}
         }
@@ -174,6 +185,33 @@ fn access_login(host: &str) -> ! {
     }
     eprintln!("failed to fetch token: the sign-in was cancelled");
     std::process::exit(1)
+}
+
+/// `access ssh-gen` (issue #55): after the usual token check, writes the
+/// pre-made `sshgen-H-key` / `sshgen-H-cert.pub` where cloudflared would put
+/// its short-lived pair, which is the folder named in `sshgen-dir` (else
+/// `~/.cloudflared`). No `sshgen-H-key` means no certificate CA.
+fn access_ssh_gen(host: &str) -> ! {
+    not_protected(host);
+    access_ready(host);
+    let (Ok(key), Ok(cert)) = (
+        std::fs::read(state_file(&format!("sshgen-{host}-key"))),
+        std::fs::read(state_file(&format!("sshgen-{host}-cert.pub"))),
+    ) else {
+        eprintln!("failed to generate SSH certificate: 404 Not Found (no short-lived certificate CA for {host})");
+        std::process::exit(1)
+    };
+    let dir = std::fs::read_to_string(state_file("sshgen-dir"))
+        .map(|d| std::path::PathBuf::from(d.trim()))
+        .unwrap_or_else(|_| {
+            let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap();
+            std::path::PathBuf::from(home).join(".cloudflared")
+        });
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{host}-cf_key")), key).unwrap();
+    std::fs::write(dir.join(format!("{host}-cf_key-cert.pub")), cert).unwrap();
+    std::fs::write(dir.join(format!("{host}-cf_key.pub")), b"").unwrap();
+    std::process::exit(0)
 }
 
 /// `access ssh --access`: a valid token, or a sign-in that yields one.

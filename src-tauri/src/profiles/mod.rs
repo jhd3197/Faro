@@ -43,10 +43,16 @@ pub enum AuthMethod {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         password: String,
     },
+    #[serde(rename_all = "camelCase")]
     Key {
         path: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         passphrase: Option<String>,
+        /// OpenSSH user certificate (`-cert.pub`) for the key, signed by a CA
+        /// the server trusts. Absent = `<path>-cert.pub` when that exists, as
+        /// OpenSSH does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cert_path: Option<String>,
     },
     Agent,
     /// A reference to private-key material stored in the OS keychain (under
@@ -54,6 +60,10 @@ pub enum AuthMethod {
     /// path resolves it via `credentials::get_secret` at connect time.
     #[serde(rename_all = "camelCase")]
     KeyRef { key_ref: String },
+    /// A short-lived certificate from Cloudflare Access, issued fresh on every
+    /// connect by `cloudflared access ssh-gen` for the signed-in user. Needs
+    /// the Cloudflare Access route; nothing is stored.
+    CloudflareCert,
 }
 
 /// Client-side proxy a connection's first TCP hop goes through.
@@ -798,7 +808,7 @@ mod tests {
         sync_profile_secret(&p, &db, false).unwrap();
         assert_eq!(credentials::get_secret(&pw_purpose).unwrap().as_deref(), Some("pw-test-2"));
 
-        p.auth = AuthMethod::Key { path: "k".into(), passphrase: Some("pp-test-2".into()) };
+        p.auth = AuthMethod::Key { path: "k".into(), passphrase: Some("pp-test-2".into()), cert_path: None };
         sync_profile_secret(&p, &db, false).unwrap();
         assert_eq!(credentials::get_secret(&pw_purpose).unwrap(), None);
         assert_eq!(credentials::get_secret(&pp_purpose).unwrap().as_deref(), Some("pp-test-2"));

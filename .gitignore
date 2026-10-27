@@ -68,3 +68,4 @@ docs/screenshots/*.png
 # Python (test mocks bytecode cache)
 __pycache__/
 *.pyc
+scripts/.cert-lab/

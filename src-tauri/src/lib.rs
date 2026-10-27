@@ -41,6 +41,7 @@ pub mod scan;
 pub mod scp;
 pub mod search;
 pub mod session;
+pub mod ssh_cert;
 pub mod sync;
 mod terminal;
 mod tls_trust;
