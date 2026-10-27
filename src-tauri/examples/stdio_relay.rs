@@ -49,6 +49,14 @@ fn main() {
             Some("ssh") if args.iter().any(|a| a == "--access") => {
                 access_ready(&host);
             }
+            // The app's own `access ssh --hostname H`, relayed to `target-H`.
+            Some("ssh") => {
+                if let Ok(target) = std::fs::read_to_string(state_file(&format!("target-{host}"))) {
+                    access_ready(&host);
+                    relay(target.trim(), None);
+                    std::process::exit(0);
+                }
+            }
             _ => {}
         }
     }
