@@ -187,6 +187,115 @@ impl Api {
     }
 }
 
+// ---- Access policies: who gets in ----
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Policy {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub decision: String,
+    #[serde(default)]
+    pub include: Vec<Value>,
+    #[serde(default)]
+    pub exclude: Vec<Value>,
+    #[serde(default)]
+    pub require: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precedence: Option<i64>,
+}
+
+/// Name of the allow policy Faro creates for people.
+pub const PEOPLE_POLICY: &str = "Faro: people";
+
+impl Api {
+    /// The Access application protecting `hostname`.
+    pub async fn app_for_hostname(&self, account: &str, hostname: &str) -> Result<AccessApp> {
+        let host = hostname.trim().to_ascii_lowercase();
+        self.access_apps(account)
+            .await?
+            .into_iter()
+            .find(|a| a.domain.split('/').next().unwrap_or("").eq_ignore_ascii_case(&host))
+            .ok_or_else(|| anyhow!("{hostname} has no Access application in this Cloudflare account"))
+    }
+
+    pub async fn policies(&self, account: &str, app: &str) -> Result<Vec<Policy>> {
+        self.get(&format!("accounts/{account}/access/apps/{app}/policies")).await
+    }
+}
+
+fn include_email(rule: &Value) -> Option<String> {
+    rule["email"]["email"].as_str().map(|e| e.to_ascii_lowercase())
+}
+
+/// Who an application lets in: emails, and `@domain` for an email domain.
+pub async fn people(api: &Api, account: &str, app: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for p in api.policies(account, app).await?.into_iter().filter(|p| p.decision == "allow") {
+        for rule in &p.include {
+            if let Some(e) = include_email(rule) {
+                out.push(e);
+            } else if let Some(d) = rule["email_domain"]["domain"].as_str() {
+                out.push(format!("@{d}"));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// Add `email` to (or remove it from) the application's allow policies.
+/// Adding goes into the first allow policy, or a new "Faro: people" one.
+/// Returns whether anything changed.
+pub async fn set_person(api: &Api, account: &str, app: &str, email: &str, allow: bool) -> Result<bool> {
+    let email = email.trim().to_ascii_lowercase();
+    let policies = api.policies(account, app).await?;
+    let path = |id: &str| format!("accounts/{account}/access/apps/{app}/policies/{id}");
+    let mut changed = false;
+    if allow {
+        let allows: Vec<&Policy> = policies.iter().filter(|p| p.decision == "allow").collect();
+        if allows.iter().any(|p| p.include.iter().any(|r| include_email(r).as_deref() == Some(email.as_str()))) {
+            return Ok(false);
+        }
+        let rule = json!({ "email": { "email": email } });
+        match allows.first() {
+            Some(p) => {
+                let mut p = (*p).clone();
+                p.include.push(rule);
+                api.put::<Value>(&path(&p.id), serde_json::to_value(&p)?).await?;
+            }
+            None => {
+                api.post::<Value>(
+                    &format!("accounts/{account}/access/apps/{app}/policies"),
+                    json!({ "name": PEOPLE_POLICY, "decision": "allow", "include": [rule] }),
+                )
+                .await?;
+            }
+        }
+        changed = true;
+    } else {
+        for p in policies.into_iter().filter(|p| p.decision == "allow") {
+            let before = p.include.len();
+            let mut p = p;
+            p.include.retain(|r| include_email(r).as_deref() != Some(email.as_str()));
+            if p.include.len() == before {
+                continue;
+            }
+            changed = true;
+            if p.include.is_empty() {
+                // An allow policy with nobody in it would be rejected.
+                api.delete(&path(&p.id)).await?;
+            } else {
+                api.put::<Value>(&path(&p.id), serde_json::to_value(&p)?).await?;
+            }
+        }
+    }
+    Ok(changed)
+}
+
 // ---- The connected account ----
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -33,6 +33,8 @@ import type {
   FaroImport,
   CfAccountStatus,
   CfSshHostname,
+  CfInvitePlan,
+  RootRun,
   ExportFormat,
   ExportSummary,
   ProfilePreview,
@@ -447,6 +449,14 @@ export const ipc = {
   cfAccountHostnames: () => invoke<CfSshHostname[]>("cf_account_hostnames"),
   cfAccountCreateServiceToken: () => invoke<CfAccountStatus>("cf_account_create_service_token"),
   cfAccountDeleteServiceToken: () => invoke<CfAccountStatus>("cf_account_delete_service_token"),
+  /** Who a Cloudflare connection's Access application lets in. */
+  cfAccessPeople: (profileId: string) => invoke<string[]>("cf_access_people", { profileId }),
+  /** Invite (`add`) or remove `email`: Access policy now, root command back. */
+  cfInvite: (profileId: string, email: string, add: boolean) =>
+    invoke<CfInvitePlan>("cf_invite", { profileId, email, add }),
+  /** Run a root command on a live SSH session: as root, sudo -n, or sudo with `password`. */
+  sshRunAsRoot: (sessionId: string, script: string, password?: string) =>
+    invoke<RootRun>("ssh_run_as_root", { sessionId, script, password }),
 
   /** Read a `.faro` connections file; an encrypted one needs `passphrase`. */
   importFaroFile: (path: string, passphrase?: string) =>

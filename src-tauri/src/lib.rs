@@ -17,6 +17,7 @@ mod app_updater;
 pub mod cli_updater;
 pub mod cloudflared;
 pub mod cloudflare_api;
+pub mod cf_setup;
 pub mod credentials;
 pub mod db;
 mod deeplink;
@@ -499,6 +500,9 @@ pub fn run() {
             cloudflare_api::cf_account_hostnames,
             cloudflare_api::cf_account_create_service_token,
             cloudflare_api::cf_account_delete_service_token,
+            cf_setup::cf_access_people,
+            cf_setup::cf_invite,
+            cf_setup::ssh_run_as_root,
             path_integration::path_status,
             path_integration::path_add,
             path_integration::path_remove,

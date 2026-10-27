@@ -6,6 +6,7 @@ import {
   Upload,
   FileCode,
   Link2,
+  UserPlus,
   Search,
   Radio,
   Plug,
@@ -139,6 +140,7 @@ export function ServerRail() {
   const openNewConnection = useLayout((s) => s.openNewConnection);
   const openExport = useLayout((s) => s.openExport);
   const openImport = useLayout((s) => s.openImport);
+  const openInvite = useLayout((s) => s.openInvite);
   const browseLocal = useLayout((s) => s.browseLocal);
   const setBrowseLocal = useLayout((s) => s.setBrowseLocal);
   const browserLayout = useSettings((s) => s.browserLayout);
@@ -455,6 +457,13 @@ export function ServerRail() {
         });
       },
     });
+    if (p.protocol === "sftp" && p.proxyCommand?.kind === "cloudflare") {
+      items.push({
+        label: "Invite…",
+        icon: <UserPlus size={14} />,
+        onClick: () => openInvite([p.id]),
+      });
+    }
     if (canLink(p)) {
       items.push({
         label: "Copy link",
@@ -612,6 +621,15 @@ export function ServerRail() {
         icon: <Upload size={14} />,
         onClick: () => openExport({ ids: members.map((m) => m.id), format: "faro", label: name }),
       },
+      ...(members.some((m) => m.protocol === "sftp" && m.proxyCommand?.kind === "cloudflare")
+        ? [
+            {
+              label: "Invite to group…",
+              icon: <UserPlus size={14} />,
+              onClick: () => openInvite(members.map((m) => m.id)),
+            },
+          ]
+        : []),
     ]);
   };
 

@@ -11,7 +11,8 @@ export type AppDialog =
   | "about"
   | "agentBridge"
   | "grant"
-  | "export";
+  | "export"
+  | "invite";
 
 /** What the Export dialog starts with: the connections to tick and format. */
 export interface ExportRequest {
@@ -66,6 +67,9 @@ interface LayoutState {
   openExport: (req?: ExportRequest) => void;
   importFile: string | null;
   openImport: (file?: string) => void;
+  // Connections the Invite dialog shares (one server, or a folder's).
+  inviteIds: string[];
+  openInvite: (ids: string[]) => void;
 
   // When true, the file browser shows the LOCAL filesystem instead of the
   // active server. Toggled by the rail's "Local" home bubble; cleared when a
@@ -109,7 +113,7 @@ export const useLayout = create<LayoutState>((set) => ({
   dialog: null,
   openDialog: (d) => set({ dialog: d }),
   closeDialog: () =>
-    set({ dialog: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null }),
+    set({ dialog: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, inviteIds: [] }),
 
   connectionPrefill: null,
   openNewConnection: (prefill) =>
@@ -122,6 +126,8 @@ export const useLayout = create<LayoutState>((set) => ({
   openExport: (req) => set({ dialog: "export", exportRequest: req ?? null }),
   importFile: null,
   openImport: (file) => set({ dialog: "import", importFile: file ?? null }),
+  inviteIds: [],
+  openInvite: (ids) => set({ dialog: "invite", inviteIds: ids }),
 
   browseLocal: false,
   setBrowseLocal: (v) => set({ browseLocal: v }),

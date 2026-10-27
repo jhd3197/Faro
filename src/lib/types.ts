@@ -451,6 +451,26 @@ export interface CfAccountStatus {
   permissions: string[];
 }
 
+/** An invite's steps 1 and 2 (mirrors `cf_setup::InvitePlan`). */
+export interface CfInvitePlan {
+  email: string;
+  principal: string;
+  username: string;
+  hostname: string;
+  policyChanged: boolean;
+  /** Run as root on the server: the principals file change. */
+  rootCommand: string;
+}
+
+/** A root command run over SSH (mirrors `cf_setup::RootRun`). */
+export interface RootRun {
+  ok: boolean;
+  output: string;
+  exitCode?: number | null;
+  /** sudo wants a password and none was given. */
+  needsPassword: boolean;
+}
+
 /** An SSH hostname in the connected account. */
 export interface CfSshHostname {
   hostname: string;
