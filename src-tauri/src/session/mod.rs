@@ -1843,17 +1843,15 @@ async fn authenticate(
                     .await?
             }
         }
-        AuthMethod::Key { path, passphrase } => {
+        AuthMethod::Key { path, passphrase, cert_path } => {
             // Expand a leading `~` so a stored `~/.ssh/id_ed25519` (and the
             // absolute paths the in-app key generator writes) both load —
             // load_secret_key does no tilde expansion of its own.
             let resolved = crate::keys::expand_tilde(path);
             let key = russh_keys::load_secret_key(&resolved, passphrase.as_deref())
                 .with_context(|| format!("load key {}", resolved.display()))?;
-            session
-                .authenticate_publickey(username, Arc::new(key))
-                .await
-                .context("publickey auth")?
+            let cert = crate::ssh_cert::load_for_key(&resolved, cert_path.as_deref(), &key)?;
+            authenticate_key(session, username, Arc::new(key), cert, crate::ssh_cert::Issuer::File).await?
         }
         AuthMethod::KeyRef { key_ref } => {
             // Key material lives only in the OS keychain (access grants) —
@@ -1880,6 +1878,36 @@ async fn authenticate(
         return Err(anyhow!("Authentication failed"));
     }
     Ok(())
+}
+
+/// Public-key auth with `key`, offering `cert` first when there is one and
+/// falling back to the bare key, as OpenSSH does. When both are refused, the
+/// error says why the certificate likely was.
+async fn authenticate_key(
+    session: &mut client::Handle<ClientHandler>,
+    username: &str,
+    key: Arc<russh_keys::key::KeyPair>,
+    cert: Option<ssh_key::Certificate>,
+    issuer: crate::ssh_cert::Issuer,
+) -> Result<bool> {
+    let Some(cert) = cert else {
+        return session.authenticate_publickey(username, key).await.context("publickey auth");
+    };
+    let refused = crate::ssh_cert::refusal(&cert, username, issuer);
+    if session
+        .authenticate_openssh_cert(username, key.clone(), cert)
+        .await
+        .context("certificate auth")?
+    {
+        return Ok(true);
+    }
+    // A Cloudflare key exists only for its certificate.
+    if issuer == crate::ssh_cert::Issuer::File
+        && session.authenticate_publickey(username, key).await.context("publickey auth")?
+    {
+        return Ok(true);
+    }
+    bail!("Authentication failed: {refused}")
 }
 
 /// Drive a keyboard-interactive exchange. Auto-answers the ordinary login

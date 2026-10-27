@@ -27,6 +27,9 @@ pub struct ProfilePreview {
     /// password — the user fills it in).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_file: Option<String>,
+    /// OpenSSH `CertificateFile` for that key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_file: Option<String>,
     /// Free-form note shown next to the preview row. Importers use this for
     /// "from ~/.ssh/config", "site folder: Personal/Work", etc.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,6 +67,7 @@ impl ProfilePreview {
             port: 22,
             username: String::new(),
             identity_file: None,
+            certificate_file: None,
             note: None,
             ftp_encoding: None,
             ftp_active_mode: None,
@@ -82,6 +86,7 @@ impl ProfilePreview {
             AuthMethod::Key {
                 path,
                 passphrase: None,
+                cert_path: self.certificate_file.clone(),
             }
         } else {
             AuthMethod::Password {

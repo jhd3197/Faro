@@ -66,6 +66,10 @@ russh-sftp = "2.0"
 # both OpenSSH and russh's own loader read back. Already in the tree as a russh
 # transitive dep; pulled directly here for the generator.
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption", "getrandom"] }
+# `cloudflared access ssh-gen` writes its short-lived key as a SEC1
+# `EC PRIVATE KEY` PEM, which russh can't read; p256 re-encodes it as PKCS#8.
+# Already in the tree through russh-keys.
+p256 = { version = "0.13", features = ["pem", "pkcs8"] }
 
 # Faro Agent (Faro-to-Faro remote control) — shared wire protocol + encrypted
 # channel. mdns-sd powers LAN discovery of paired daemons. faro-agentd (a lib

@@ -1585,6 +1585,7 @@ dependencies = [
  "mdns-sd",
  "notify",
  "object_store",
+ "p256",
  "percent-encoding",
  "quick-xml 0.36.2",
  "rand 0.8.6",
