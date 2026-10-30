@@ -1439,7 +1439,18 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn duplicate_local(path: &str) -> Result<(), String> {
+/// `cp` line for `duplicate_ssh`. A symlink to a directory is copied as the
+/// folder it points at (`cp -aH` follows the command-line link and keeps links
+/// inside the tree). A file link or a broken link is copied as itself.
+fn duplicate_remote_command(src: &str, dst: &str) -> String {
+    let src_q = sh_quote(src);
+    let dst_q = sh_quote(dst);
+    format!(
+        "if test -L {src_q} && test -d {src_q}; then cp -aH -- {src_q} {dst_q}; else cp -a -- {src_q} {dst_q}; fi"
+    )
+}
+
+pub(crate) fn duplicate_local(path: &str) -> Result<(), String> {
     let src = Path::new(path);
     if !src.exists() {
         return Err(format!("{path} does not exist"));
@@ -1470,7 +1481,7 @@ fn duplicate_local(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn duplicate_ssh(ssh: &Arc<SshSession>, path: &str) -> Result<(), String> {
+pub(crate) async fn duplicate_ssh(ssh: &Arc<SshSession>, path: &str) -> Result<(), String> {
     let path = path.trim_end_matches('/');
     let (parent, name) = split_remote(path);
     let mut n = 1;
@@ -1489,11 +1500,7 @@ async fn duplicate_ssh(ssh: &Arc<SshSession>, path: &str) -> Result<(), String> 
         }
     };
     let out = ssh
-        .exec(&format!(
-            "cp -a -- {} {}",
-            sh_quote(path),
-            sh_quote(&dst)
-        ))
+        .exec(&duplicate_remote_command(path, &dst))
         .await
         .map_err(err)?;
     if out.exit_code != Some(0) {
@@ -2671,5 +2678,13 @@ mod upload_inventory_tests {
         let collision = ["a", "other/a"].map(|p| root.join(p).to_string_lossy().into_owned()).to_vec();
         assert!(inspect_upload_paths(collision).await.unwrap_err().contains("conflicting"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn directory_link_copy_follows_only_the_command_line_link() {
+        let cmd = super::duplicate_remote_command("/srv/linked", "/srv/linked copy");
+        assert!(cmd.contains("test -L '/srv/linked' && test -d '/srv/linked'"));
+        assert!(cmd.contains("cp -aH -- '/srv/linked' '/srv/linked copy'"));
+        assert!(cmd.contains("cp -a -- '/srv/linked' '/srv/linked copy'"));
     }
 }
