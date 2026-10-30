@@ -288,26 +288,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "save_imported_profiles":
       return 0;
     case "cf_account_status":
-      return {
-        connected: true,
-        accountId: "acct_demo",
-        accountName: "Example Co",
-        choices: [],
-        permissions: ["Account · Cloudflare Tunnel · Edit"],
-        serviceTokenClientId: "faro-demo.access",
-      };
-    case "cf_account_hostnames":
-      return [
-        {
-          hostname: "ssh.edge.example.com",
-          label: "tunnel edge",
-          tunnelId: "tun_edge",
-          tunnelStatus: "healthy",
-          connectorLastSeen: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
-          connectorVersion: "2026.8.2",
-          appId: "app_edge",
-        },
-      ];
+      return { connected: false, choices: [], permissions: [] };
     case "cf_forwards_status":
       return cfForwardRows();
     case "cf_forward_start": {
@@ -357,6 +338,17 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
         pairing: null,
       };
     case "cf_account_hostnames":
+      return [
+        {
+          hostname: "ssh.edge.example.com",
+          label: "tunnel edge",
+          tunnelId: "tun_edge",
+          tunnelStatus: "healthy",
+          connectorLastSeen: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+          connectorVersion: "2026.8.2",
+          appId: "app_edge",
+        },
+      ];
     case "cf_account_zones":
       return [];
     case "import_faro_file":
