@@ -9,6 +9,7 @@ import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSettings } from "@/stores/settingsStore";
 import { toast } from "@/stores/toastStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { LOCAL_SESSION, type DirEntry } from "@/lib/types";
 import { useSiteBrowser } from "@/hooks/useSiteBrowser";
 import { useRememberedLocalPath } from "@/hooks/useRememberedLocalPath";
@@ -161,7 +162,11 @@ export function FileBrowser() {
     if (!dest) {
       toast.error(
         "No download folder",
-        "Set a default download folder in Settings."
+        "Set a default download folder in Settings.",
+        {
+          label: "Open download folder settings",
+          settings: SETTINGS_ENTRY_POINTS.downloadFolder,
+        }
       );
       return;
     }

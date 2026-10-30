@@ -39,6 +39,7 @@ import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import { useTerminals } from "@/stores/terminalsStore";
 import { TERMINAL_CHORDS } from "@/lib/terminalChords";
+import { SETTINGS_SECTIONS, settingsCommandId } from "@/lib/settingsNav";
 
 export interface Command {
   id: string;
@@ -70,6 +71,7 @@ export function useCommands(): Command[] {
   const toggleAgentDrawer = useLayout((s) => s.toggleAgentDrawer);
   const zen = useLayout((s) => s.zen);
   const openDialog = useLayout((s) => s.openDialog);
+  const openSettings = useLayout((s) => s.openSettings);
   const setShortcutsOpen = useLayout((s) => s.setShortcutsOpen);
   const openSkills = useSkills((s) => s.openPanel);
   const snippets = useSnippets((s) => s.snippets);
@@ -106,6 +108,14 @@ export function useCommands(): Command[] {
       combo: "mod+,",
       run: () => openDialog("settings"),
     },
+    ...SETTINGS_SECTIONS.map((sec) => ({
+      id: settingsCommandId(sec.id),
+      title: sec.label,
+      group: "Settings",
+      icon: <SettingsIcon size={14} />,
+      keywords: `settings preferences ${sec.keywords}`,
+      run: () => openSettings(sec.id),
+    })),
     {
       id: "shortcuts",
       title: "Keyboard Shortcuts",

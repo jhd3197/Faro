@@ -31,41 +31,35 @@ import { CliUpdaterSettings } from "./CliUpdaterSettings";
 import { CloudflareSettings } from "./CloudflareSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
 import { AboutSettings } from "./AboutSettings";
+import { useLayout } from "@/stores/layoutStore";
+import {
+  SETTINGS_FOCUS,
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "@/lib/settingsNav";
 
 interface Props {
   onClose: () => void;
 }
 
-type SectionId =
-  | "appearance"
-  | "transfers"
-  | "panes"
-  | "terminal"
-  | "keyboard"
-  | "connections"
-  | "remoteControl"
-  | "sync"
-  | "bridge"
-  | "cli"
-  | "cloudflare"
-  | "backup"
-  | "about";
+const SECTION_ICONS: Record<SettingsSectionId, React.ReactNode> = {
+  appearance: <Palette size={14} />,
+  transfers: <ArrowDownUp size={14} />,
+  panes: <FolderTree size={14} />,
+  terminal: <TerminalSquare size={14} />,
+  keyboard: <Keyboard size={14} />,
+  connections: <Plug size={14} />,
+  remoteControl: <MonitorSmartphone size={14} />,
+  sync: <FolderSync size={14} />,
+  bridge: <Radio size={14} />,
+  cli: <TerminalSquare size={14} />,
+  cloudflare: <Cloud size={14} />,
+  backup: <ShieldAlert size={14} />,
+  about: <Info size={14} />,
+};
 
-const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
-  { id: "appearance", label: "Appearance", icon: <Palette size={14} /> },
-  { id: "transfers", label: "Transfers", icon: <ArrowDownUp size={14} /> },
-  { id: "panes", label: "File panes", icon: <FolderTree size={14} /> },
-  { id: "terminal", label: "Terminal", icon: <TerminalSquare size={14} /> },
-  { id: "keyboard", label: "Keyboard", icon: <Keyboard size={14} /> },
-  { id: "connections", label: "Connections", icon: <Plug size={14} /> },
-  { id: "remoteControl", label: "Remote control", icon: <MonitorSmartphone size={14} /> },
-  { id: "sync", label: "Folder Sync", icon: <FolderSync size={14} /> },
-  { id: "bridge", label: "Agent Bridge", icon: <Radio size={14} /> },
-  { id: "cli", label: "faro-cli", icon: <TerminalSquare size={14} /> },
-  { id: "cloudflare", label: "Cloudflare", icon: <Cloud size={14} /> },
-  { id: "backup", label: "Backup", icon: <ShieldAlert size={14} /> },
-  { id: "about", label: "About", icon: <Info size={14} /> },
-];
+const SECTIONS: { id: SettingsSectionId; label: string; icon: React.ReactNode }[] =
+  SETTINGS_SECTIONS.map((sec) => ({ ...sec, icon: SECTION_ICONS[sec.id] }));
 
 export function Settings({ onClose }: Props) {
   const s = useSettings();
@@ -83,7 +77,65 @@ export function Settings({ onClose }: Props) {
   const titleId = useId();
   useDialog(panelRef, { onClose });
 
-  const [active, setActive] = useState<SectionId>("appearance");
+  const target = useLayout((s) => s.settingsTarget);
+  const [active, setActive] = useState<SettingsSectionId>(
+    () => useLayout.getState().settingsTarget?.section ?? "appearance"
+  );
+
+  // A jump from another page (or a second jump while Settings is already
+  // open) names the section. A generic open leaves the target null, which
+  // is Appearance. Clicking the nav does not change the target, so it is
+  // not pulled back.
+  useEffect(() => {
+    setActive(target?.section ?? "appearance");
+  }, [target]);
+
+  useEffect(() => {
+    const root = panelRef.current;
+    if (!root) return;
+    let cancelled = false;
+    let timer = 0;
+
+    const place = () => {
+      const nav = root.querySelector<HTMLElement>(
+        `[data-settings-section="${active}"]`
+      );
+      nav?.scrollIntoView({ block: "nearest" });
+      // A click in the section list already moved the highlight. Don't pull
+      // focus back to a jump that asked for a different section.
+      if (!target || target.section !== active) return true;
+      if (target.focus) {
+        const el = root.querySelector(
+          `[data-settings-focus="${CSS.escape(target.focus)}"]`
+        );
+        if (el instanceof HTMLElement) {
+          el.scrollIntoView({ block: "center" });
+          const focusable = el.matches("input, select, textarea, button")
+            ? el
+            : el.querySelector<HTMLElement>("input, select, textarea, button");
+          (focusable ?? nav)?.focus();
+          return true;
+        }
+      }
+      nav?.focus();
+      // The named control can show up after a status round-trip. Keep looking.
+      return !target.focus;
+    };
+
+    const attempt = (tries: number) => {
+      if (cancelled) return;
+      if (place() || tries <= 0) return;
+      timer = window.setTimeout(() => attempt(tries - 1), 50);
+    };
+
+    // After the dialog's own initial-focus frame, so a deep link wins.
+    const raf = requestAnimationFrame(() => attempt(target?.focus ? 30 : 0));
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [target, active]);
 
   const renderContent = () => {
     switch (active) {
@@ -263,6 +315,7 @@ export function Settings({ onClose }: Props) {
             >
               <div className="flex w-full items-center gap-1.5">
                 <input
+                  data-settings-focus={SETTINGS_FOCUS.downloadFolder}
                   value={s.defaultDownloadFolder}
                   onChange={(e) => s.setDefaultDownloadFolder(e.target.value)}
                   placeholder="System Downloads"
@@ -583,6 +636,8 @@ export function Settings({ onClose }: Props) {
             return (
               <button
                 key={sec.id}
+                type="button"
+                data-settings-section={sec.id}
                 onClick={() => setActive(sec.id)}
                 aria-current={on ? "page" : undefined}
                 className={cn(
@@ -604,7 +659,9 @@ export function Settings({ onClose }: Props) {
         {/* Content pane for the active section. */}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center border-b border-border px-6 py-3.5">
-            <span className="text-sm font-semibold">{activeLabel}</span>
+            <span className="text-sm font-semibold" data-settings-heading={active}>
+              {activeLabel}
+            </span>
             <div className="flex-1" />
             <button
               onClick={onClose}

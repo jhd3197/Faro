@@ -3,6 +3,7 @@ import { UserPlus, Loader2, CheckCircle2, Copy, Terminal as TerminalIcon, UserMi
 import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useDialog } from "@/hooks/useDialog";
 import { toast } from "@/stores/toastStore";
 import { toastError } from "@/lib/errors";
@@ -104,7 +105,7 @@ function RootStep({ profile, plan }: { profile: ConnectionProfile; plan: CfInvit
 // reverses 1 and 2.
 export function InviteDialog({ ids, onClose }: Props) {
   const profiles = useConnections((s) => s.profiles);
-  const openDialog = useLayout((s) => s.openDialog);
+  const openSettings = useLayout((s) => s.openSettings);
   const openExport = useLayout((s) => s.openExport);
   const targets = profiles.filter((p) => ids.includes(p.id) && isCloudflare(p));
   const { status } = useCloudflareAccount();
@@ -185,7 +186,9 @@ export function InviteDialog({ ids, onClose }: Props) {
                 Settings › Cloudflare.
               </div>
               <button
-                onClick={() => openDialog("settings")}
+                type="button"
+                data-settings-link="inviteCloudflare"
+                onClick={() => openSettings(SETTINGS_ENTRY_POINTS.inviteCloudflare)}
                 className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover"
               >
                 <SettingsIcon size={11} /> Settings

@@ -1,11 +1,15 @@
 import { create } from "zustand";
+import { ipc } from "@/lib/ipc";
+import { useLayout } from "@/stores/layoutStore";
 
 export type ToastVariant = "info" | "success" | "error" | "warning";
 
-/** A link button on a toast. A URL, not a callback, so history keeps it. */
+/** A link button on a toast. A URL or a settings section — both JSON, so history keeps them. */
 export interface ToastAction {
   label: string;
-  url: string;
+  url?: string;
+  /** Open Settings on this section (and scroll to `focus` when set). */
+  settings?: { section: string; focus?: string };
 }
 
 export interface Toast {
@@ -88,12 +92,21 @@ export const useToasts = create<ToastState>((set, get) => ({
 
 // Call-from-anywhere helper (stores, ipc handlers, components).
 export const toast = {
-  info: (title: string, message?: string) =>
-    useToasts.getState().push({ variant: "info", title, message }),
-  success: (title: string, message?: string) =>
-    useToasts.getState().push({ variant: "success", title, message }),
-  error: (title: string, message?: string) =>
-    useToasts.getState().push({ variant: "error", title, message }),
-  warning: (title: string, message?: string) =>
-    useToasts.getState().push({ variant: "warning", title, message }),
+  info: (title: string, message?: string, action?: ToastAction) =>
+    useToasts.getState().push({ variant: "info", title, message, action }),
+  success: (title: string, message?: string, action?: ToastAction) =>
+    useToasts.getState().push({ variant: "success", title, message, action }),
+  error: (title: string, message?: string, action?: ToastAction) =>
+    useToasts.getState().push({ variant: "error", title, message, action }),
+  warning: (title: string, message?: string, action?: ToastAction) =>
+    useToasts.getState().push({ variant: "warning", title, message, action }),
 };
+
+/** Follow a toast's link: a settings section in-app, or an external URL. */
+export function followToastAction(action: ToastAction): void {
+  if (action.settings) {
+    useLayout.getState().openSettings(action.settings);
+    return;
+  }
+  if (action.url) void ipc.openExternalUrl(action.url);
+}

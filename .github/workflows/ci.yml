@@ -58,6 +58,9 @@ jobs:
       - name: Synchronized browsing and local folder memory
         run: node --test scripts/sync-browse.test.mjs
 
+      - name: Settings section routing
+        run: node --test scripts/settings-nav.test.mjs scripts/settings-deep-link.test.mjs
+
       - name: TypeScript + Vite build
         run: npm run build
 

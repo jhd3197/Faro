@@ -5,6 +5,7 @@ import { toast } from "@/stores/toastStore";
 import { toastError } from "@/lib/errors";
 import { openExternal } from "@/lib/openExternal";
 import type { CfAccountStatus, CfSshHostname } from "@/lib/types";
+import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 
 const TOKEN_PAGE = "https://dash.cloudflare.com/profile/api-tokens";
 
@@ -83,7 +84,11 @@ export function CloudflareAccountCard() {
 
   if (!status) return null;
   return (
-    <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm" data-testid="cf-account">
+    <div
+      className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm"
+      data-testid="cf-account"
+      data-settings-focus={SETTINGS_FOCUS.cloudflareAccount}
+    >
       <div className="mb-1 font-medium text-text">Cloudflare account</div>
       {!status.connected ? (
         <>

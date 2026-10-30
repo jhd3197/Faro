@@ -1,6 +1,7 @@
 import { useId, useMemo, useRef, useState } from "react";
 import { X, Keyboard } from "lucide-react";
 import { useLayout } from "@/stores/layoutStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useResolvedCommands } from "@/lib/keybindings";
 import { useBindings } from "@/stores/bindingsStore";
 import { FILE_BROWSER_KEYS, FILE_BROWSER_GROUP } from "@/lib/fileBrowserKeys";
@@ -20,6 +21,7 @@ const EXTRAS: { group: string; title: string; combo: string }[] = [
 export function KeyboardShortcutsDialog() {
   const open = useLayout((s) => s.shortcutsOpen);
   const setOpen = useLayout((s) => s.setShortcutsOpen);
+  const openSettings = useLayout((s) => s.openSettings);
   const commands = useResolvedCommands();
   const overrides = useBindings((s) => s.overrides);
   const [q, setQ] = useState("");
@@ -114,6 +116,19 @@ export function KeyboardShortcutsDialog() {
               </div>
             ))
           )}
+        </div>
+        <div className="flex justify-end border-t border-border px-5 py-2.5">
+          <button
+            type="button"
+            data-settings-link="keyboardCustomize"
+            onClick={() => {
+              setOpen(false);
+              openSettings(SETTINGS_ENTRY_POINTS.keyboardCustomize);
+            }}
+            className="text-[12px] font-medium text-accent hover:underline"
+          >
+            Customize shortcuts
+          </button>
         </div>
       </div>
     </div>

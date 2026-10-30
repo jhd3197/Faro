@@ -13,6 +13,7 @@ import { toast } from "@/stores/toastStore";
 import type { AgentHostStatus } from "@/lib/types";
 import { onAgentHostPaired } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
+import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 
 /// Settings → Remote control. Lets THIS machine be driven from the user's other
 /// Faros: flip it on, click "Show pairing code", read the six digits into the
@@ -166,6 +167,7 @@ export function RemoteControlSettings() {
             ) : (
               <button
                 type="button"
+                data-settings-focus={SETTINGS_FOCUS.showPairingCode}
                 disabled={busy}
                 onClick={() => run(() => ipc.agentHostOpenPairing())}
                 className="btn-accent flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
