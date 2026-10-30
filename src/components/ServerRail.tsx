@@ -4,7 +4,6 @@ import {
   Plus,
   Download,
   Upload,
-  FileCode,
   Link2,
   UserPlus,
   Cloud,
@@ -489,20 +488,13 @@ export function ServerRail() {
         },
       });
     }
+    // One entry: the export dialog itself offers the Faro file or OpenSSH config.
     items.push({
       label: "Export…",
       icon: <Upload size={14} />,
       onClick: () => openExport({ ids: [p.id], format: "faro", label: p.name }),
-      separatorAfter: p.protocol !== "sftp",
+      separatorAfter: true,
     });
-    if (p.protocol === "sftp") {
-      items.push({
-        label: "Export as OpenSSH config…",
-        icon: <FileCode size={14} />,
-        onClick: () => openExport({ ids: [p.id], format: "openssh", label: p.name }),
-        separatorAfter: true,
-      });
-    }
     const siblings = flatOrder().filter(item => (item.group || undefined) === (p.group || undefined));
     const position = siblings.findIndex(item => item.id === p.id);
     const move = (offset: number) => {
