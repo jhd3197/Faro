@@ -25,13 +25,38 @@ export function useCloudflareAccount() {
   return { status, setStatus, refresh };
 }
 
-/** Tunnel health as a short word with a colour. */
-export function TunnelHealth({ status }: { status?: string }) {
-  if (!status) return null;
+/** A connector timestamp as a short relative phrase, with the raw value kept
+ *  for the tooltip. Future or unparseable values stay as a date. */
+function formatSeen(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins < 0) return iso.slice(0, 16).replace("T", " ");
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return iso.slice(0, 10);
+}
+
+/** Tunnel health: status, and when we know them the connector's last seen
+ *  time and the cloudflared version on the server. */
+export function TunnelHealth({
+  status,
+  lastSeen,
+  version,
+}: {
+  status?: string;
+  lastSeen?: string;
+  version?: string;
+}) {
+  if (!status && !lastSeen && !version) return null;
   const tone = status === "healthy" ? "text-success" : status === "degraded" ? "text-warning" : "text-danger";
   return (
-    <span className={tone} data-tunnel-status={status}>
-      tunnel {status === "inactive" ? "not connected" : status}
+    <span className={tone} data-tunnel-status={status || undefined} data-testid="tunnel-health" title={lastSeen}>
+      {status ? `tunnel ${status === "inactive" ? "not connected" : status}` : "tunnel"}
+      {version ? <span className="text-text-dim"> · cloudflared {version}</span> : null}
+      {lastSeen ? <span className="text-text-dim"> · connector {formatSeen(lastSeen)}</span> : null}
     </span>
   );
 }
@@ -210,7 +235,13 @@ export function CloudflareAccountCard() {
                   <span className="font-mono text-text">{h.hostname}</span>
                   <span className="text-text-dim">{h.label}</span>
                   <span className="ml-auto">
-                    {h.tunnelStatus ? <TunnelHealth status={h.tunnelStatus} /> : (
+                    {h.tunnelStatus ? (
+                      <TunnelHealth
+                        status={h.tunnelStatus}
+                        lastSeen={h.connectorLastSeen}
+                        version={h.connectorVersion}
+                      />
+                    ) : (
                       <span className="inline-flex items-center gap-1 text-text-dim">
                         <AlertTriangle size={11} /> no tunnel here
                       </span>

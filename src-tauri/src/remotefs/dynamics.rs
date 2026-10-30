@@ -606,6 +606,7 @@ mod tests {
             jump_via: None,
             proxy_command: None,
             oauth_client_id: None,
+            cf_forwards: Vec::new(),
         };
 
         // Client-credentials blob: tenant:client_id:client_secret.

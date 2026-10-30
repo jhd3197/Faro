@@ -111,30 +111,7 @@ pub fn build(cfg: &ProxyCommandConfig, host: &str, port: u16, user: &str) -> Res
                 .map(str::trim)
                 .filter(|h| !h.is_empty())
                 .unwrap_or(host);
-            let id = cfg.service_token_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
-            let secret = cfg.service_token_secret.as_deref().filter(|s| !s.is_empty());
-            let env = match (id, secret) {
-                (Some(id), Some(secret)) => vec![
-                    ("TUNNEL_SERVICE_TOKEN_ID".into(), id.into()),
-                    ("TUNNEL_SERVICE_TOKEN_SECRET".into(), secret.into()),
-                ],
-                (Some(_), None) => {
-                    bail!("the Cloudflare Access service token has an ID but no secret; enter the secret in the connection editor")
-                }
-                (None, Some(_)) => {
-                    bail!("the Cloudflare Access service token has a secret but no ID; enter the ID in the connection editor")
-                }
-                // No token of its own: the connected account's, when the
-                // process runs unattended (faro-cli). The app signs in instead.
-                (None, None) => fallback_service_token()
-                    .map(|(id, secret)| {
-                        vec![
-                            ("TUNNEL_SERVICE_TOKEN_ID".into(), id),
-                            ("TUNNEL_SERVICE_TOKEN_SECRET".into(), secret),
-                        ]
-                    })
-                    .unwrap_or_default(),
-            };
+            let env = cloudflare_token_env(Some(cfg))?;
             Ok(CommandSpec {
                 program: "cloudflared".into(),
                 args: ["access", "ssh", "--hostname", hostname].map(String::from).to_vec(),
@@ -301,6 +278,42 @@ static CLOUDFLARED_PATH: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock:
 /// Cloudflare routes that carry none. Set only by faro-cli: nobody is there to
 /// sign in in a browser. See `cloudflare_api::service_token`.
 static FALLBACK_SERVICE_TOKEN: std::sync::RwLock<Option<(String, String)>> = std::sync::RwLock::new(None);
+
+/// Environment for an Access service token: the connection's own pair, or
+/// the account-wide token set for unattended runs (faro-cli). Empty when
+/// neither is set — the app signs in through the browser instead. Shared by
+/// `access ssh` and `access tcp` so both use the same credentials.
+pub fn cloudflare_token_env(cfg: Option<&crate::profiles::ProxyCommandConfig>) -> Result<Vec<(String, String)>> {
+    let (id, secret) = match cfg {
+        Some(cfg) => (
+            cfg.service_token_id.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            cfg.service_token_secret.as_deref().filter(|s| !s.is_empty()),
+        ),
+        None => (None, None),
+    };
+    match (id, secret) {
+        (Some(id), Some(secret)) => Ok(vec![
+            ("TUNNEL_SERVICE_TOKEN_ID".into(), id.into()),
+            ("TUNNEL_SERVICE_TOKEN_SECRET".into(), secret.into()),
+        ]),
+        (Some(_), None) => {
+            bail!("the Cloudflare Access service token has an ID but no secret; enter the secret in the connection editor")
+        }
+        (None, Some(_)) => {
+            bail!("the Cloudflare Access service token has a secret but no ID; enter the ID in the connection editor")
+        }
+        // No token of its own: the connected account's, when the process
+        // runs unattended (faro-cli). The app signs in instead.
+        (None, None) => Ok(fallback_service_token()
+            .map(|(id, secret)| {
+                vec![
+                    ("TUNNEL_SERVICE_TOKEN_ID".into(), id),
+                    ("TUNNEL_SERVICE_TOKEN_SECRET".into(), secret),
+                ]
+            })
+            .unwrap_or_default()),
+    }
+}
 
 pub fn set_fallback_service_token(token: Option<(String, String)>) {
     if let Ok(mut t) = FALLBACK_SERVICE_TOKEN.write() {
