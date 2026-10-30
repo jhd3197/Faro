@@ -97,7 +97,12 @@ async fn ssh_hostnames_come_from_tunnels_and_access_apps() {
         "hosts",
         json!({
             tunnels.clone(): [
-                { "id": "t1", "name": "web-1", "status": "healthy" },
+                { "id": "t1", "name": "web-1", "status": "healthy",
+                  "conns_active_at": "2026-10-01T00:00:00Z",
+                  "connections": [
+                    { "opened_at": "2026-09-01T00:00:00Z", "client_version": "2025.1.0", "colo_name": "old" },
+                    { "opened_at": "2026-10-30T12:00:00Z", "client_version": "2026.8.2", "colo_name": "lhr01" },
+                  ] },
                 { "id": "t2", "name": "old", "status": "down", "deleted_at": "2020-01-01T00:00:00Z" },
             ],
             format!("{tunnels}/t1/configurations"): [{ "config": { "ingress": [
@@ -117,8 +122,11 @@ async fn ssh_hostnames_come_from_tunnels_and_access_apps() {
     assert_eq!(names, ["legacy.example.com", "web-1-ssh.example.com"], "{hosts:?}");
     let web = &hosts[1];
     assert_eq!(web.tunnel_status.as_deref(), Some("healthy"));
+    assert_eq!(web.connector_version.as_deref(), Some("2026.8.2"));
+    assert_eq!(web.connector_last_seen.as_deref(), Some("2026-10-30T12:00:00Z"));
     assert_eq!(web.app_id.as_deref(), Some("app1"));
     assert_eq!(hosts[0].tunnel_status, None);
+    assert_eq!(hosts[0].connector_version, None);
 }
 
 #[tokio::test]

@@ -128,6 +128,32 @@ export interface ConnectionProfile {
   /** Cloud drives: client id of the user's own registered OAuth app. Absent =
    *  the app built into this release, when there is one. */
   oauthClientId?: string;
+  /** Named Cloudflare Access TCP forwards for this connection. */
+  cfForwards?: CfForward[];
+}
+
+/** An Access-protected service exposed on a local port (`cloudflared access tcp`). */
+export interface CfForward {
+  /** Unique on this connection. The CLI addresses it by this name. */
+  name: string;
+  /** Access hostname. Absent = the connection's Cloudflare hostname. */
+  hostname?: string;
+  localPort: number;
+  /** Web panel: the rail offers Open in browser for the local port. */
+  web?: boolean;
+}
+
+/** A forward plus whether it is listening right now. */
+export interface CfForwardStatus {
+  profileId: string;
+  profileName: string;
+  name: string;
+  hostname: string;
+  localPort: number;
+  web: boolean;
+  running: boolean;
+  pid?: number;
+  error?: string;
 }
 
 export type ProxyKind = "socks5" | "http";
@@ -510,7 +536,18 @@ export interface CfSshHostname {
   tunnelId?: string;
   /** "healthy" | "degraded" | "down" | "inactive". */
   tunnelStatus?: string;
+  /** When the connector was last seen (ISO-8601). */
+  connectorLastSeen?: string;
+  /** cloudflared version on the server. */
+  connectorVersion?: string;
   appId?: string;
+}
+
+/** Tunnel status plus connector last-seen and the server's cloudflared. */
+export interface CfTunnelHealth {
+  status: string;
+  connectorLastSeen?: string;
+  connectorVersion?: string;
 }
 
 /** What an export wrote (mirrors `faro_file::ExportSummary`). */

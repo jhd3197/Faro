@@ -82,6 +82,22 @@ export let profiles: ConnectionProfile[] = [
     region: "us-west-2",
     color: "#a78bfa",
   },
+  {
+    id: "p-cf",
+    name: "edge-access",
+    protocol: "sftp",
+    host: "ssh.edge.example.com",
+    port: 22,
+    username: "deploy",
+    auth: { kind: "cloudflarecert" },
+    color: "#fb923c",
+    proxyCommand: { kind: "cloudflare", hostname: "ssh.edge.example.com" },
+    cfForwards: [
+      { name: "postgres", hostname: "db.edge.example.com", localPort: 5433 },
+      { name: "admin", hostname: "admin.edge.example.com", localPort: 8080, web: true },
+      { name: "redis", hostname: "redis.edge.example.com", localPort: 6379 },
+    ],
+  },
 ];
 
 export function setProfiles(next: ConnectionProfile[]) {

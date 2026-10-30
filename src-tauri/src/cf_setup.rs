@@ -554,12 +554,14 @@ pub async fn cf_setup_cloudflare(
     setup_cloudflare(&api, &account, &profile, &request, token.as_deref()).await.map_err(err)
 }
 
-/// A tunnel's status, polled while the root step runs.
+/// A tunnel's status plus connector last-seen and the server's cloudflared
+/// version, polled while the root step runs.
 #[tauri::command]
-pub async fn cf_tunnel_status(tunnel_id: String, app: AppHandle) -> Result<String, String> {
+pub async fn cf_tunnel_status(tunnel_id: String, app: AppHandle) -> Result<cloudflare_api::TunnelHealth, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let (api, account) = cloudflare_api::connected(&dir).map_err(err)?;
-    Ok(api.tunnel(&account, &tunnel_id).await.map_err(err)?.status)
+    let tunnel = api.tunnel(&account, &tunnel_id).await.map_err(err)?;
+    Ok(cloudflare_api::TunnelHealth::from_tunnel(&tunnel))
 }
 
 /// Delete what setup created in the account; returns what couldn't be.

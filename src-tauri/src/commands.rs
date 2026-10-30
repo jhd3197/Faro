@@ -9,7 +9,7 @@ use base64::Engine as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 pub const LOCAL_SESSION: &str = "local";
@@ -219,11 +219,19 @@ pub async fn connect(
         .ok_or_else(|| {
             FaroError::new(ErrorKind::NotFound, format!("profile {profile_id} not found"))
         })?;
+    let forwards = profile.clone();
     let session_id = state
         .sessions
-        .connect(profile, app)
+        .connect(profile, app.clone())
         .await
         .map_err(FaroError::from)?;
+    // Named Access TCP forwards come up with the session. A port conflict
+    // is reported on the forward; it does not fail the connection.
+    if !forwards.cf_forwards.is_empty() {
+        let mgr = state.cf_forwards.clone();
+        let _ = tokio::task::spawn_blocking(move || mgr.start_profile(&forwards)).await;
+        let _ = app.emit("cf-forward://status", ());
+    }
     // Re-apply a previously-granted Agent Bridge access for this profile (session
     // ids are per-connect, so the bridge tracks the persistent grant by profile).
     state
@@ -256,9 +264,21 @@ pub async fn test_connection(
 #[tauri::command]
 pub async fn disconnect(
     session_id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.sessions.disconnect(&session_id).await.map_err(err)
+    let profile_id = state.sessions.get(&session_id).await.map(|s| s.profile().id.clone());
+    state.sessions.disconnect(&session_id).await.map_err(err)?;
+    // Stop this connection's forwards once nothing is using the session.
+    // A forward started from faro-cli is left running.
+    if let Some(id) = profile_id {
+        if state.sessions.ids_for_profile(&id).await.is_empty() {
+            let mgr = state.cf_forwards.clone();
+            let _ = tokio::task::spawn_blocking(move || mgr.stop_profile(&id)).await;
+            let _ = app.emit("cf-forward://status", ());
+        }
+    }
+    Ok(())
 }
 
 // ---------- Faro Agent (Faro-to-Faro remote control) ----------
@@ -462,6 +482,7 @@ pub async fn dropbox_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::dropbox_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -521,6 +542,7 @@ pub async fn onedrive_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::onedrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -585,6 +607,7 @@ pub async fn dynamics_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: None,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::dynamics_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -639,6 +662,7 @@ pub async fn gdrive_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::gdrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -693,6 +717,7 @@ pub async fn box_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::box_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),

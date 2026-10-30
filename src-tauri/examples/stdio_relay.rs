@@ -45,6 +45,10 @@ fn main() {
             Some("token") => access_token(&host),
             Some("login") => access_login(&host),
             Some("ssh-gen") => access_ssh_gen(&host),
+            // `cloudflared access tcp --hostname H --url 127.0.0.1:PORT`:
+            // bind the local port and stay up until killed. A stand-in for
+            // the real listener so forward tests can watch the process.
+            Some("tcp") => access_tcp(&args, &host),
             // Opt-in, so the plain relay tests keep their fake cloudflared.
             Some("ssh") if args.iter().any(|a| a == "--access") => {
                 access_ready(&host);
@@ -226,6 +230,40 @@ fn access_ready(host: &str) {
     if !valid && !sign_in(host) {
         eprintln!("failed to find token for {host}");
         std::process::exit(1)
+    }
+}
+
+/// `access tcp`: listen on `--url` until killed. `exit.faro.test` fails
+/// immediately so the app can prove a crashed cloudflared is reaped.
+/// Writes argv and the service-token env to the temp dir, keyed by hostname,
+/// for the forward tests. The secret stays out of argv.
+fn access_tcp(args: &[String], host: &str) -> ! {
+    if host == "exit.faro.test" {
+        eprintln!("cloudflared: simulated failure");
+        std::process::exit(1);
+    }
+    let url = args.iter().position(|a| a == "--url").and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| "127.0.0.1:0".into());
+    let addr = url.trim().trim_start_matches("tcp://");
+    let (listen_host, port) = addr.rsplit_once(':').unwrap_or(("127.0.0.1", "0"));
+    let port: u16 = port.parse().unwrap_or(0);
+    let bind_host = if listen_host == "localhost" { "127.0.0.1" } else { listen_host };
+    let id = std::env::var("TUNNEL_SERVICE_TOKEN_ID").unwrap_or_default();
+    let secret = std::env::var("TUNNEL_SERVICE_TOKEN_SECRET").unwrap_or_default();
+    let safe: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
+    let log = std::env::temp_dir().join(format!("faro-cf-tcp-{safe}.log"));
+    let _ = std::fs::write(&log, format!("argv={}\nid={id}\nsecret={secret}\n", args.join(" ")));
+    match std::net::TcpListener::bind((bind_host, port)) {
+        Ok(listener) => {
+            let _ = listener.set_nonblocking(true);
+            loop {
+                let _ = listener.accept();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        Err(e) => {
+            eprintln!("failed to bind {addr}: {e}");
+            std::process::exit(1);
+        }
     }
 }
 

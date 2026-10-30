@@ -213,6 +213,31 @@ pub struct ConnectionProfile {
     // the release has one. Its optional client secret lives in the keychain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_client_id: Option<String>,
+    /// Named Cloudflare Access TCP forwards (`cloudflared access tcp`) for
+    /// this connection: a database, RDP, an internal API, or a web panel.
+    /// Started and stopped with the session. Absent on profiles saved before
+    /// this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cf_forwards: Vec<CfForward>,
+}
+
+/// One Access-protected service a connection exposes on a local port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CfForward {
+    /// Name unique on this connection. `faro-cli cf forward` addresses it by
+    /// this name (or `connection/name` when another connection uses it too).
+    pub name: String,
+    /// Access hostname of the service. Absent = the connection's Cloudflare
+    /// hostname, then its host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Local port `cloudflared access tcp` listens on.
+    pub local_port: u16,
+    /// A web panel: the server rail offers Open in browser for
+    /// `http://127.0.0.1:<localPort>`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub web: bool,
 }
 
 /// Longest bastion chain a profile may connect through.
