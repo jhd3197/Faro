@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import type { ConnectionProfile } from "@/lib/types";
+import {
+  normalizeSettingsTarget,
+  type SettingsSectionId,
+  type SettingsTarget,
+} from "@/lib/settingsNav";
 
 // Which app-level modal is open (mutually exclusive). Centralized here so the
 // command palette, keyboard shortcuts and title-bar menus can all open them
@@ -50,6 +55,11 @@ interface LayoutState {
   dialog: AppDialog | null;
   openDialog: (d: AppDialog) => void;
   closeDialog: () => void;
+
+  // Where Settings should land. Set by openSettings; cleared by a generic
+  // open (the gear, Preferences, "Open Settings") so those stay on Appearance.
+  settingsTarget: SettingsTarget | null;
+  openSettings: (target: SettingsSectionId | string | { section: string; focus?: string }) => void;
 
   // Prefill for the New Connection editor, set by a faro:// deep link so the
   // editor opens pointed at the right server (never auto-connecting). Cleared
@@ -115,9 +125,16 @@ export const useLayout = create<LayoutState>((set) => ({
   toggleAgentDrawer: () => set((s) => ({ agentDrawerOpen: !s.agentDrawerOpen })),
 
   dialog: null,
-  openDialog: (d) => set({ dialog: d }),
+  openDialog: (d) => set({ dialog: d, settingsTarget: null }),
   closeDialog: () =>
-    set({ dialog: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, inviteIds: [], moveProfileId: null }),
+    set({ dialog: null, settingsTarget: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, inviteIds: [], moveProfileId: null }),
+
+  settingsTarget: null,
+  openSettings: (target) => {
+    const next = normalizeSettingsTarget(target);
+    if (!next) return;
+    set({ dialog: "settings", settingsTarget: next });
+  },
 
   connectionPrefill: null,
   openNewConnection: (prefill) =>

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useSettings } from "@/stores/settingsStore";
+import { useLayout } from "@/stores/layoutStore";
+import { SETTINGS_ENTRY_POINTS, type SettingsEntryPointId } from "@/lib/settingsNav";
 import { useDialog } from "@/hooks/useDialog";
 import {
   PROTOCOL_DEFAULT_PORT,
@@ -1946,6 +1948,26 @@ function KeyAuthSection({
   );
 }
 
+function SettingsJump({
+  entry,
+  children,
+}: {
+  entry: SettingsEntryPointId;
+  children: ReactNode;
+}) {
+  const openSettings = useLayout((s) => s.openSettings);
+  return (
+    <button
+      type="button"
+      data-settings-link={entry}
+      onClick={() => openSettings(SETTINGS_ENTRY_POINTS[entry])}
+      className="font-medium text-accent hover:underline"
+    >
+      {children}
+    </button>
+  );
+}
+
 /// Faro Agent connection editor: host/port, LAN discovery, and the pairing
 /// ceremony. Controls a whole remote machine (no login/auth) — it's paired once
 /// with a 6-digit code the daemon prints, then keyed by the pinned daemon key.
@@ -2145,7 +2167,9 @@ function AgentSection({
                 </span>{" "}
                 isn't accepting pairing right now. On that machine run{" "}
                 <span className="font-mono text-text-muted">faro-agentd pair</span> (or
-                open its Faro app → Settings → Remote control → Show pairing code),
+                open its Faro app →{" "}
+                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
+                {" "}→ Show pairing code),
                 then type the code here.
               </>
             ) : selectedMachine ? (
@@ -2156,14 +2180,17 @@ function AgentSection({
                 </span>
                 . No code there? Run{" "}
                 <span className="font-mono text-text-muted">faro-agentd pair</span> on
-                it, or open its Faro app → Settings → Remote control → Show pairing
-                code.
+                it, or open its Faro app →{" "}
+                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
+                {" "}→ Show pairing code.
               </>
             ) : (
               <>
                 On the machine you want to control, run{" "}
                 <span className="font-mono text-text-muted">faro-agentd pair</span> (or
-                open its Faro app → Settings → Remote control → Show pairing code) and
+                open its Faro app →{" "}
+                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
+                {" "}→ Show pairing code) and
                 type the 6-digit code below. Pairing sets up an end-to-end encrypted
                 link and pins the machine's key — you won't need the code again.
               </>
@@ -3524,8 +3551,9 @@ function CloudflareServerFields({
         <Hint tone="warn">
           This connection still carries its own service token (
           <span className="font-mono">{serviceTokenId}</span>). Faro now keeps one service token
-          for the whole Cloudflare account, in Settings › Cloudflare, for faro-cli and the Agent
-          Bridge.{" "}
+          for the whole Cloudflare account, in{" "}
+          <SettingsJump entry="profileCloudflareAccount">Settings › Cloudflare</SettingsJump>
+          , for faro-cli and the Agent Bridge.{" "}
           <button type="button" onClick={onRemoveToken} className="font-medium text-accent hover:underline">
             Remove it from this connection
           </button>

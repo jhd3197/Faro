@@ -13,6 +13,7 @@ import {
 import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useDialog } from "@/hooks/useDialog";
 import { toast } from "@/stores/toastStore";
 import { toastError, messageOf } from "@/lib/errors";
@@ -63,7 +64,7 @@ export function MoveToCloudflareDialog({ profileId, onClose }: Props) {
   const connect = useConnections((s) => s.connect);
   const saveProfile = useConnections((s) => s.saveProfile);
   const deleteProfile = useConnections((s) => s.deleteProfile);
-  const openDialog = useLayout((s) => s.openDialog);
+  const openSettings = useLayout((s) => s.openSettings);
   const { status } = useCloudflareAccount();
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -267,7 +268,9 @@ export function MoveToCloudflareDialog({ profileId, onClose }: Props) {
                 Cloudflare.
               </div>
               <button
-                onClick={() => openDialog("settings")}
+                type="button"
+                data-settings-link="moveToCloudflare"
+                onClick={() => openSettings(SETTINGS_ENTRY_POINTS.moveToCloudflare)}
                 className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover"
               >
                 <SettingsIcon size={11} /> Settings

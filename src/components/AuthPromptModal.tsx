@@ -11,6 +11,7 @@ import { useDialog } from "@/hooks/useDialog";
 import { useConnections } from "@/stores/connectionsStore";
 import { generatePassword } from "@/lib/password";
 import { toast, useToasts } from "@/stores/toastStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import type { AuthPromptEvent } from "@/lib/types";
 
 const lower = (s: string) => s.toLowerCase();
@@ -73,7 +74,14 @@ export function AuthPromptModal() {
     // Faro's own cloudflared has a newer official release.
     onCloudflaredStatus((s) => {
       if (s.updateAvailable && s.latest) {
-        toast.info(`cloudflared ${s.latest} is available`, "Update it in Settings → Cloudflare.");
+        toast.info(
+          `cloudflared ${s.latest} is available`,
+          "Update it in Settings → Cloudflare.",
+          {
+            label: "Open Cloudflare settings",
+            settings: SETTINGS_ENTRY_POINTS.cloudflaredUpdate,
+          }
+        );
       }
     }).then(keep);
     return () => {

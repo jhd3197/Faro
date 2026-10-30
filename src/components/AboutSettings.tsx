@@ -15,6 +15,8 @@ import { ipc } from "@/lib/ipc";
 import { openExternal } from "@/lib/openExternal";
 import { toast } from "@/stores/toastStore";
 import { useSettings } from "@/stores/settingsStore";
+import { useLayout } from "@/stores/layoutStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useUpdater } from "@/stores/updaterStore";
 import { UpdateProgress } from "./UpdateProgress";
 import type { PathStatus } from "@/lib/types";
@@ -228,6 +230,7 @@ function Toggle({
 /// it symlinks into `~/.local/bin` and, if needed, adds one guarded line to the
 /// shell profile.
 function PathRow() {
+  const openSettings = useLayout((s) => s.openSettings);
   const [status, setStatus] = useState<PathStatus | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -316,8 +319,16 @@ function PathRow() {
           <div className="min-w-0">
             <div className="text-text">faro-cli isn't installed yet.</div>
             <p className="mt-0.5 text-xs text-text-muted">
-              Install it from the <span className="font-medium">faro-cli</span> tab
-              first, then add it to your PATH here.
+              Install it from the{" "}
+              <button
+                type="button"
+                data-settings-link="aboutCliInstall"
+                onClick={() => openSettings(SETTINGS_ENTRY_POINTS.aboutCliInstall)}
+                className="font-medium text-accent hover:underline"
+              >
+                faro-cli
+              </button>{" "}
+              tab first, then add it to your PATH here.
             </p>
           </div>
         ) : (

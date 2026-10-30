@@ -5,6 +5,7 @@ import { useBindings } from "@/stores/bindingsStore";
 import { effectiveCombo } from "@/lib/keybindings";
 import { FILE_BROWSER_KEYS, FILE_BROWSER_GROUP } from "@/lib/fileBrowserKeys";
 import { keyCombo, formatCombo } from "@/lib/shortcuts";
+import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 import { cn } from "@/lib/cn";
 
 // Settings → Keyboard (Plan 15 Phase 2). A searchable, grouped list of every
@@ -162,6 +163,7 @@ export function KeyboardSettings() {
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-dim"
           />
           <input
+            data-settings-focus={SETTINGS_FOCUS.keyboardSearch}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search shortcuts…"

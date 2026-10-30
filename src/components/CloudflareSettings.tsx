@@ -6,6 +6,7 @@ import { useConnections } from "@/stores/connectionsStore";
 import { toastError } from "@/lib/errors";
 import type { AccessStatus, CloudflaredStatus, ConnectionProfile } from "@/lib/types";
 import { CloudflareAccountCard } from "./CloudflareAccount";
+import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 
 const SOURCE_LABEL: Record<CloudflaredStatus["source"], string> = {
   custom: "your own copy",
@@ -212,7 +213,11 @@ export function CloudflareSettings() {
 
       <CloudflareAccountCard />
 
-      <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm" data-testid="cloudflared-status">
+      <div
+        className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm"
+        data-testid="cloudflared-status"
+        data-settings-focus={SETTINGS_FOCUS.cloudflared}
+      >
         {!s ? (
           <div className="flex items-center gap-2 text-text-muted">
             <Loader2 size={15} className="animate-spin" /> Checking…

@@ -20,6 +20,7 @@ import { useSettings } from "@/stores/settingsStore";
 import { useSync } from "@/stores/syncStore";
 import { onTransferEvent, onTransferProgressBatch, onEditError } from "@/lib/ipc";
 import { useLayout } from "@/stores/layoutStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useTransfers } from "@/stores/transfersStore";
 
 type Permission = "unknown" | "granted" | "denied";
@@ -183,7 +184,7 @@ export function initNotifications(): () => void {
           `${p.name}: ${p.lastError ?? "sync failed"}`,
           () => {
             try {
-              useLayout.getState().openDialog("settings");
+              useLayout.getState().openSettings(SETTINGS_ENTRY_POINTS.folderSyncError);
             } catch {
               /* ignore */
             }

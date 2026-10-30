@@ -265,6 +265,33 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return 0;
     case "cf_account_status":
       return { connected: false, choices: [], permissions: [] };
+    case "cloudflared_status":
+    case "cloudflared_check":
+      return {
+        source: "path",
+        path: "/usr/bin/cloudflared",
+        version: "2026.1.0",
+        latest: "2026.1.0",
+        updateAvailable: false,
+      };
+    case "agent_host_status":
+    case "agent_host_set_enabled":
+    case "agent_host_open_pairing":
+    case "agent_host_close_pairing":
+    case "agent_host_set_policy":
+    case "agent_host_revoke_peer":
+      return {
+        enabled: true,
+        running: true,
+        port: 8722,
+        hostname: "this-computer",
+        os: "linux",
+        fingerprint: "SHA256:demo",
+        allowExec: false,
+        allowWrite: false,
+        peers: [],
+        pairing: null,
+      };
     case "cf_account_hostnames":
     case "cf_account_zones":
       return [];

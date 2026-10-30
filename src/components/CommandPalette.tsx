@@ -142,6 +142,7 @@ export function CommandPalette() {
             results.map((r, i) => (
               <button
                 key={r.c.id}
+                data-command-id={r.c.id}
                 data-idx={i}
                 role="option"
                 id={optionId(i)}
