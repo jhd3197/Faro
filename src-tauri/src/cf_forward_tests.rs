@@ -224,14 +224,7 @@ fn a_taken_port_is_reported_and_spawns_nothing() {
     let host = "db.busy.faro.test";
     let _ = std::fs::remove_file(log_for(host));
     let profile = profile("postgres", host, port, false, None);
-    let err = start(
-        &dir,
-        &profile,
-        &profile.cf_forwards[0],
-        "app",
-        Some(&bin),
-    )
-    .unwrap_err();
+    let err = start(&dir, &profile, &profile.cf_forwards[0], "app", Some(&bin)).unwrap_err();
     let msg = format!("{err:#}");
     assert!(
         msg.contains(&port.to_string()) && msg.contains("already in use"),
@@ -254,14 +247,7 @@ fn a_cloudflared_that_exits_immediately_is_reaped() {
     };
     let port = free_port();
     let profile = profile("postgres", "exit.faro.test", port, false, None);
-    let err = start(
-        &dir,
-        &profile,
-        &profile.cf_forwards[0],
-        "app",
-        Some(&bin),
-    )
-    .unwrap_err();
+    let err = start(&dir, &profile, &profile.cf_forwards[0], "app", Some(&bin)).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("simulated failure"), "{msg}");
     assert!(load(&dir).is_empty());
@@ -279,14 +265,7 @@ fn cli_owned_forward_survives_app_shutdown_until_stop() {
     };
     let port = free_port();
     let profile = profile("redis", "redis.cli.faro.test", port, false, None);
-    let running = start(
-        &dir,
-        &profile,
-        &profile.cf_forwards[0],
-        "cli",
-        Some(&bin),
-    )
-    .unwrap();
+    let running = start(&dir, &profile, &profile.cf_forwards[0], "cli", Some(&bin)).unwrap();
     cleanup.pids.push(running.pid);
     drop(running);
     Manager::new(&dir).shutdown();
@@ -335,4 +314,21 @@ fn hostname_falls_back_to_the_connection() {
         access_hostname(&p, &p.cf_forwards[0]).unwrap(),
         "ssh.edge.example"
     );
+}
+
+/// Stopping a forward must not signal this process. `kill -TERM -<pid>` without
+/// `--` does, and on CI that cancels the runner.
+#[test]
+fn stopping_a_child_does_not_kill_us() {
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    kill_tree(pid);
+    let _ = child.wait();
+    wait_dead(pid);
 }

@@ -586,32 +586,16 @@ fn kill_tree(pid: u32) {
     }
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
-            .args(["-TERM", &format!("-{pid}")])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let _ = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // `kill -TERM -<pid>` without `--` is parsed as an option and signals
+        // the caller's process group. On CI that group is the runner, and the
+        // step ends as "The operation was canceled". Only a group this process
+        // created (its leader is `pid`, and it is not our group) is safe.
+        signal(pid, "TERM", true);
+        signal(pid, "TERM", false);
         std::thread::sleep(Duration::from_millis(150));
         if alive(pid) {
-            let _ = Command::new("kill")
-                .args(["-KILL", &format!("-{pid}")])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            let _ = Command::new("kill")
-                .args(["-KILL", &pid.to_string()])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            signal(pid, "KILL", true);
+            signal(pid, "KILL", false);
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -626,6 +610,43 @@ fn kill_tree(pid: u32) {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// `group` is the private process group of a forward we spawned. Never the
+/// group this process belongs to.
+#[cfg(unix)]
+fn signal(pid: u32, sig: &str, group: bool) {
+    if group {
+        let Some(theirs) = pgrp(pid) else { return };
+        let Some(ours) = pgrp(std::process::id()) else {
+            return;
+        };
+        if theirs != pid as i32 || theirs == ours {
+            return;
+        }
+    }
+    let target = if group {
+        format!("-{pid}")
+    } else {
+        pid.to_string()
+    };
+    let _ = Command::new("kill")
+        .args(["-s", sig, "--", &target])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Process group id from `/proc/<pid>/stat` (the field after ppid).
+#[cfg(unix)]
+fn pgrp(pid: u32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.rsplit(')').next()?;
+    let mut fields = rest.split_whitespace();
+    let _state = fields.next()?;
+    let _ppid = fields.next()?;
+    fields.next()?.parse().ok()
 }
 
 pub(crate) fn alive(pid: u32) -> bool {
