@@ -1,16 +1,56 @@
-//! Forward lifecycle against `examples/stdio_relay.rs` standing in for
-//! `cloudflared access tcp`. No real Access account.
+//! Forward lifecycle against a small stand-in for `cloudflared access tcp`.
+//! No real Access account, and no nested `cargo build` (that rebuild races
+//! the test harness and gets the CI job canceled).
 
 use super::*;
 use crate::profiles::{ConnectionProfile, ProxyCommandConfig, ProxyCommandKind};
 use std::net::TcpListener;
-use std::sync::Mutex;
 
-/// The stand-in binary is one process-wide path, and these tests spawn it.
-static LOCK: Mutex<()> = Mutex::new(());
-
-fn relay() -> std::path::PathBuf {
-    crate::proxy_command::e2e::relay_exe()
+/// A python process that speaks just enough of `cloudflared access tcp`:
+/// bind `--url`, record argv and the service-token env, or exit at once
+/// for hostname `exit.faro.test`.
+fn stand_in(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("cloudflared");
+    std::fs::write(
+        &path,
+        r#"#!/usr/bin/env python3
+import os, sys, socket, time
+args = sys.argv[1:]
+def flag(name):
+    return args[args.index(name) + 1] if name in args else ""
+host = flag("--hostname")
+if host == "exit.faro.test":
+    print("cloudflared: simulated failure", file=sys.stderr)
+    sys.exit(1)
+url = flag("--url") or "127.0.0.1:0"
+listen_host, port = url.rsplit(":", 1)
+if listen_host == "localhost":
+    listen_host = "127.0.0.1"
+ident = os.environ.get("TUNNEL_SERVICE_TOKEN_ID", "")
+secret = os.environ.get("TUNNEL_SERVICE_TOKEN_SECRET", "")
+safe = "".join(c if c.isalnum() or c in ".-" else "_" for c in host)
+log = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"faro-cf-tcp-{safe}.log")
+open(log, "w").write(f"argv={' '.join(args)}\nid={ident}\nsecret={secret}\n")
+s = socket.socket()
+try:
+    s.bind((listen_host, int(port)))
+except OSError as e:
+    print(f"failed to bind {url}: {e}", file=sys.stderr)
+    sys.exit(1)
+s.listen(8)
+while True:
+    time.sleep(0.05)
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+    path
 }
 
 fn dir(name: &str) -> PathBuf {
@@ -96,8 +136,8 @@ impl Drop for Cleanup {
 
 #[test]
 fn start_stop_and_exit_leave_no_process() {
-    let _lock = LOCK.lock().unwrap();
     let dir = dir("life");
+    let bin = stand_in(&dir);
     let mut cleanup = Cleanup {
         dir: dir.clone(),
         pids: Vec::new(),
@@ -114,7 +154,7 @@ fn start_stop_and_exit_leave_no_process() {
     );
     let forward = &profile.cf_forwards[0];
 
-    let running = start(&dir, &profile, forward, "app", Some(&relay())).unwrap();
+    let running = start(&dir, &profile, forward, "app", Some(&bin)).unwrap();
     cleanup.pids.push(running.pid);
     assert!(!running.already);
     assert!(alive(running.pid));
@@ -140,7 +180,7 @@ fn start_stop_and_exit_leave_no_process() {
     );
 
     // Starting again does not spawn a second process.
-    let again = start(&dir, &profile, forward, "app", Some(&relay())).unwrap();
+    let again = start(&dir, &profile, forward, "app", Some(&bin)).unwrap();
     assert!(again.already && again.pid == running.pid);
     drop(again);
 
@@ -154,7 +194,7 @@ fn start_stop_and_exit_leave_no_process() {
 
     // Exit cleanup kills an app-owned forward and reaps it (no zombie left
     // that still holds the port).
-    let mut running = start(&dir, &profile, forward, "app", Some(&relay())).unwrap();
+    let mut running = start(&dir, &profile, forward, "app", Some(&bin)).unwrap();
     cleanup.pids.push(running.pid);
     let pid = running.pid;
     let mgr = Manager::new(&dir);
@@ -173,8 +213,8 @@ fn start_stop_and_exit_leave_no_process() {
 
 #[test]
 fn a_taken_port_is_reported_and_spawns_nothing() {
-    let _lock = LOCK.lock().unwrap();
     let dir = dir("busy");
+    let bin = stand_in(&dir);
     let _cleanup = Cleanup {
         dir: dir.clone(),
         pids: Vec::new(),
@@ -189,7 +229,7 @@ fn a_taken_port_is_reported_and_spawns_nothing() {
         &profile,
         &profile.cf_forwards[0],
         "app",
-        Some(&relay()),
+        Some(&bin),
     )
     .unwrap_err();
     let msg = format!("{err:#}");
@@ -206,8 +246,8 @@ fn a_taken_port_is_reported_and_spawns_nothing() {
 
 #[test]
 fn a_cloudflared_that_exits_immediately_is_reaped() {
-    let _lock = LOCK.lock().unwrap();
     let dir = dir("die");
+    let bin = stand_in(&dir);
     let _cleanup = Cleanup {
         dir: dir.clone(),
         pids: Vec::new(),
@@ -219,7 +259,7 @@ fn a_cloudflared_that_exits_immediately_is_reaped() {
         &profile,
         &profile.cf_forwards[0],
         "app",
-        Some(&relay()),
+        Some(&bin),
     )
     .unwrap_err();
     let msg = format!("{err:#}");
@@ -231,8 +271,8 @@ fn a_cloudflared_that_exits_immediately_is_reaped() {
 
 #[test]
 fn cli_owned_forward_survives_app_shutdown_until_stop() {
-    let _lock = LOCK.lock().unwrap();
     let dir = dir("cli");
+    let bin = stand_in(&dir);
     let mut cleanup = Cleanup {
         dir: dir.clone(),
         pids: Vec::new(),
@@ -244,7 +284,7 @@ fn cli_owned_forward_survives_app_shutdown_until_stop() {
         &profile,
         &profile.cf_forwards[0],
         "cli",
-        Some(&relay()),
+        Some(&bin),
     )
     .unwrap();
     cleanup.pids.push(running.pid);
