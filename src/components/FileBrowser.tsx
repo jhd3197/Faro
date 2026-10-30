@@ -11,6 +11,7 @@ import { useSettings } from "@/stores/settingsStore";
 import { toast } from "@/stores/toastStore";
 import { LOCAL_SESSION, type DirEntry } from "@/lib/types";
 import { useSiteBrowser } from "@/hooks/useSiteBrowser";
+import { useRememberedLocalPath } from "@/hooks/useRememberedLocalPath";
 import { FilePreview } from "./FilePreview";
 import { cn } from "@/lib/cn";
 
@@ -44,13 +45,8 @@ export function FileBrowser() {
       ).length
   );
 
-  const isWindows = navigator.userAgent.includes("Windows");
-  const [localPath, setLocalPath] = useState(isWindows ? "C:\\" : "/");
+  const [localPath, setLocalPath] = useRememberedLocalPath(profile, activeSessionId);
   const siteBrowser = useSiteBrowser(profile);
-
-  useEffect(() => {
-    if (profile?.defaultLocalPath) setLocalPath(profile.defaultLocalPath);
-  }, [activeSessionId, profile?.id, profile?.defaultLocalPath]);
 
   const serverSid = activeSessionId;
   const serverRemotePath = siteBrowser.path;

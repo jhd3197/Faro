@@ -3,13 +3,21 @@ import { BookmarkPlus, House } from "lucide-react";
 import { useSites } from "@/stores/sitesStore";
 import { SiteDialog } from "@/components/SiteDialog";
 import type { ConnectionProfile } from "@/lib/types";
+import { resolveLaunchRemotePath } from "@/lib/localFolder";
 
 /** Shared navigation keeps site locations intact across browser layouts and reconnects. */
 export function useSiteBrowser(profile: ConnectionProfile | null) {
   const { sites, activeByProfile, sitePaths, serverPaths, navigate } = useSites();
   const [saveTarget, setSaveTarget] = useState<{ profileId: string; serverName: string; path: string } | null>(null);
   const site = profile ? sites.find(s => s.profileId === profile.id && s.id === activeByProfile[profile.id]) : undefined;
-  const path = (site ? sitePaths[site.id] ?? site.path : profile ? serverPaths[profile.id] ?? profile.defaultRemotePath : undefined) ?? ".";
+  // Site shortcuts win over the server's last folder and the profile default.
+  // The remembered local folder is not consulted here.
+  const path = site
+    ? resolveLaunchRemotePath({ sitePath: sitePaths[site.id] ?? site.path })
+    : resolveLaunchRemotePath({
+        serverPath: profile ? serverPaths[profile.id] : undefined,
+        defaultRemotePath: profile?.defaultRemotePath,
+      });
   const profileId = profile?.id;
   const setPath = useCallback((next: string) => { if (profileId) navigate(profileId, next); }, [profileId, navigate]);
   const saveSite = (path: string) => {
