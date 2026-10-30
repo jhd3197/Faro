@@ -1,6 +1,6 @@
 [package]
 name = "faro"
-version = "1.4.5"
+version = "1.4.6"
 edition = "2021"
 description = "Faro — a modern FTP, SFTP, SSH, and S3 client for developers."
 authors = ["Juan Denis"]
