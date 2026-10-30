@@ -152,6 +152,15 @@ export const tauriFileSystem: FileSystemAdapter = {
     await ipc.startArchiveDownload(sessionId, path, format);
   },
 
+  compress: async (sessionId, paths, archiveName, format) => {
+    await ipc.compressPaths(sessionId, paths, archiveName, format);
+  },
+  extract: (sessionId, path, destination) =>
+    ipc.extractArchive(sessionId, path, destination),
+  ownership: (sessionId, path) => ipc.pathOwnership(sessionId, path),
+  chown: (sessionId, path, owner, group, recursive) =>
+    ipc.chownPath(sessionId, path, owner, group, recursive),
+
   // Reveal the terminal dock and open a fresh shell already cd'd into `path`.
   openTerminal: async (sessionId, path) => {
     useLayout.getState().setTerminalOpen(true);

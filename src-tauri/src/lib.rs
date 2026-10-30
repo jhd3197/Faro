@@ -14,6 +14,7 @@ pub mod bridge;
 pub mod commands;
 mod agent_host;
 mod app_updater;
+mod archive_ops;
 pub mod cli_updater;
 pub mod cloudflared;
 pub mod cloudflare_api;
@@ -593,6 +594,10 @@ pub fn run() {
             commands::reveal_local_path,
             commands::duplicate_path,
             commands::start_archive_download,
+            commands::compress_paths,
+            commands::extract_archive,
+            commands::path_ownership,
+            commands::chown_path,
             commands::bridge_start,
             commands::bridge_stop,
             commands::bridge_set_enabled,

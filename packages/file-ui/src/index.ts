@@ -60,5 +60,7 @@ export {
   type PaneViewMode,
   type PaneDensity,
   type ArchiveFormat,
+  type CompressFormat,
+  type Ownership,
   opensAsFolder,
 } from "./types";

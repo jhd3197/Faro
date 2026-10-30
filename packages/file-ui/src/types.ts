@@ -67,3 +67,12 @@ export type PaneDensity = "comfortable" | "compact";
 // adapter builds the archive on the remote host (one command) and downloads the
 // single file, rather than walking the tree client-side.
 export type ArchiveFormat = "tar.gz" | "zip";
+
+// Formats "Compress" can write. 7z is server-side only (it needs `7z` on the host).
+export type CompressFormat = "zip" | "tar.gz" | "tar" | "7z";
+
+/** Owner and group names of a file or folder. */
+export interface Ownership {
+  owner: string;
+  group: string;
+}
