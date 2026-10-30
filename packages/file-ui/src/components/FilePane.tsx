@@ -34,6 +34,8 @@ import {
   Image as ImageIcon,
   BookmarkPlus,
   FolderOpen,
+  FileArchive,
+  TextCursorInput,
   FolderSearch,
   PanelLeftOpen,
   Wrench,
@@ -682,9 +684,10 @@ export function FilePane({
           icon: <Download size={14} />,
           onClick: () => {},
           children: [
-            ...(onTransfer ? [{ label: "Folder", onClick: () => onTransfer([single]) }] : []),
+            ...(onTransfer ? [{ label: "Folder", icon: <FolderOpen size={14} />, onClick: () => onTransfer([single]) }] : []),
             {
               label: "Compressed .tar.gz",
+              icon: <FileArchive size={14} />,
               onClick: () =>
                 fs
                   .archive!(sessionId!, single.path, "tar.gz")
@@ -692,6 +695,7 @@ export function FilePane({
             },
             {
               label: "Zip archive (.zip)",
+              icon: <FileArchive size={14} />,
               onClick: () =>
                 fs
                   .archive!(sessionId!, single.path, "zip")
@@ -786,6 +790,7 @@ export function FilePane({
     } else {
       items.push({
         label: `${transferLabel} ${selectedItems.length} items`,
+        icon: sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onTransfer?.(selectedItems),
         separatorAfter: true,
       });
@@ -804,6 +809,7 @@ export function FilePane({
     });
     items.push({
       label: `Copy name${selectedItems.length > 1 ? `s (${selectedItems.length})` : ""}`,
+      icon: <TextCursorInput size={14} />,
       onClick: () => copyNames(selectedItems),
       separatorAfter: !!single,
     });

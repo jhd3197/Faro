@@ -186,11 +186,9 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
                       child.destructive && "text-danger hover:bg-danger-soft"
                     )}
                   >
-                    {child.icon && (
-                      <span className="flex h-3.5 w-3.5 items-center justify-center text-text-muted">
+                      <span aria-hidden="true" className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-text-muted">
                         {child.icon}
                       </span>
-                    )}
                     <span className="flex-1">{child.label}</span>
                   </button>
                 ))}
