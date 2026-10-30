@@ -451,6 +451,7 @@ async fn import_connection(
             key_ref: key_ref.clone(),
         },
         default_remote_path: conn.path.clone(),
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,

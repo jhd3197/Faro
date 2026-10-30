@@ -106,6 +106,7 @@ const oauthAppArgs = (app?: OAuthApp) => ({
 });
 
 export const ipc = {
+  revealLocalPath: (path: string) => invoke<void>("reveal_local_path", { path }),
   listProfiles: () => invoke<ConnectionProfile[]>("list_profiles"),
 
   saveProfile: (profile: ConnectionProfile) =>
@@ -424,6 +425,27 @@ export const ipc = {
       remotePath,
       format,
     }),
+
+  // Pack sibling items into a new archive in their folder (server-side over
+  // SSH). Returns the archive path.
+  compressPaths: (
+    sessionId: SessionId,
+    paths: string[],
+    archiveName: string,
+    format: "zip" | "tar.gz" | "tar" | "7z"
+  ) =>
+    invoke<string>("compress_paths", { sessionId, paths, archiveName, format }),
+
+  // Unpack an archive; no destination means a new folder named after it.
+  // Existing files are kept. Returns the destination folder.
+  extractArchive: (sessionId: SessionId, path: string, destination?: string) =>
+    invoke<string>("extract_archive", { sessionId, path, destination: destination ?? null }),
+
+  pathOwnership: (sessionId: SessionId, path: string) =>
+    invoke<{ owner: string; group: string }>("path_ownership", { sessionId, path }),
+
+  chownPath: (sessionId: SessionId, path: string, owner: string, group: string, recursive: boolean) =>
+    invoke<void>("chown_path", { sessionId, path, owner, group, recursive }),
 
   respondToHostPrompt: (requestId: string, decision: HostDecision) =>
     invoke<void>("respond_to_host_prompt", { requestId, decision }),

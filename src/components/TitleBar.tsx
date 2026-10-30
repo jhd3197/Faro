@@ -27,6 +27,8 @@ import {
   Minimize2,
   Fullscreen,
   Focus,
+  LogOut,
+  Bug,
 } from "lucide-react";
 import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
 import { useSettings, stepUiZoom } from "@/stores/settingsStore";
@@ -109,6 +111,7 @@ export function TitleBar() {
         { kind: "sep" },
         {
           label: "Quit",
+          icon: <LogOut size={11} />,
           shortcut: "Alt+F4",
           onClick: close,
         },
@@ -224,6 +227,7 @@ export function TitleBar() {
         },
         {
           label: "Report an issue",
+          icon: <Bug size={11} />,
           onClick: () => openExternal(`${REPO_URL}/issues/new`),
           rightIcon: <ExternalLink size={9} />,
         },

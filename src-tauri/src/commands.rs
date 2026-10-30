@@ -14,6 +14,36 @@ use uuid::Uuid;
 
 pub const LOCAL_SESSION: &str = "local";
 
+#[tauri::command]
+pub async fn reveal_local_path(path: String) -> Result<(), String> {
+    let path = std::fs::canonicalize(&path).map_err(err)?;
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("explorer.exe");
+        // Explorer does not understand the extended-length prefix from canonicalize.
+        let raw = path.to_string_lossy();
+        let normal = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{}", unc)
+        } else { raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_owned() };
+        c.arg(format!("/select,{}", normal));
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("open");
+        c.arg("-R").arg(&path);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(path.parent().unwrap_or(&path));
+        c
+    };
+    command.no_console_window().spawn().map_err(err)?;
+    Ok(())
+}
+
 /// Convert any error to a string for crossing the IPC boundary. The frontend
 /// surfaces these directly to the user, so the Display message must be useful.
 /// The alternate form keeps an `anyhow` error's whole cause chain ("Couldn't
@@ -409,6 +439,7 @@ pub async fn dropbox_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -467,6 +498,7 @@ pub async fn onedrive_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -530,6 +562,7 @@ pub async fn dynamics_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -583,6 +616,7 @@ pub async fn gdrive_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -636,6 +670,7 @@ pub async fn box_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -1618,6 +1653,210 @@ pub async fn start_archive_download(
     });
 
     Ok(id)
+}
+
+// ---------- Compress / extract / ownership (issue #62) ----------
+
+use crate::archive_ops::{self, ArchiveKind, CompressFormat, Ownership};
+
+/// A plain file name for the new archive — no separators, no `..`.
+fn check_archive_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+        return Err(format!("\"{name}\" isn't a valid file name"));
+    }
+    Ok(name)
+}
+
+fn archive_kind(path: &str) -> Result<(ArchiveKind, String), String> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    archive_ops::detect(name)
+        .map(|(kind, stem)| (kind, stem.to_string()))
+        .ok_or_else(|| format!("{name} isn't an archive Faro can extract"))
+}
+
+async fn ssh_run(ssh: &SshSession, command: &str, verb: &str) -> Result<(), String> {
+    let out = ssh.exec(command).await.map_err(err)?;
+    if out.exit_code != Some(0) {
+        return Err(archive_ops::archive_error(&out.stderr, verb));
+    }
+    Ok(())
+}
+
+/// Compress sibling items into a new archive in their folder. SSH runs
+/// `tar`/`zip`/`7z` on the server; local uses the zip/tar crates. Returns the
+/// archive's path.
+#[tauri::command]
+pub async fn compress_paths(
+    session_id: String,
+    paths: Vec<String>,
+    archive_name: String,
+    format: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let format = CompressFormat::parse(&format).map_err(err)?;
+    let archive_name = check_archive_name(&archive_name)?;
+    if paths.is_empty() {
+        return Err("Nothing selected to compress".into());
+    }
+
+    if session_id == LOCAL_SESSION {
+        let sources: Vec<std::path::PathBuf> = paths.iter().map(Into::into).collect();
+        let parent = sources[0]
+            .parent()
+            .ok_or_else(|| "Can't compress a drive root".to_string())?
+            .to_path_buf();
+        if sources.iter().any(|s| s.parent() != Some(parent.as_path())) {
+            return Err("Compress items from one folder at a time".into());
+        }
+        let out = parent.join(archive_name);
+        let out_clone = out.clone();
+        tokio::task::spawn_blocking(move || archive_ops::local_compress(&sources, &out_clone, format))
+            .await
+            .map_err(err)?
+            .map_err(err)?;
+        return Ok(out.to_string_lossy().into_owned());
+    }
+
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "Compressing needs an SSH/SFTP connection".to_string())?;
+    let mut parent = None;
+    let mut names = Vec::with_capacity(paths.len());
+    for p in &paths {
+        let (dir, name) = split_remote(p.trim_end_matches('/'));
+        if name.is_empty() {
+            return Err("Can't compress the filesystem root".into());
+        }
+        if *parent.get_or_insert(dir) != dir {
+            return Err("Compress items from one folder at a time".into());
+        }
+        names.push(name.to_string());
+    }
+    let parent = match parent.unwrap_or("/") {
+        "" => "/",
+        p => p,
+    };
+    let out = format!("{}/{archive_name}", parent.trim_end_matches('/'));
+    ssh_run(
+        &ssh,
+        &archive_ops::remote_compress_command(parent, &names, &out, format),
+        "Compress",
+    )
+    .await?;
+    Ok(out)
+}
+
+/// Extract an archive. `destination: None` extracts into a new folder named
+/// after the archive (made unique); otherwise into that folder, created if
+/// missing. Existing files are never overwritten. Returns the destination.
+#[tauri::command]
+pub async fn extract_archive(
+    session_id: String,
+    path: String,
+    destination: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let (kind, stem) = archive_kind(&path)?;
+
+    if session_id == LOCAL_SESSION {
+        let archive = std::path::PathBuf::from(&path);
+        let dest = match destination {
+            Some(d) => std::path::PathBuf::from(d),
+            None => {
+                let parent = archive.parent().ok_or_else(|| "invalid archive path".to_string())?;
+                (1..=1000)
+                    .map(|n| parent.join(archive_ops::fresh_folder_name(&stem, n)))
+                    .find(|p| !p.exists())
+                    .ok_or_else(|| "too many folders with that name already exist".to_string())?
+            }
+        };
+        let dest_clone = dest.clone();
+        tokio::task::spawn_blocking(move || archive_ops::local_extract(&archive, &dest_clone, kind))
+            .await
+            .map_err(err)?
+            .map_err(err)?;
+        return Ok(dest.to_string_lossy().into_owned());
+    }
+
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "Extracting needs an SSH/SFTP connection".to_string())?;
+    let dest = match destination {
+        Some(d) => d,
+        None => {
+            let (parent, _) = split_remote(path.trim_end_matches('/'));
+            let mut n = 1;
+            loop {
+                let cand = format!("{parent}/{}", archive_ops::fresh_folder_name(&stem, n));
+                let probe = ssh.exec(&format!("test -e {}", sh_quote(&cand))).await.map_err(err)?;
+                if probe.exit_code != Some(0) {
+                    break cand;
+                }
+                n += 1;
+                if n > 1000 {
+                    return Err("too many folders with that name already exist".into());
+                }
+            }
+        }
+    };
+    ssh_run(&ssh, &archive_ops::remote_extract_command(&path, &dest, kind), "Extract").await?;
+    Ok(dest)
+}
+
+/// Owner and group names of an item (for the Properties sheet).
+#[tauri::command]
+pub async fn path_ownership(
+    session_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Ownership, String> {
+    if session_id == LOCAL_SESSION {
+        return archive_ops::local_ownership(Path::new(&path)).map_err(err);
+    }
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "Owner and group need an SSH/SFTP connection".to_string())?;
+    let out = ssh
+        .exec(&archive_ops::remote_ownership_command(&path))
+        .await
+        .map_err(err)?;
+    archive_ops::parse_ownership(&out.stdout).map_err(err)
+}
+
+/// Change owner and/or group (empty leaves it alone), optionally recursively.
+#[tauri::command]
+pub async fn chown_path(
+    session_id: String,
+    path: String,
+    owner: String,
+    group: String,
+    recursive: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let spec = archive_ops::chown_spec(&owner, &group).map_err(err)?;
+    if session_id == LOCAL_SESSION {
+        return archive_ops::local_chown(Path::new(&path), &spec, recursive).map_err(err);
+    }
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "Changing the owner needs an SSH/SFTP connection".to_string())?;
+    let out = ssh
+        .exec(&archive_ops::remote_chown_command(&path, &spec, recursive))
+        .await
+        .map_err(err)?;
+    if out.exit_code != Some(0) {
+        return Err(archive_ops::chown_error(&out.stderr));
+    }
+    Ok(())
 }
 
 // ---------- Importers (OpenSSH config, FileZilla, PuTTY) ----------

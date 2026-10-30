@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   ServerOff,
   ExternalLink,
-  FileArchive,
   TerminalSquare,
   PieChart,
   GitCompareArrows,
@@ -34,9 +33,18 @@ import {
   Download,
   Image as ImageIcon,
   BookmarkPlus,
+  FolderOpen,
+  FileArchive,
+  TextCursorInput,
+  FolderSearch,
+  PanelLeftOpen,
+  Wrench,
+  PackageOpen,
+  Loader2,
 } from "lucide-react";
 import type {
   Capabilities,
+  CompressFormat,
   DirEntry,
   PaneDensity,
   PaneViewMode,
@@ -161,8 +169,28 @@ function errorText(e: unknown): string {
   return String(e);
 }
 
+// Archive extensions "Extract" understands, longest first so ".tar.gz" wins
+// over ".gz". Mirrors `archive_ops::detect` on the Rust side.
+const ARCHIVE_SUFFIXES = [".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tbz", ".tar.xz", ".txz", ".tar", ".zip", ".7z"];
+
+/** The name without its archive extension, or null when it isn't an archive. */
+function archiveStem(name: string): string | null {
+  const lower = name.toLowerCase();
+  const suffix = ARCHIVE_SUFFIXES.find((s) => lower.endsWith(s));
+  return suffix && name.length > suffix.length ? name.slice(0, -suffix.length) : null;
+}
+
+const COMPRESS_FORMATS: Array<{ format: CompressFormat; label: string; ext: string; remoteOnly?: boolean }> = [
+  { format: "zip", label: "Zip (.zip)", ext: ".zip" },
+  { format: "tar.gz", label: "Tar + gzip (.tar.gz)", ext: ".tar.gz" },
+  { format: "tar", label: "Tar (.tar)", ext: ".tar" },
+  { format: "7z", label: "7-Zip (.7z)", ext: ".7z", remoteOnly: true },
+];
+
 type ModalState =
   | { type: "rename"; entry: DirEntry }
+  | { type: "compress"; entries: DirEntry[]; format: CompressFormat; ext: string }
+  | { type: "extractTo"; entry: DirEntry; stem: string }
   | { type: "mkdir" }
   | { type: "chmod"; entry: DirEntry }
   | { type: "delete"; entries: DirEntry[] }
@@ -237,6 +265,7 @@ export function FilePane({
   const [editingPath, setEditingPath] = useState(false);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(false);
+  const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [skippedEntries, setSkippedEntries] = useState(0);
   const loadVersion = useRef(0);
@@ -642,10 +671,41 @@ export function FilePane({
     // server-side actions (archive, terminal) that local browsing can't do.
     const isRemote = !!sessionId && sessionId !== LOCAL_SESSION;
 
+    // Compress / extract run on the server over a shell, or on the local disk.
+    const canArchive = sessionId === LOCAL_SESSION || !!caps?.hasShell;
+    const compressItem: MenuItem | null =
+      fs.compress && canArchive
+        ? {
+            label: "Compress",
+            icon: <FileArchive size={14} />,
+            onClick: () => {},
+            children: COMPRESS_FORMATS.filter((f) => !(f.remoteOnly && !isRemote)).map((f) => ({
+              label: f.label,
+              icon: <FileArchive size={14} />,
+              onClick: () => setModal({ type: "compress", entries: selectedItems, format: f.format, ext: f.ext }),
+            })),
+          }
+        : null;
+    const stem = single?.kind === "file" ? archiveStem(single.name) : null;
+    const extractItem: MenuItem | null =
+      single && stem && fs.extract && canArchive
+        ? {
+            label: "Extract",
+            icon: <PackageOpen size={14} />,
+            onClick: () => {},
+            children: [
+              { label: "Extract here", icon: <PackageOpen size={14} />, onClick: () => doExtract(single, path) },
+              { label: `Extract to “${stem}/”`, icon: <FolderPlus size={14} />, onClick: () => doExtract(single) },
+              { label: "Extract to…", icon: <FolderOpen size={14} />, onClick: () => setModal({ type: "extractTo", entry: single, stem }) },
+            ],
+          }
+        : null;
+
     const items: MenuItem[] = [];
     if (single) {
       items.push({
         label: opensAsFolder(single) ? "Open" : transferLabel,
+        icon: opensAsFolder(single) ? <FolderOpen size={14} /> : sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onRowActivate(single),
       });
       if (single.kind === "directory" && isRemote && onSaveSite) {
@@ -674,12 +734,14 @@ export function FilePane({
         fs.archive
       ) {
         items.push({
-          label: "Download as…",
-          icon: <FileArchive size={12} />,
+          label: "Download",
+          icon: <Download size={14} />,
           onClick: () => {},
           children: [
+            ...(onTransfer ? [{ label: "Folder", icon: <FolderOpen size={14} />, onClick: () => onTransfer([single]) }] : []),
             {
               label: "Compressed .tar.gz",
+              icon: <FileArchive size={14} />,
               onClick: () =>
                 fs
                   .archive!(sessionId!, single.path, "tar.gz")
@@ -687,6 +749,7 @@ export function FilePane({
             },
             {
               label: "Zip archive (.zip)",
+              icon: <FileArchive size={14} />,
               onClick: () =>
                 fs
                   .archive!(sessionId!, single.path, "zip")
@@ -695,6 +758,8 @@ export function FilePane({
           ],
         });
       }
+      if (extractItem) items.push(extractItem);
+      if (compressItem) items.push(compressItem);
       // Open an SSH terminal already cd'd into this folder.
       if (
         single.kind === "directory" &&
@@ -781,9 +846,11 @@ export function FilePane({
     } else {
       items.push({
         label: `${transferLabel} ${selectedItems.length} items`,
+        icon: sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onTransfer?.(selectedItems),
-        separatorAfter: true,
+        separatorAfter: !compressItem,
       });
+      if (compressItem) items.push({ ...compressItem, separatorAfter: true });
     }
     items.push({
       label: `Delete${selectedItems.length > 1 ? ` (${selectedItems.length})` : ""}`,
@@ -799,11 +866,12 @@ export function FilePane({
     });
     items.push({
       label: `Copy name${selectedItems.length > 1 ? `s (${selectedItems.length})` : ""}`,
+      icon: <TextCursorInput size={14} />,
       onClick: () => copyNames(selectedItems),
       separatorAfter: !!single,
     });
     if (
-      single?.kind === "file" &&
+      single &&
       sessionId !== LOCAL_SESSION &&
       caps?.canChmod !== false
     ) {
@@ -820,7 +888,23 @@ export function FilePane({
         onClick: () => setModal({ type: "props", entry: single }),
       });
     }
-    setMenu({ x: e.clientX, y: e.clientY, items });
+    const toolLabels = new Set(["Save as site…", "Analyze disk usage", "Compare with…", "Find duplicates", "Search here…"]);
+    const toolItems = items.filter((item) => toolLabels.has(item.label));
+    const copyItems = items.filter((item) => item.label.startsWith("Copy path") || item.label.startsWith("Copy name"));
+    const deleteItem = items.find((item) => item.destructive);
+    const properties = items.find((item) => item.label === "Properties");
+    const organized = items.filter((item) => !toolItems.includes(item) && !copyItems.includes(item) && item !== deleteItem && item !== properties);
+    if (copyItems.length) organized.push({ label: "Copy", icon: <Copy size={14} />, onClick: () => {}, children: copyItems, separatorAfter: true });
+    if (single && sessionId === LOCAL_SESSION && fs.revealLocal) {
+      organized.push({ label: navigator.userAgent.includes("Windows") ? "Reveal in File Explorer" : navigator.userAgent.includes("Mac") ? "Reveal in Finder" : "Reveal in file manager", icon: <FolderSearch size={14} />, onClick: () => { fs.revealLocal!(single.path).catch((e) => setError(errorText(e))); } });
+    }
+    if (single && fs.revealInBrowser) {
+      organized.push({ label: "Reveal in Faro", icon: <PanelLeftOpen size={14} />, onClick: () => { fs.revealInBrowser!(sessionId!, opensAsFolder(single) ? single.path : path).catch((e) => setError(errorText(e))); } });
+    }
+    if (toolItems.length) organized.push({ label: "Tools", icon: <Wrench size={14} />, onClick: () => {}, children: toolItems });
+    if (properties) organized.push({ ...properties, separatorAfter: true });
+    if (deleteItem) organized.push({ ...deleteItem, separatorAfter: false });
+    setMenu({ x: e.clientX, y: e.clientY, items: organized });
   };
 
   const openPaneMenu = (e: React.MouseEvent) => {
@@ -883,6 +967,34 @@ export function FilePane({
     } catch (e) {
       setError(errorText(e));
     }
+  };
+
+  // Archive jobs can take a while on a big tree; show what's running in the
+  // pane and refresh once it lands.
+  const runArchiveJob = async (label: string, job: () => Promise<unknown>) => {
+    setWorking(label);
+    try {
+      await job();
+      await load(path);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const doCompress = (entries: DirEntry[], name: string, format: CompressFormat) => {
+    if (!sessionId || !fs.compress) return;
+    return runArchiveJob(`Compressing to ${name.trim()}…`, () =>
+      fs.compress!(sessionId, entries.map((e) => e.path), name.trim(), format)
+    );
+  };
+
+  const doExtract = (entry: DirEntry, destination?: string) => {
+    if (!sessionId || !fs.extract) return;
+    return runArchiveJob(`Extracting ${entry.name}…`, () =>
+      fs.extract!(sessionId, entry.path, destination?.trim() || undefined)
+    );
   };
 
   const doMkdir = async (name: string) => {
@@ -1293,6 +1405,13 @@ export function FilePane({
         </div>
       )}
 
+      {working && (
+        <div role="status" className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-text-muted">
+          <Loader2 size={12} aria-hidden="true" className="shrink-0 animate-spin" />
+          <span className="truncate">{working}</span>
+        </div>
+      )}
+
       {sessionId && !loading && !error && skippedEntries > 0 && (
         <div role="status" className="flex shrink-0 items-start gap-2 border-b border-border px-3 py-2 text-xs text-text-muted">
           <AlertTriangle size={14} aria-hidden="true" className="mt-0.5 shrink-0" />
@@ -1447,9 +1566,40 @@ export function FilePane({
           onSubmit={(v) => doChmod(modal.entry, v)}
         />
       )}
+      {modal?.type === "compress" && (
+        <PromptModal
+          title={
+            modal.entries.length === 1
+              ? `Compress ${modal.entries[0].name}`
+              : `Compress ${modal.entries.length} items`
+          }
+          label={`Archive name, saved in ${path}`}
+          initialValue={
+            (modal.entries.length === 1
+              ? modal.entries[0].name
+              : path.split(/[\\/]/).filter(Boolean).pop() || "Archive") + modal.ext
+          }
+          okLabel="Compress"
+          onClose={() => setModal(null)}
+          onSubmit={(v) => doCompress(modal.entries, v, modal.format)}
+        />
+      )}
+      {modal?.type === "extractTo" && (
+        <PromptModal
+          title={`Extract ${modal.entry.name}`}
+          label="Destination folder (created if missing; existing files are kept)"
+          initialValue={joinPath(path, modal.stem)}
+          okLabel="Extract"
+          onClose={() => setModal(null)}
+          onSubmit={(v) => doExtract(modal.entry, v)}
+        />
+      )}
       {modal?.type === "props" && (
         <PropertiesModal
           entry={modal.entry}
+          sessionId={sessionId}
+          canChangeOwner={sessionId === LOCAL_SESSION ? caps?.canChmod === true : !!caps?.hasShell}
+          onOwnerChanged={() => load(path)}
           onClose={() => setModal(null)}
         />
       )}

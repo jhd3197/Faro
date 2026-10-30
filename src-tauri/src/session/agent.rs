@@ -217,6 +217,7 @@ impl AgentSession {
                 username: String::new(),
                 auth: crate::profiles::AuthMethod::Agent,
                 default_remote_path: None,
+                default_local_path: None,
                 color: None,
                 auto_connect: None,
                 bucket: None,

@@ -132,6 +132,10 @@ export const tauriFileSystem: FileSystemAdapter = {
     ipc.deletePath(sessionId, path, recursive),
   mkdir: (sessionId, path) => ipc.createDirectory(sessionId, path),
   chmod: (sessionId, path, mode) => ipc.chmodPath(sessionId, path, mode),
+  revealLocal: (path) => ipc.revealLocalPath(path),
+  revealInBrowser: async (sessionId, path) => {
+    useLayout.getState().requestReveal(sessionId, path);
+  },
   // Edit-in-place runs through the editor store, which installs the
   // save/error listeners and tracks the live-edit pill in the status bar.
   editFile: (sessionId, path) =>
@@ -147,6 +151,15 @@ export const tauriFileSystem: FileSystemAdapter = {
   archive: async (sessionId, path, format) => {
     await ipc.startArchiveDownload(sessionId, path, format);
   },
+
+  compress: async (sessionId, paths, archiveName, format) => {
+    await ipc.compressPaths(sessionId, paths, archiveName, format);
+  },
+  extract: (sessionId, path, destination) =>
+    ipc.extractArchive(sessionId, path, destination),
+  ownership: (sessionId, path) => ipc.pathOwnership(sessionId, path),
+  chown: (sessionId, path, owner, group, recursive) =>
+    ipc.chownPath(sessionId, path, owner, group, recursive),
 
   // Reveal the terminal dock and open a fresh shell already cd'd into `path`.
   openTerminal: async (sessionId, path) => {

@@ -81,6 +81,7 @@ export interface ConnectionProfile {
   username: string;
   auth: AuthMethod;
   defaultRemotePath?: string;
+  defaultLocalPath?: string;
   color?: string;
   /** Connect automatically on app launch (and on a single click in the rail). */
   autoConnect?: boolean;

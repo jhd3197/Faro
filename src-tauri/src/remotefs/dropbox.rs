@@ -301,6 +301,7 @@ mod tests {
             username: String::new(),
             auth: AuthMethod::Password { password: String::new() },
             default_remote_path: None,
+            default_local_path: None,
             color: None,
             auto_connect: None,
             bucket: None,

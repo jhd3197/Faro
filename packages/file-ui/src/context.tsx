@@ -1,6 +1,8 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type {
   ArchiveFormat,
+  CompressFormat,
+  Ownership,
   Capabilities,
   DirEntry,
   DirectoryListing,
@@ -32,6 +34,10 @@ export interface FileSystemAdapter {
   remove(sessionId: SessionId, path: string, recursive: boolean): Promise<void>;
   mkdir(sessionId: SessionId, path: string): Promise<void>;
   chmod(sessionId: SessionId, path: string, mode: number): Promise<void>;
+  /** Reveal a local item in the operating system's file manager. */
+  revealLocal?(path: string): Promise<void>;
+  /** Reveal a directory in the host application's file browser. */
+  revealInBrowser?(sessionId: SessionId, path: string): Promise<void>;
   /**
    * Optional: open a file in an external editor / edit-in-place flow. Omit it
    * and the pane simply doesn't offer the "Edit…" action.
@@ -71,6 +77,40 @@ export interface FileSystemAdapter {
     sessionId: SessionId,
     path: string,
     format: ArchiveFormat
+  ): Promise<void>;
+  /**
+   * Optional: pack sibling items into a new archive named `archiveName` in
+   * their folder (server-side on a shell backend). Omit it and the pane doesn't
+   * offer "Compress". Rejects rather than replacing an existing file.
+   */
+  compress?(
+    sessionId: SessionId,
+    paths: string[],
+    archiveName: string,
+    format: CompressFormat
+  ): Promise<void>;
+  /**
+   * Optional: unpack an archive. `destination` undefined means a new folder
+   * named after the archive; otherwise that folder (created if missing).
+   * Existing files are kept. Resolves to the destination folder.
+   */
+  extract?(
+    sessionId: SessionId,
+    path: string,
+    destination?: string
+  ): Promise<string>;
+  /** Optional: read owner and group names for the Properties sheet. */
+  ownership?(sessionId: SessionId, path: string): Promise<Ownership>;
+  /**
+   * Optional: change owner and/or group (an empty string leaves it alone),
+   * optionally for everything inside a folder too.
+   */
+  chown?(
+    sessionId: SessionId,
+    path: string,
+    owner: string,
+    group: string,
+    recursive: boolean
   ): Promise<void>;
   /**
    * Optional: open an interactive terminal already changed into `path`. Omit it

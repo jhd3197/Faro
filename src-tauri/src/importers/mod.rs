@@ -187,6 +187,7 @@ impl ProfilePreview {
             username: self.username,
             auth,
             default_remote_path: None,
+            default_local_path: None,
             color: None,
             auto_connect: None,
             bucket: None,

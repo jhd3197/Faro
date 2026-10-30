@@ -128,6 +128,8 @@ pub struct ConnectionProfile {
     pub auth: AuthMethod,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_remote_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_local_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     // Connect automatically on app launch. Optional so existing profile JSON
@@ -660,6 +662,17 @@ mod tests {
         p.name = id.into();
         p.jump_profile = jump.map(Into::into);
         p
+    }
+
+    #[test]
+    fn optional_local_folder_survives_profile_serialization() {
+        let mut p = profile(serde_json::json!({ "kind": "agent" }));
+        assert!(p.default_local_path.is_none());
+        assert!(serde_json::to_value(&p).unwrap().get("defaultLocalPath").is_none());
+        p.default_local_path = Some(r"C:\Users\Juan\Project files".into());
+        let saved = serde_json::to_value(for_disk(&[p.clone()], false)).unwrap();
+        let loaded: Vec<ConnectionProfile> = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded[0].default_local_path, p.default_local_path);
     }
 
     fn hops(p: &ConnectionProfile) -> Result<Vec<String>, String> {

@@ -159,6 +159,11 @@ aes-gcm = "0.10"
 flate2 = "1"
 rand = "0.8"
 
+# Compress / extract for local files (issue #62). Both were already in the
+# tree transitively; zip gains Deflate through the flate2 above.
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+tar = "0.4"
+
 # Windows-only: registry access for the PuTTY sessions importer, plus the
 # Cloud Filter API (`cldapi.dll`) that powers on-demand virtual folders (Plan 9)
 # via the safe `cloud-filter` wrapper crate. It's optional — only pulled when the

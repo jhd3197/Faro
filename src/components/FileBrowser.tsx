@@ -48,6 +48,10 @@ export function FileBrowser() {
   const [localPath, setLocalPath] = useState(isWindows ? "C:\\" : "/");
   const siteBrowser = useSiteBrowser(profile);
 
+  useEffect(() => {
+    if (profile?.defaultLocalPath) setLocalPath(profile.defaultLocalPath);
+  }, [activeSessionId, profile?.id, profile?.defaultLocalPath]);
+
   const serverSid = activeSessionId;
   const serverRemotePath = siteBrowser.path;
 
