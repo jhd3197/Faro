@@ -132,6 +132,10 @@ export const tauriFileSystem: FileSystemAdapter = {
     ipc.deletePath(sessionId, path, recursive),
   mkdir: (sessionId, path) => ipc.createDirectory(sessionId, path),
   chmod: (sessionId, path, mode) => ipc.chmodPath(sessionId, path, mode),
+  revealLocal: (path) => ipc.revealLocalPath(path),
+  revealInBrowser: async (sessionId, path) => {
+    useLayout.getState().requestReveal(sessionId, path);
+  },
   // Edit-in-place runs through the editor store, which installs the
   // save/error listeners and tracks the live-edit pill in the status bar.
   editFile: (sessionId, path) =>

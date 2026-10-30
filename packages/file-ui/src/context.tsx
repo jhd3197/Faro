@@ -32,6 +32,10 @@ export interface FileSystemAdapter {
   remove(sessionId: SessionId, path: string, recursive: boolean): Promise<void>;
   mkdir(sessionId: SessionId, path: string): Promise<void>;
   chmod(sessionId: SessionId, path: string, mode: number): Promise<void>;
+  /** Reveal a local item in the operating system's file manager. */
+  revealLocal?(path: string): Promise<void>;
+  /** Reveal a directory in the host application's file browser. */
+  revealInBrowser?(sessionId: SessionId, path: string): Promise<void>;
   /**
    * Optional: open a file in an external editor / edit-in-place flow. Omit it
    * and the pane simply doesn't offer the "Edit…" action.

@@ -106,6 +106,7 @@ const oauthAppArgs = (app?: OAuthApp) => ({
 });
 
 export const ipc = {
+  revealLocalPath: (path: string) => invoke<void>("reveal_local_path", { path }),
   listProfiles: () => invoke<ConnectionProfile[]>("list_profiles"),
 
   saveProfile: (profile: ConnectionProfile) =>

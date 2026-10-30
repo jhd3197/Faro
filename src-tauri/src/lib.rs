@@ -590,6 +590,7 @@ pub fn run() {
             commands::delete_path,
             commands::create_directory,
             commands::chmod_path,
+            commands::reveal_local_path,
             commands::duplicate_path,
             commands::start_archive_download,
             commands::bridge_start,

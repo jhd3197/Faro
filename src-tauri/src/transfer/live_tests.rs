@@ -47,6 +47,7 @@ fn profile(protocol: &str, host: &str, port: u16, user: &str, pass: &str) -> Con
             password: pass.into(),
         },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,

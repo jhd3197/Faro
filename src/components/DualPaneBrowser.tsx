@@ -23,6 +23,10 @@ export function DualPaneBrowser() {
   const siteBrowser = useSiteBrowser(profile);
   const [syncOpen, setSyncOpen] = useState(false);
 
+  useEffect(() => {
+    if (profile?.defaultLocalPath) setLocalPath(profile.defaultLocalPath);
+  }, [activeSessionId, profile?.id, profile?.defaultLocalPath]);
+
   const remotePath = siteBrowser.path;
   const setRemotePath = siteBrowser.setPath;
 

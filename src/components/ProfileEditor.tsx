@@ -216,6 +216,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [certPath, setCertPath] = useState(
     seedAuth?.kind === "key" ? seedAuth.certPath ?? "" : ""
   );
+  const [defaultLocalPath, setDefaultLocalPath] = useState(seed?.defaultLocalPath ?? "");
   const [defaultRemotePath, setDefaultRemotePath] = useState(
     seed?.defaultRemotePath ?? "."
   );
@@ -549,6 +550,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           ? { kind: "password", password: "" }
           : auth,
       defaultRemotePath: defaultRemotePath || undefined,
+      defaultLocalPath: defaultLocalPath.trim() || undefined,
       color: seed?.color,
       autoConnect: autoConnect || undefined,
       bucket: isObject ? bucket : undefined,
@@ -718,6 +720,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       name: finalName,
       agentKey: res.serverKey,
       defaultRemotePath: initialPath || undefined,
+      defaultLocalPath: defaultLocalPath.trim() || undefined,
     });
     toast.success(
       `Paired with ${res.hostname || host}`,
@@ -1242,6 +1245,20 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             placeholder={isObject ? "" : isFtp ? "/" : "."}
             className={inputCls}
           />
+        </Field>
+
+        <Field label="Default local folder (optional)">
+          <div className="flex gap-2">
+            <input aria-label="Default local folder" value={defaultLocalPath}
+              onChange={(e) => setDefaultLocalPath(e.target.value)} className={inputCls + " min-w-0 flex-1"} />
+            <button type="button" className="shrink-0 rounded-md border border-border px-3 text-sm hover:bg-bg-hover"
+              onClick={async () => {
+                try {
+                  const folder = await open({ directory: true, multiple: false, defaultPath: defaultLocalPath || undefined });
+                  if (typeof folder === "string") setDefaultLocalPath(folder);
+                } catch (e) { toast.error("Couldn't choose folder", String(e)); }
+              }}>Browse…</button>
+          </div>
         </Field>
 
         {isFtp && (

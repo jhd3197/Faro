@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   ServerOff,
   ExternalLink,
-  FileArchive,
   TerminalSquare,
   PieChart,
   GitCompareArrows,
@@ -34,6 +33,10 @@ import {
   Download,
   Image as ImageIcon,
   BookmarkPlus,
+  FolderOpen,
+  FolderSearch,
+  PanelLeftOpen,
+  Wrench,
 } from "lucide-react";
 import type {
   Capabilities,
@@ -646,6 +649,7 @@ export function FilePane({
     if (single) {
       items.push({
         label: opensAsFolder(single) ? "Open" : transferLabel,
+        icon: opensAsFolder(single) ? <FolderOpen size={14} /> : sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onRowActivate(single),
       });
       if (single.kind === "directory" && isRemote && onSaveSite) {
@@ -674,10 +678,11 @@ export function FilePane({
         fs.archive
       ) {
         items.push({
-          label: "Download as…",
-          icon: <FileArchive size={12} />,
+          label: "Download",
+          icon: <Download size={14} />,
           onClick: () => {},
           children: [
+            ...(onTransfer ? [{ label: "Folder", onClick: () => onTransfer([single]) }] : []),
             {
               label: "Compressed .tar.gz",
               onClick: () =>
@@ -803,7 +808,7 @@ export function FilePane({
       separatorAfter: !!single,
     });
     if (
-      single?.kind === "file" &&
+      single &&
       sessionId !== LOCAL_SESSION &&
       caps?.canChmod !== false
     ) {
@@ -820,7 +825,23 @@ export function FilePane({
         onClick: () => setModal({ type: "props", entry: single }),
       });
     }
-    setMenu({ x: e.clientX, y: e.clientY, items });
+    const toolLabels = new Set(["Save as site…", "Analyze disk usage", "Compare with…", "Find duplicates", "Search here…"]);
+    const toolItems = items.filter((item) => toolLabels.has(item.label));
+    const copyItems = items.filter((item) => item.label.startsWith("Copy path") || item.label.startsWith("Copy name"));
+    const deleteItem = items.find((item) => item.destructive);
+    const properties = items.find((item) => item.label === "Properties");
+    const organized = items.filter((item) => !toolItems.includes(item) && !copyItems.includes(item) && item !== deleteItem && item !== properties);
+    if (copyItems.length) organized.push({ label: "Copy", icon: <Copy size={14} />, onClick: () => {}, children: copyItems, separatorAfter: true });
+    if (single && sessionId === LOCAL_SESSION && fs.revealLocal) {
+      organized.push({ label: navigator.userAgent.includes("Windows") ? "Reveal in File Explorer" : navigator.userAgent.includes("Mac") ? "Reveal in Finder" : "Reveal in file manager", icon: <FolderSearch size={14} />, onClick: () => { fs.revealLocal!(single.path).catch((e) => setError(errorText(e))); } });
+    }
+    if (single && fs.revealInBrowser) {
+      organized.push({ label: "Reveal in Faro", icon: <PanelLeftOpen size={14} />, onClick: () => { fs.revealInBrowser!(sessionId!, opensAsFolder(single) ? single.path : path).catch((e) => setError(errorText(e))); } });
+    }
+    if (toolItems.length) organized.push({ label: "Tools", icon: <Wrench size={14} />, onClick: () => {}, children: toolItems });
+    if (properties) organized.push({ ...properties, separatorAfter: true });
+    if (deleteItem) organized.push({ ...deleteItem, separatorAfter: false });
+    setMenu({ x: e.clientX, y: e.clientY, items: organized });
   };
 
   const openPaneMenu = (e: React.MouseEvent) => {

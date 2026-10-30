@@ -14,6 +14,36 @@ use uuid::Uuid;
 
 pub const LOCAL_SESSION: &str = "local";
 
+#[tauri::command]
+pub async fn reveal_local_path(path: String) -> Result<(), String> {
+    let path = std::fs::canonicalize(&path).map_err(err)?;
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("explorer.exe");
+        // Explorer does not understand the extended-length prefix from canonicalize.
+        let raw = path.to_string_lossy();
+        let normal = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{}", unc)
+        } else { raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_owned() };
+        c.arg(format!("/select,{}", normal));
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("open");
+        c.arg("-R").arg(&path);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(path.parent().unwrap_or(&path));
+        c
+    };
+    command.no_console_window().spawn().map_err(err)?;
+    Ok(())
+}
+
 /// Convert any error to a string for crossing the IPC boundary. The frontend
 /// surfaces these directly to the user, so the Display message must be useful.
 /// The alternate form keeps an `anyhow` error's whole cause chain ("Couldn't
@@ -409,6 +439,7 @@ pub async fn dropbox_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -467,6 +498,7 @@ pub async fn onedrive_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -530,6 +562,7 @@ pub async fn dynamics_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -583,6 +616,7 @@ pub async fn gdrive_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
@@ -636,6 +670,7 @@ pub async fn box_authorize(
         username: String::new(),
         auth: AuthMethod::Password { password: String::new() },
         default_remote_path: None,
+        default_local_path: None,
         color: None,
         auto_connect: None,
         bucket: None,
