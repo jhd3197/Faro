@@ -94,7 +94,7 @@ export function Settings({ onClose }: Props) {
     const root = panelRef.current;
     if (!root) return;
     let cancelled = false;
-    let timer = 0;
+    let observer: MutationObserver | null = null;
 
     const place = () => {
       const nav = root.querySelector<HTMLElement>(
@@ -110,30 +110,32 @@ export function Settings({ onClose }: Props) {
         );
         if (el instanceof HTMLElement) {
           el.scrollIntoView({ block: "center" });
-          const focusable = el.matches("input, select, textarea, button")
+          const focusable = el.matches("input, select, textarea, button, a[href]")
             ? el
-            : el.querySelector<HTMLElement>("input, select, textarea, button");
+            : el.querySelector<HTMLElement>("input, select, textarea, button, a[href]");
           (focusable ?? nav)?.focus();
           return true;
         }
       }
       nav?.focus();
-      // The named control can show up after a status round-trip. Keep looking.
+      // The named control can show up after a status round-trip.
       return !target.focus;
     };
 
-    const attempt = (tries: number) => {
-      if (cancelled) return;
-      if (place() || tries <= 0) return;
-      timer = window.setTimeout(() => attempt(tries - 1), 50);
+    const watch = () => {
+      if (cancelled || place()) return;
+      observer = new MutationObserver(() => {
+        if (place()) observer?.disconnect();
+      });
+      observer.observe(root, { childList: true, subtree: true });
     };
 
     // After the dialog's own initial-focus frame, so a deep link wins.
-    const raf = requestAnimationFrame(() => attempt(target?.focus ? 30 : 0));
+    const raf = requestAnimationFrame(() => watch());
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
-      window.clearTimeout(timer);
+      observer?.disconnect();
     };
   }, [target, active]);
 

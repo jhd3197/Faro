@@ -141,14 +141,11 @@ test("settings deep links", { timeout: 120000 }, async () => {
     await page.waitForFunction(
       () => document.querySelector("[data-settings-heading]")?.dataset.settingsHeading === "cloudflare",
     );
-    await page.waitForFunction(() =>
-      document.querySelector("[data-settings-focus='settings-cloudflare-account']"),
-    );
-    const accountFocused = await page.evaluate(() => {
+    // The account card arrives after its status call; focus follows that paint.
+    await page.waitForFunction(() => {
       const card = document.querySelector("[data-settings-focus='settings-cloudflare-account']");
       return !!card && card.contains(document.activeElement);
     });
-    assert.equal(accountFocused, true);
     await closeSettings();
 
     await page.evaluate(() => window.__demo.useLayout.getState().openMoveToCloudflare("p-api"));
