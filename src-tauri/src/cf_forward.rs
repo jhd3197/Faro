@@ -484,8 +484,10 @@ fn spawn(bin: &Path, hostname: &str, port: u16, env: &[(String, String)]) -> Res
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     // Own process group, and no console window: the forward outlives the CLI
-    // process that started it, and Faro can kill the group on stop.
-    #[cfg(unix)]
+    // process that started it, and Faro can kill the group on stop. The test
+    // build stays in the caller's group — a new group makes the CI runner
+    // treat the stand-in cloudflared as an orphan and cancel the job.
+    #[cfg(all(unix, not(test)))]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
@@ -496,7 +498,12 @@ fn spawn(bin: &Path, hostname: &str, port: u16, env: &[(String, String)]) -> Res
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
-        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+        let mut flags = CREATE_NO_WINDOW;
+        #[cfg(not(test))]
+        {
+            flags |= CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS;
+        }
+        cmd.creation_flags(flags);
     }
     let mut child = cmd
         .spawn()
