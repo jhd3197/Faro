@@ -8,6 +8,8 @@ import { LOCAL_SESSION } from "@/lib/types";
 import type { DirEntry } from "@/lib/types";
 import { ArrowRightLeft } from "lucide-react";
 import { useSiteBrowser } from "@/hooks/useSiteBrowser";
+import { useRememberedLocalPath } from "@/hooks/useRememberedLocalPath";
+import { useSyncedPanes } from "@/hooks/useSyncedPanes";
 
 export function DualPaneBrowser() {
   const activeSessionId = useConnections((s) => s.activeSessionId);
@@ -17,33 +19,35 @@ export function DualPaneBrowser() {
   const enqueueUploads = useTransfers((s) => s.enqueueUploads);
   const enqueueDownloads = useTransfers((s) => s.enqueueDownloads);
 
-  const [localPath, setLocalPath] = useState(
-    navigator.userAgent.includes("Windows") ? "C:\\" : "/"
-  );
+  const [localPath, setLocalPath] = useRememberedLocalPath(profile, activeSessionId);
   const siteBrowser = useSiteBrowser(profile);
   const [syncOpen, setSyncOpen] = useState(false);
-
-  useEffect(() => {
-    if (profile?.defaultLocalPath) setLocalPath(profile.defaultLocalPath);
-  }, [activeSessionId, profile?.id, profile?.defaultLocalPath]);
+  const sync = useSyncedPanes({
+    sessionId: activeSessionId,
+    localPath,
+    remotePath: siteBrowser.path,
+    setLocalPath,
+    setRemotePath: siteBrowser.setPath,
+    defaultLocalPath: profile?.defaultLocalPath,
+  });
 
   const remotePath = siteBrowser.path;
-  const setRemotePath = siteBrowser.setPath;
 
   // "Reveal in browser" from the Disk Usage explorer. Local targets go to the
   // local pane; a matching server target updates that session's remote pane.
+  // Routed through the sync handlers so an enabled mirror follows along.
   const revealTarget = useLayout((s) => s.revealTarget);
   const clearReveal = useLayout((s) => s.clearReveal);
   useEffect(() => {
     if (!revealTarget) return;
     if (revealTarget.sessionId === LOCAL_SESSION) {
-      setLocalPath(revealTarget.path);
+      sync.onLocalNavigate(revealTarget.path);
       clearReveal();
     } else if (revealTarget.sessionId === activeSessionId) {
-      setRemotePath(revealTarget.path);
+      sync.onRemoteNavigate(revealTarget.path);
       clearReveal();
     }
-  }, [revealTarget, activeSessionId, clearReveal, setRemotePath]);
+  }, [revealTarget, activeSessionId, clearReveal, sync.onLocalNavigate, sync.onRemoteNavigate]);
 
   const uploadAll = (entries: DirEntry[]) => {
     if (!activeSessionId) return;
@@ -66,10 +70,11 @@ export function DualPaneBrowser() {
         title="Local"
         sessionId={LOCAL_SESSION}
         path={localPath}
-        onPathChange={setLocalPath}
+        onPathChange={sync.onLocalNavigate}
         onTransfer={uploadAll}
         onDrop={downloadAll}
         transferLabel="Upload"
+        toolbarActions={sync.toolbar}
       />
       <div className="relative w-px bg-border">
         {activeSessionId && (
@@ -94,7 +99,7 @@ export function DualPaneBrowser() {
         title={siteBrowser.site?.name ?? (profile ? `Remote — ${profile.name}` : "Remote")}
         sessionId={activeSessionId}
         path={remotePath}
-        onPathChange={setRemotePath}
+        onPathChange={sync.onRemoteNavigate}
         onTransfer={downloadAll}
         onDrop={uploadAll}
         transferLabel="Download"
@@ -102,6 +107,17 @@ export function DualPaneBrowser() {
         toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
       />
       {siteBrowser.dialog}
+
+      {sync.hint && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-sync-hint=""
+          className="pointer-events-none absolute bottom-3 left-1/2 z-raised max-w-md -translate-x-1/2 rounded-md border border-border bg-bg-panel px-3 py-1.5 text-center text-xs text-text shadow-elev-2"
+        >
+          <span className="font-medium">{sync.hint.title}.</span> {sync.hint.message}
+        </div>
+      )}
 
       {syncOpen && activeSessionId && (
         <SyncDialog
