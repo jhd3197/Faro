@@ -1,6 +1,6 @@
 import { CheckCircle2, AlertCircle, Info, AlertTriangle, X, ExternalLink } from "lucide-react";
-import { ipc } from "@/lib/ipc";
 import {
+  followToastAction,
   useToasts,
   type Toast as ToastT,
   type ToastVariant,
@@ -65,10 +65,10 @@ function ToastCard({
         )}
         {toast.action && (
           <button
-            onClick={() => void ipc.openExternalUrl(toast.action!.url)}
+            onClick={() => followToastAction(toast.action!)}
             className="mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent hover:bg-bg-hover"
           >
-            <ExternalLink size={11} />
+            {toast.action.url && <ExternalLink size={11} />}
             {toast.action.label}
           </button>
         )}

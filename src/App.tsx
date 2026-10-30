@@ -24,6 +24,7 @@ import { AboutDialog } from "./components/AboutDialog";
 import { useConnections } from "./stores/connectionsStore";
 import { useTransfers } from "./stores/transfersStore";
 import { useLayout } from "./stores/layoutStore";
+import { SETTINGS_ENTRY_POINTS } from "./lib/settingsNav";
 import {
   TerminalSquare,
   ArrowDownUp,
@@ -41,7 +42,7 @@ import {
   FolderSync,
 } from "lucide-react";
 import { useEditor } from "./stores/editorStore";
-import { useToasts, type Toast, type ToastVariant } from "./stores/toastStore";
+import { followToastAction, toast, useToasts, type Toast, type ToastVariant } from "./stores/toastStore";
 import { CopyTextButton, notificationText } from "./components/ui/CopyText";
 import { useBridge } from "./stores/bridgeStore";
 import { useSync } from "./stores/syncStore";
@@ -50,7 +51,6 @@ import { ipc, onDeepLink } from "./lib/ipc";
 import { runDefaultBumps, runSettingsMigration } from "./lib/secretMigration";
 import { initNotifications } from "./lib/notifications";
 import { openTerminalWindow } from "./lib/popout";
-import { toast } from "./stores/toastStore";
 import type { DeepLink, Protocol, ConnectionProfile } from "./lib/types";
 import { PROTOCOL_DEFAULT_PORT } from "./lib/types";
 import { Toaster } from "./components/ui/Toaster";
@@ -309,7 +309,7 @@ function StatusBar({
   const syncPairs = useSync((s) => s.pairs);
   const syncRunning = syncPairs.filter((p) => p.running).length;
   const syncActive = syncPairs.filter((p) => p.state === "syncing").length;
-  const openDialog = useLayout((s) => s.openDialog);
+  const openSettings = useLayout((s) => s.openSettings);
   const consoleOpen = useLayout((s) => s.consoleOpen);
   const toggleConsole = useLayout((s) => s.toggleConsole);
   const browserLayout = useSettings((s) => s.browserLayout);
@@ -482,7 +482,8 @@ function StatusBar({
         )}
       </div>
       <PillButton
-        onClick={() => openDialog("settings")}
+        onClick={() => openSettings(SETTINGS_ENTRY_POINTS.statusBarSync)}
+        data-settings-link="statusBarSync"
         icon={
           <FolderSync
             size={11}
@@ -614,6 +615,7 @@ function PillButton({
   badge,
   danger,
   title,
+  ...rest
 }: {
   children?: React.ReactNode;
   onClick: () => void;
@@ -624,9 +626,10 @@ function PillButton({
   /** Something needs the user (agent approvals): danger-toned label + badge. */
   danger?: boolean;
   title?: string;
-}) {
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
+      {...rest}
       onClick={onClick}
       disabled={disabled}
       title={title}
@@ -800,6 +803,18 @@ function NotificationRow({ n }: { n: Toast }) {
           >
             {n.message}
           </div>
+        )}
+        {n.action && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              followToastAction(n.action!);
+            }}
+            className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-accent hover:underline"
+          >
+            {n.action.label}
+          </button>
         )}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
