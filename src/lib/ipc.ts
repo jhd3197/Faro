@@ -32,7 +32,9 @@ import type {
   ImporterPaths,
   FaroImport,
   CfAccountStatus,
+  CfForwardStatus,
   CfSshHostname,
+  CfTunnelHealth,
   CfInvitePlan,
   CfZone,
   CfCreated,
@@ -476,10 +478,19 @@ export const ipc = {
   cfAccountCreateServiceToken: () => invoke<CfAccountStatus>("cf_account_create_service_token"),
   cfAccountDeleteServiceToken: () => invoke<CfAccountStatus>("cf_account_delete_service_token"),
   cfAccountZones: () => invoke<CfZone[]>("cf_account_zones"),
+  /** Named Access TCP forwards and whether each is listening. */
+  cfForwardsStatus: () => invoke<CfForwardStatus[]>("cf_forwards_status"),
+  cfForwardStart: (profileId: string, name: string) =>
+    invoke<CfForwardStatus>("cf_forward_start", { profileId, name }),
+  cfForwardStop: (profileId: string, name: string) =>
+    invoke<void>("cf_forward_stop", { profileId, name }),
+  /** Start a web-panel forward if needed and open it in the browser. */
+  cfForwardOpen: (profileId: string, name: string) =>
+    invoke<void>("cf_forward_open", { profileId, name }),
   /** The Cloudflare side of moving a server behind Cloudflare. */
   cfSetupCloudflare: (profileId: string, request: CfSetupRequest) =>
     invoke<CfSetupState>("cf_setup_cloudflare", { profileId, request }),
-  cfTunnelStatus: (tunnelId: string) => invoke<string>("cf_tunnel_status", { tunnelId }),
+  cfTunnelStatus: (tunnelId: string) => invoke<CfTunnelHealth>("cf_tunnel_status", { tunnelId }),
   /** Delete what a setup created; returns what couldn't be deleted. */
   cfSetupUndo: (created: CfCreated[]) => invoke<string[]>("cf_setup_undo", { created }),
   /** Which of `ports` on `host` answer from this machine. */
@@ -804,6 +815,11 @@ export async function onAgentHostPaired(
 }
 
 /** CLI version-drift status changed (startup check, or an update finished). */
+/** Access TCP forwards changed (a session connected, or one was started or stopped). */
+export async function onCfForwardsChanged(cb: () => void): Promise<UnlistenFn> {
+  return listen("cf-forward://status", () => cb());
+}
+
 export async function onCloudflaredStatus(
   cb: (status: CloudflaredStatus) => void
 ): Promise<UnlistenFn> {

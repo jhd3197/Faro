@@ -61,6 +61,30 @@ function pathStatus() {
   };
 }
 
+// Demo Access forwards. postgres and admin start listening; redis reports a
+// port conflict so the rail can show that state.
+const cfForwardRunning = new Set<string>(["p-cf\0postgres", "p-cf\0admin"]);
+const cfForwardErrors: Record<string, string> = {
+  "p-cf\0redis": "local port 6379 is already in use",
+};
+
+function cfForwardRows() {
+  const profile = data.profiles.find((p) => p.id === "p-cf");
+  return (profile?.cfForwards ?? []).map((f) => {
+    const key = `p-cf\0${f.name}`;
+    return {
+      profileId: "p-cf",
+      profileName: profile?.name ?? "edge-access",
+      name: f.name,
+      hostname: f.hostname ?? "",
+      localPort: f.localPort,
+      web: !!f.web,
+      running: cfForwardRunning.has(key),
+      error: cfForwardErrors[key],
+    };
+  });
+}
+
 export async function invoke<T = unknown>(cmd: string, args: Args = {}): Promise<T> {
   const out = await dispatch(cmd, args);
   return out as T;
@@ -265,6 +289,27 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return 0;
     case "cf_account_status":
       return { connected: false, choices: [], permissions: [] };
+    case "cf_forwards_status":
+      return cfForwardRows();
+    case "cf_forward_start": {
+      const row = cfForwardRows().find((r) => r.profileId === a.profileId && r.name === a.name);
+      if (row?.name === "redis") {
+        cfForwardErrors[`${a.profileId}\0${a.name}`] = "local port 6379 is already in use";
+        throw new Error("local port 6379 is already in use");
+      }
+      if (row) cfForwardRunning.add(`${a.profileId}\0${a.name}`);
+      delete cfForwardErrors[`${a.profileId}\0${a.name}`];
+      return row ? { ...row, running: true, error: undefined } : null;
+    }
+    case "cf_forward_stop":
+      cfForwardRunning.delete(`${a.profileId}\0${a.name}`);
+      return null;
+    case "cf_forward_open":
+      (window as unknown as { __cfOpened?: string }).__cfOpened = `http://127.0.0.1:${
+        cfForwardRows().find((r) => r.profileId === a.profileId && r.name === a.name)?.localPort ?? 0
+      }/`;
+      cfForwardRunning.add(`${a.profileId}\0${a.name}`);
+      return null;
     case "cloudflared_status":
     case "cloudflared_check":
       return {
@@ -293,6 +338,17 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
         pairing: null,
       };
     case "cf_account_hostnames":
+      return [
+        {
+          hostname: "ssh.edge.example.com",
+          label: "tunnel edge",
+          tunnelId: "tun_edge",
+          tunnelStatus: "healthy",
+          connectorLastSeen: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+          connectorVersion: "2026.8.2",
+          appId: "app_edge",
+        },
+      ];
     case "cf_account_zones":
       return [];
     case "import_faro_file":

@@ -585,6 +585,7 @@ mod tests {
             jump_via: None,
             proxy_command: None,
             oauth_client_id: None,
+            cf_forwards: Vec::new(),
         };
         let key = credential_key(&profile.id);
         crate::credentials::set_secret(&key, &pw).expect("seed secret");

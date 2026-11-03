@@ -466,6 +466,7 @@ mod tests {
             jump_via: None,
             proxy_command: None,
             oauth_client_id: None,
+            cf_forwards: Vec::new(),
         };
 
         // Client-credentials flavor: token exchange happens on first request.

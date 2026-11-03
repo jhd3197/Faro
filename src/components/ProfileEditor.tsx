@@ -24,6 +24,7 @@ import {
   type ProxyCommandConfig,
   type ProxyCommandKind,
   type AccessStatus,
+  type CfForward,
 } from "@/lib/types";
 import {
   ShieldOff,
@@ -235,6 +236,14 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [proxyUser, setProxyUser] = useState(seed?.proxy?.username ?? "");
   const [proxyPass, setProxyPass] = useState(seed?.proxy?.password ?? "");
   const [proxyCmd, setProxyCmd] = useState(() => proxyCmdDraft(seed?.proxyCommand, seed?.host));
+  const [forwards, setForwards] = useState<ForwardDraft[]>(() =>
+    (seed?.cfForwards ?? []).map((f) => ({
+      name: f.name,
+      hostname: f.hostname ?? "",
+      localPort: String(f.localPort || ""),
+      web: !!f.web,
+    }))
+  );
   const [jumpProfile, setJumpProfile] = useState(seed?.jumpProfile ?? "");
   // "How do you reach this server?" (SFTP). A layout over the same data:
   // `jumpProfile` for a jump host, a Cloudflare `proxyCommand` for Cloudflare.
@@ -586,6 +595,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       // A jump host brings its own proxy settings.
       proxy: protocol === "sftp" && (jumpProfile || reach === "cloudflare") ? undefined : buildProxy(),
       proxyCommand: buildProxyCommand(),
+      cfForwards:
+        protocol === "sftp" && reach === "cloudflare" ? cleanForwards(forwards) : undefined,
       jumpProfile: protocol === "sftp" && jumpProfile ? jumpProfile : undefined,
       oauthClientId: isCloudOAuth ? oauthClientId.trim() || undefined : undefined,
     };
@@ -1115,6 +1126,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 certLogin={authKind === "cloudflarecert"}
                 serviceTokenId={proxyCmd.serviceTokenId}
                 onRemoveToken={() => setProxyCmd({ ...proxyCmd, serviceTokenId: "", serviceTokenSecret: "" })}
+                forwards={forwards}
+                setForwards={setForwards}
               />
             ) : (
             <div className="flex gap-2">
@@ -3491,6 +3504,8 @@ function CloudflareServerFields({
   certLogin,
   serviceTokenId,
   onRemoveToken,
+  forwards,
+  setForwards,
 }: {
   server: string;
   setServer: (v: string) => void;
@@ -3501,6 +3516,8 @@ function CloudflareServerFields({
   certLogin: boolean;
   serviceTokenId: string;
   onRemoveToken: () => void;
+  forwards: ForwardDraft[];
+  setForwards: (next: ForwardDraft[]) => void;
 }) {
   const hostnames = useCloudflareHostnames();
   const listId = useId();
@@ -3538,7 +3555,11 @@ function CloudflareServerFields({
                 {known?.tunnelStatus && (
                   <span data-testid="cf-tunnel-status">
                     {" · "}
-                    <TunnelHealth status={known.tunnelStatus} />
+                    <TunnelHealth
+                      status={known.tunnelStatus}
+                      lastSeen={known.connectorLastSeen}
+                      version={known.connectorVersion}
+                    />
                   </span>
                 )}
                 {certLogin && signedIn && <span> · certificate login ready</span>}
@@ -3588,7 +3609,118 @@ function CloudflareServerFields({
           </Field>
         </div>
       )}
+      <ForwardsEditor server={server.trim()} forwards={forwards} setForwards={setForwards} />
     </>
+  );
+}
+
+interface ForwardDraft {
+  name: string;
+  hostname: string;
+  localPort: string;
+  web: boolean;
+}
+
+/** Drop blank rows. A name with no port, or a port with no name, is left out. */
+function cleanForwards(rows: ForwardDraft[]): CfForward[] | undefined {
+  const out: CfForward[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const name = row.name.trim();
+    const localPort = parseInt(row.localPort, 10);
+    if (!name || !localPort || localPort > 65535 || name.includes("/")) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push({
+      name,
+      hostname: row.hostname.trim() || undefined,
+      localPort,
+      web: row.web || undefined,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+/// Databases, RDP, internal APIs and web panels behind Access. Each one is a
+/// `cloudflared access tcp` listener on a local port, started with the session.
+function ForwardsEditor({
+  server,
+  forwards,
+  setForwards,
+}: {
+  server: string;
+  forwards: ForwardDraft[];
+  setForwards: (next: ForwardDraft[]) => void;
+}) {
+  const update = (i: number, patch: Partial<ForwardDraft>) =>
+    setForwards(forwards.map((row, n) => (n === i ? { ...row, ...patch } : row)));
+  const ports = forwards.map((r) => r.localPort.trim()).filter(Boolean);
+  const clash = ports.find((p, i) => ports.indexOf(p) !== i);
+  return (
+    <div className="mb-3" data-testid="cf-forward-editor">
+      <div className="mb-1 text-[11px] font-medium text-text">TCP forwards</div>
+      <p className="mb-2 text-[11px] leading-relaxed text-text-muted">
+        A database, remote desktop, internal API or web panel behind Access. Faro runs{" "}
+        <span className="font-mono">cloudflared access tcp</span> on the local port while this
+        connection is open, and closes it when you disconnect.
+        {server ? ` Leave the hostname empty to use ${server}.` : ""}
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {forwards.map((row, i) => (
+          <div key={i} className="flex flex-wrap items-center gap-1.5">
+            <input
+              aria-label="Forward name"
+              value={row.name}
+              onChange={(e) => update(i, { name: e.target.value })}
+              placeholder="Name"
+              className={inputCls + " w-28"}
+            />
+            <input
+              aria-label="Access hostname"
+              value={row.hostname}
+              onChange={(e) => update(i, { hostname: e.target.value })}
+              placeholder={server || "hostname"}
+              spellCheck={false}
+              className={inputCls + " min-w-0 flex-1"}
+            />
+            <input
+              aria-label="Local port"
+              value={row.localPort}
+              onChange={(e) => update(i, { localPort: e.target.value.replace(/[^\d]/g, "") })}
+              placeholder="5433"
+              inputMode="numeric"
+              className={inputCls + " w-20"}
+            />
+            <label className="flex items-center gap-1 text-[11px] text-text-muted">
+              <input
+                type="checkbox"
+                checked={row.web}
+                onChange={(e) => update(i, { web: e.target.checked })}
+              />
+              Web panel
+            </label>
+            <button
+              type="button"
+              aria-label={`Remove ${row.name || "forward"}`}
+              onClick={() => setForwards(forwards.filter((_, n) => n !== i))}
+              className="rounded p-1 text-text-dim hover:bg-bg-hover hover:text-text"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+      {clash && (
+        <p className="mt-1 text-[11px] text-warning">Local port {clash} is used by more than one forward.</p>
+      )}
+      <button
+        type="button"
+        onClick={() => setForwards([...forwards, { name: "", hostname: "", localPort: "", web: false }])}
+        className="mt-1.5 text-[11px] font-medium text-accent hover:underline"
+      >
+        Add a forward
+      </button>
+    </div>
   );
 }
 

@@ -240,6 +240,7 @@ impl AgentSession {
                 jump_via: None,
                 proxy_command: None,
                 oauth_client_id: None,
+                cf_forwards: Vec::new(),
             },
             server_key: String::new(),
             channel: Mutex::new(Some(channel)),

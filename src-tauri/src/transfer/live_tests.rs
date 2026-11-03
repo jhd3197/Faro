@@ -70,6 +70,7 @@ fn profile(protocol: &str, host: &str, port: u16, user: &str, pass: &str) -> Con
         jump_via: None,
         proxy_command: None,
         oauth_client_id: None,
+        cf_forwards: Vec::new(),
     }
 }
 

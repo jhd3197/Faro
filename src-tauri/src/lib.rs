@@ -18,6 +18,7 @@ mod archive_ops;
 pub mod cli_updater;
 pub mod cloudflared;
 pub mod cloudflare_api;
+pub mod cf_forward;
 pub mod cf_setup;
 pub mod credentials;
 pub mod db;
@@ -66,6 +67,8 @@ pub struct AppState {
     pub cli_updater: Arc<cli_updater::CliUpdater>,
     /// Which cloudflared Faro runs, and its managed copy (Plan 29).
     pub cloudflared: Arc<cloudflared::Manager>,
+    /// Access TCP forwards (`cloudflared access tcp`) started with a session.
+    pub cf_forwards: Arc<cf_forward::Manager>,
     pub foldersync: Arc<foldersync::FolderSync>,
     /// On-demand virtual folders (Plan 9) — OneDrive-style placeholders. Owns
     /// the OS sync-root registrations; inert on non-Windows / non-`virtualfs`
@@ -331,6 +334,9 @@ pub fn run() {
                 cloudflared: Arc::new(
                     cloudflared::Manager::load(&handle).expect("failed to initialise cloudflared settings"),
                 ),
+                cf_forwards: Arc::new(cf_forward::Manager::new(
+                    handle.path().app_data_dir().expect("resolving app_data_dir for Access forwards"),
+                )),
                 foldersync: Arc::new(
                     foldersync::FolderSync::load(&handle)
                         .expect("failed to initialise folder sync settings"),
@@ -509,6 +515,10 @@ pub fn run() {
             cf_setup::cf_setup_undo,
             cf_setup::check_open_ports,
             cloudflare_api::cf_account_zones,
+            cf_forward::cf_forwards_status,
+            cf_forward::cf_forward_start,
+            cf_forward::cf_forward_stop,
+            cf_forward::cf_forward_open,
             path_integration::path_status,
             path_integration::path_add,
             path_integration::path_remove,
@@ -638,6 +648,9 @@ pub fn run() {
         .run(|app, event| {
             // Unregister from Vela on the way out, so it shows Faro as closed.
             if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.cf_forwards.shutdown();
+                }
                 vela::stop(app);
             }
         });

@@ -31,6 +31,7 @@ import {
   ArrowUp,
   ArrowDown,
   Bot,
+  Globe,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useBridge } from "@/stores/bridgeStore";
@@ -56,6 +57,8 @@ import { useSites } from "@/stores/sitesStore";
 import { toastError } from "@/lib/errors";
 import { canLink, connectLink } from "@/lib/connectLink";
 import { toast } from "@/stores/toastStore";
+import { ipc } from "@/lib/ipc";
+import { CfForwardsRail } from "./CfForwardsRail";
 import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
 import { effectiveAccess, accessSummary } from "@/lib/agentAccess";
 import type { ProfileAccess } from "@/lib/types";
@@ -464,6 +467,16 @@ export function ServerRail() {
         icon: <UserPlus size={14} />,
         onClick: () => openInvite([p.id]),
       });
+      for (const f of p.cfForwards ?? []) {
+        if (!f.web) continue;
+        items.push({
+          label: `Open ${f.name} in browser`,
+          icon: <Globe size={14} />,
+          onClick: () => {
+            ipc.cfForwardOpen(p.id, f.name).catch((e) => toastError(e, "Couldn't open the panel"));
+          },
+        });
+      }
     } else if (p.protocol === "sftp" && !p.jumpProfile && !p.proxyCommand && !p.proxy) {
       items.push({
         label: "Move behind Cloudflare…",
@@ -841,6 +854,8 @@ export function ServerRail() {
             </>
           )}
         </div>
+
+        <CfForwardsRail expanded={expanded} profiles={ordered} />
 
         {/* Divider + Agent Bridge */}
         <div className="mt-3 flex flex-col items-center gap-1.5">
