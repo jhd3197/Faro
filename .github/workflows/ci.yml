@@ -44,7 +44,8 @@ jobs:
             libdbus-1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            openssh-server
 
       - name: Install npm deps
         run: npm ci
@@ -54,6 +55,9 @@ jobs:
 
       - name: File pane listing and navigation regression tests
         run: node --test scripts/file-pane.test.mjs
+
+      - name: Folder link icon, sort, open, copy and delete
+        run: node --test scripts/folder-links.test.mjs
 
       - name: Synchronized browsing and local folder memory
         run: node --test scripts/sync-browse.test.mjs

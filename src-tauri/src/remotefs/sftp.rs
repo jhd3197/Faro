@@ -164,3 +164,7 @@ impl RemoteFs for SftpFs {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "sftp_links.rs"]
+mod sftp_links;
