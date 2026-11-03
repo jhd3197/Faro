@@ -81,6 +81,82 @@ pub struct Tunnel {
     /// `inactive`, `healthy`, `degraded` or `down`.
     #[serde(default)]
     pub status: String,
+    /// Live connectors. The list endpoint sometimes omits them; `ssh_hostnames`
+    /// fetches the tunnel when they're missing.
+    #[serde(default, deserialize_with = "null_default")]
+    pub connections: Vec<TunnelConnection>,
+    /// When a connector was last active, if Cloudflare sent it.
+    #[serde(default)]
+    pub conns_active_at: Option<String>,
+    #[serde(default)]
+    pub conns_inactive_at: Option<String>,
+}
+
+/// One cloudflared connector on a tunnel. `client_version` is the cloudflared
+/// running on the server; `opened_at` is when this connector came up.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TunnelConnection {
+    #[serde(default)]
+    pub colo_name: String,
+    #[serde(default)]
+    pub opened_at: Option<String>,
+    #[serde(default)]
+    pub client_version: Option<String>,
+    #[serde(default)]
+    pub is_pending_reconnect: bool,
+}
+
+fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// `(last seen, cloudflared version)` for the newest connector. Last seen
+/// falls back to the tunnel's active/inactive timestamps when no connector
+/// row carries `opened_at`.
+pub fn connector_info(tunnel: &Tunnel) -> (Option<String>, Option<String>) {
+    let mut best: Option<&TunnelConnection> = None;
+    for conn in &tunnel.connections {
+        let newer = match (conn.opened_at.as_deref(), best.and_then(|c| c.opened_at.as_deref())) {
+            (Some(opened), Some(prev)) => opened > prev,
+            (Some(_), None) => true,
+            (None, None) => best.is_none(),
+            (None, Some(_)) => false,
+        };
+        if newer {
+            best = Some(conn);
+        }
+    }
+    let version = best.and_then(|c| c.client_version.clone()).filter(|s| !s.is_empty());
+    let last_seen = best
+        .and_then(|c| c.opened_at.clone())
+        .filter(|s| !s.is_empty())
+        .or_else(|| tunnel.conns_active_at.clone().filter(|s| !s.is_empty()))
+        .or_else(|| tunnel.conns_inactive_at.clone().filter(|s| !s.is_empty()));
+    (last_seen, version)
+}
+
+/// Tunnel status together with connector last-seen and the cloudflared
+/// version on the server. The wizard polls this; the hostname list carries
+/// the same fields.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelHealth {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector_last_seen: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector_version: Option<String>,
+}
+
+impl TunnelHealth {
+    pub fn from_tunnel(tunnel: &Tunnel) -> Self {
+        let (connector_last_seen, connector_version) = connector_info(tunnel);
+        Self { status: tunnel.status.clone(), connector_last_seen, connector_version }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -457,13 +533,29 @@ pub struct SshHostname {
     pub tunnel_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tunnel_status: Option<String>,
+    /// When the tunnel's connector was last seen (`opened_at`, else the
+    /// tunnel's active/inactive timestamp).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector_last_seen: Option<String>,
+    /// cloudflared version running on the server (the connector's `client_version`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
 }
 
 pub async fn ssh_hostnames(api: &Api, account: &str) -> Result<Vec<SshHostname>> {
     let mut out: Vec<SshHostname> = Vec::new();
-    for t in api.tunnels(account).await? {
+    for listed in api.tunnels(account).await? {
+        // The list call often includes connectors. When it doesn't, one
+        // tunnel fetch supplies last-seen and the server's cloudflared version.
+        let (seen, version) = connector_info(&listed);
+        let t = if seen.is_none() && version.is_none() && listed.status != "inactive" {
+            api.tunnel(account, &listed.id).await.unwrap_or(listed)
+        } else {
+            listed
+        };
+        let (last_seen, cloudflared_version) = connector_info(&t);
         for rule in api.tunnel_ingress(account, &t.id).await? {
             let Some(host) = rule.hostname.filter(|_| rule.service.starts_with("ssh://")) else { continue };
             out.push(SshHostname {
@@ -471,6 +563,8 @@ pub async fn ssh_hostnames(api: &Api, account: &str) -> Result<Vec<SshHostname>>
                 hostname: host,
                 tunnel_id: Some(t.id.clone()),
                 tunnel_status: Some(t.status.clone()),
+                connector_last_seen: last_seen.clone(),
+                connector_version: cloudflared_version.clone(),
                 app_id: None,
             });
         }
@@ -489,6 +583,8 @@ pub async fn ssh_hostnames(api: &Api, account: &str) -> Result<Vec<SshHostname>>
                 hostname: host,
                 tunnel_id: None,
                 tunnel_status: None,
+                connector_last_seen: None,
+                connector_version: None,
                 app_id: Some(app.id.clone()),
             }),
             None => {}

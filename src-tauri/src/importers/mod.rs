@@ -210,6 +210,7 @@ impl ProfilePreview {
             jump_via: None,
             proxy_command: self.proxy_command,
             oauth_client_id: None,
+            cf_forwards: Vec::new(),
         }
     }
 }
