@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import ts from "typescript";
+import { Window } from "@tauri-apps/api/window";
 
 function load(rel) {
   const source = ts.transpileModule(readFileSync(new URL(rel, import.meta.url), "utf8"), {
@@ -361,4 +362,44 @@ test("UNC parents stay on the share root", () => {
   assert.equal(sync.mapRelative("\\\\server\\share", "\\\\other\\share", "/data"), null);
 });
 
+});
+
+
+test("window close flushes local path and has permission to finish closing", async () => {
+  const capability = JSON.parse(readFileSync(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"));
+  const steps = [];
+  let releaseWrite;
+  const writing = new Promise(resolve => { releaseWrite = resolve; });
+  const memory = local.createLocalPathMemory(async path => {
+    steps.push(`write:${path}`);
+    await writing;
+    steps.push("persisted");
+  }, 300, () => ({ cancel() {} }));
+  let requested;
+  const window = {
+    listen: async (event, handler) => {
+      assert.equal(event, "tauri://close-requested");
+      requested = handler;
+      return () => {};
+    },
+    destroy: async () => {
+      assert.ok(capability.windows.includes("main"));
+      assert.ok(capability.permissions.includes("core:window:allow-destroy"),
+        "Tauri onCloseRequested calls destroy after the close handler resolves");
+      steps.push("destroyed");
+    },
+  };
+  try {
+    memory.update("/work/latest");
+    await Window.prototype.onCloseRequested.call(window, () => memory.flush());
+    const closing = requested({ event: "tauri://close-requested", id: 1 });
+    assert.deepEqual(steps, ["write:/work/latest"]);
+    releaseWrite();
+    await closing;
+    assert.deepEqual(steps, ["write:/work/latest", "persisted", "destroyed"]);
+  } finally {
+    releaseWrite();
+    memory.cancel();
+    local.forgetSessionLocalPath();
+  }
 });
