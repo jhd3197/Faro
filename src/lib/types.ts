@@ -595,6 +595,7 @@ export type PairState = "idle" | "scanning" | "syncing" | "error";
 
 /** A configured, persisted sync pair (the user-editable half). */
 export interface SyncPair {
+  twoWay?: boolean;
   id: string; // "" when creating; backend assigns a uuid
   name: string;
   localRoot: string;
@@ -1420,3 +1421,5 @@ export interface DiagnosticReport {
 }
 
 export interface ProfileOrganization { id: string; group?: string; sortOrder?: number }
+
+export interface TwoWayConflict { identity: string; relative: string; revision: number; state: { local: SyncRecoveryEntry["state"] | null; remote: SyncRecoveryEntry["state"] | null } }

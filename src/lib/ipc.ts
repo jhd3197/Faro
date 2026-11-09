@@ -545,6 +545,8 @@ export const ipc = {
   syncExecute: (sessionId: SessionId, plan: SyncPlan) =>
     invoke<string[]>("sync_execute", { sessionId, plan }),
 
+  folderSyncConflicts: (pairId: string) => invoke<import("./types").TwoWayConflict[]>("folder_sync_conflicts", { pairId }),
+  folderSyncResolve: (pairId: string, conflict: import("./types").TwoWayConflict, local: boolean) => invoke<void>("folder_sync_resolve", { pairId, conflict, local }),
   syncRecoveryPurge: (sessionId: SessionId, root: string, local: boolean, staging: boolean, days: number, entries: SyncRecoveryEntry[]) => invoke<number>("sync_recovery_purge", { sessionId, root, local, staging, days, entries }),
   syncRecoveryList: (sessionId: SessionId, root: string, local: boolean, staging = false) =>
     invoke<SyncRecoveryEntry[]>("sync_recovery_list", { sessionId, root, local, staging }),

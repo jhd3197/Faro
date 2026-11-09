@@ -1,12 +1,12 @@
 pub mod recovery;
 pub mod journal;
+pub mod twoway;
 
 use crate::remotefs::{FileKind, RemoteFs};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Direction of a one-way sync. Bidirectional is intentionally out of scope —
-/// it needs conflict resolution UI that's a project of its own.
+/// Direction of one transfer plan. Two-way sync executes plans in both directions.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SyncDirection {
@@ -71,7 +71,7 @@ pub struct SyncPlan {
     pub total_bytes: u64,
 }
 
-fn join(base: &str, rel: &str) -> String {
+pub(crate) fn join(base: &str, rel: &str) -> String {
     let absolute = base.starts_with('/');
     let base = base.trim_end_matches('/').trim_end_matches('\\');
     if base.is_empty() {

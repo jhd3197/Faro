@@ -25,6 +25,7 @@ import type {
   SyncMode,
   SyncPair,
   SyncStrategy,
+  TwoWayConflict,
 } from "@/lib/types";
 
 /// Settings → Folder Sync. Configure continuous, watched sync pairs: pick a
@@ -85,10 +86,19 @@ function PairRow({ pair }: { pair: PairView }) {
   const setEnabled = useSync((s) => s.setEnabled);
   const remove = useSync((s) => s.remove);
   const syncNow = useSync((s) => s.syncNow);
+  const [conflicts, setConflicts] = useState<TwoWayConflict[]>([]);
+  const [resolving, setResolving] = useState(false);
+  const [conflictError, setConflictError] = useState<string | null>(null);
+  useEffect(() => { if (pair.twoWay) void ipc.folderSyncConflicts(pair.id).then(setConflicts).catch(e => setConflictError(String(e))); }, [pair.id, pair.twoWay, pair.lastError, pair.lastSynced]);
+  async function resolveConflict(conflict: TwoWayConflict, local: boolean) {
+    setResolving(true); setConflictError(null);
+    try { await ipc.folderSyncResolve(pair.id, conflict, local); await syncNow(pair.id); setConflicts(await ipc.folderSyncConflicts(pair.id)); }
+    catch(e) { setConflictError(String(e)); } finally { setResolving(false); }
+  }
   const [freeing, setFreeing] = useState(false);
 
   const profile = profiles.find((p) => p.id === pair.profileId);
-  const Arrow = pair.direction === "localToRemote" ? ArrowRight : ArrowLeft;
+  const Arrow = pair.twoWay ? RefreshCw : pair.direction === "localToRemote" ? ArrowRight : ArrowLeft;
   const syncing = pair.state === "syncing";
   const isOnDemand = pair.mode === "onDemand";
 
@@ -150,6 +160,14 @@ function PairRow({ pair }: { pair: PairView }) {
             )}
             {!pair.enabled && <span className="text-text-dim">Paused</span>}
           </div>
+          {conflictError && <p className="text-xs text-danger">{conflictError}</p>}
+          {pair.twoWay && conflicts.length > 0 && <div className="mt-2 space-y-2 rounded border border-border p-2">
+            <p className="text-[11px] text-text-muted">Choose a version for each conflict. The other version goes to recovery. Choices are rechecked before applying.</p>
+            {conflicts.map(conflict => <div key={conflict.relative} className="space-y-1 border-t border-border py-1 text-[11px]">
+              <div className="break-all font-mono">{conflict.relative}</div>
+              <div className="flex gap-2">{([true, false] as const).map(local => { const file = local ? conflict.state.local : conflict.state.remote; return <button key={String(local)} disabled={resolving || !pair.enabled} className="rounded border border-border px-2 py-1 disabled:opacity-40" onClick={() => void resolveConflict(conflict, local)}>Use {local ? "local" : "remote"} {file ? `(${file.size} bytes)` : "deletion"}</button>; })}</div>
+            </div>)}
+          </div>}
           {pair.lastError && (
             <div className="mt-1 flex items-start gap-1.5 text-[11px] text-danger">
               <AlertTriangle size={11} className="mt-0.5 shrink-0" />
@@ -233,6 +251,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
   const [remoteRoot, setRemoteRoot] = useState(
     profiles[0]?.defaultRemotePath ?? ""
   );
+  const [twoWay, setTwoWay] = useState(false);
   const [direction, setDirection] = useState<SyncDirection>("localToRemote");
   const [strategy, setStrategy] = useState<SyncStrategy>("additive");
   const [mode, setMode] = useState<SyncMode>("mirror");
@@ -282,6 +301,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
       profileId,
       remoteRoot: remoteRoot.trim(),
       direction,
+      twoWay: mode === "mirror" && twoWay,
       strategy,
       mode,
       enabled: true,
@@ -386,8 +406,10 @@ function PairForm({ onDone }: { onDone: () => void }) {
 
       {mode === "mirror" && (
         <>
+      <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={twoWay} onChange={e => setTwoWay(e.target.checked)} />Two-way sync with conflict review</label>
+      {twoWay && <p className="text-[11px] text-text-muted">Changes are compared with the last successful sync. Files already present on both sides require an initial version choice. Additive restores deletions; Mirror propagates them with recovery.</p>}
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Direction">
+        {!twoWay && <Field label="Direction">
           <Segmented<SyncDirection>
             value={direction}
             onChange={setDirection}
@@ -396,7 +418,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
               { value: "remoteToLocal", label: "Remote → Local" },
             ]}
           />
-        </Field>
+        </Field>}
         <Field label="Strategy">
           <Segmented<SyncStrategy>
             value={strategy}

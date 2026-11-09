@@ -521,6 +521,8 @@ pub fn run() {
             path_integration::path_add,
             path_integration::path_remove,
             foldersync::foldersync_list,
+            foldersync::twoway_runtime::folder_sync_conflicts,
+            foldersync::twoway_runtime::folder_sync_resolve,
             foldersync::foldersync_upsert,
             foldersync::foldersync_remove,
             foldersync::foldersync_set_enabled,
