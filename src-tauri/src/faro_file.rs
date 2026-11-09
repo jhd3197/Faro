@@ -141,15 +141,13 @@ pub fn build(
     (file, summary)
 }
 
-/// Serialize `file`, encrypted when it carries secrets.
+/// Serialize `file`; encrypt whenever a passphrase is supplied, and always for secrets.
 pub fn encode(file: &FaroFile, passphrase: Option<&str>) -> Result<Vec<u8>> {
     let json = serde_json::to_vec_pretty(file).context("serialize connections")?;
-    if !file.secrets {
-        return Ok(json);
-    }
     match passphrase.filter(|p| !p.is_empty()) {
         Some(pass) => crate::backup::seal(MAGIC, pass, &json),
-        None => bail!("a passphrase is required to export secrets"),
+        None if file.secrets => bail!("a passphrase is required to export secrets"),
+        None => Ok(json),
     }
 }
 
@@ -441,6 +439,19 @@ mod tests {
 
     fn all_ids(v: &[ConnectionProfile]) -> Vec<String> {
         v.iter().map(|p| p.id.clone()).collect()
+    }
+
+    #[test]
+    fn encrypted_settings_can_exclude_all_embedded_credentials() {
+        let p = profile("private", "Private host", AuthMethod::Password { password: "not-in-file".into() });
+        let (file, _) = build(&[p], &["private".into()], false, |_| None);
+        let bytes = encode(&file, Some("settings password")).unwrap();
+        assert!(is_encrypted(&bytes));
+        assert!(decode(&bytes, Some("wrong")).is_err());
+        let restored = decode(&bytes, Some("settings password")).unwrap();
+        assert!(!restored.secrets);
+        assert!(!serde_json::to_string(&restored).unwrap().contains("not-in-file"));
+        assert_eq!(restored.connections[0].profile.name, "Private host");
     }
 
     #[test]

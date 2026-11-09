@@ -60,3 +60,14 @@ hosts inside the file; imported connections get new ones. A file with a newer
   `Match host … exec "cloudflared access ssh-gen …"` line so OpenSSH fetches the
   certificate itself. The OpenSSH tab in Import reads it back with the same
   routes and login types.
+
+
+Encryption is independent of including credentials. Export defaults to encrypting
+connection settings, even with **Include secrets** off. This protects hostnames,
+notes, groups and routes while leaving passwords and private-key material on the
+original computer. Credential references remain references.
+
+For cross-device portability, save the encrypted `.faro` file to a location you
+already synchronize, then import it on the other computer and review the conflict
+choices. Configure external credential adapters separately on each device.
+Faro does not silently overwrite local profiles when a shared file changes.

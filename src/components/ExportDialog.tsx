@@ -32,6 +32,7 @@ export function ExportDialog({ request, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(request?.ids ?? profiles.map((p) => p.id))
   );
+  const [encrypt, setEncrypt] = useState(true);
   const [secrets, setSecrets] = useState(false);
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
@@ -61,8 +62,9 @@ export function ExportDialog({ request, onClose }: Props) {
     });
   const allChosen = profiles.filter(usable).every((p) => selected.has(p.id));
 
+  const encrypted = encrypt || secrets;
   const passProblem =
-    format === "faro" && secrets
+    format === "faro" && encrypted
       ? pass.length < 8
         ? "Use a passphrase of at least 8 characters."
         : pass !== pass2
@@ -90,12 +92,12 @@ export function ExportDialog({ request, onClose }: Props) {
         path,
         format,
         includeSecrets: format === "faro" && secrets,
-        passphrase: format === "faro" && secrets ? pass : undefined,
+        passphrase: format === "faro" && encrypted ? pass : undefined,
       });
       const notes = [
         s.addedJumps.length ? `Added the jump host${s.addedJumps.length === 1 ? "" : "s"} ${s.addedJumps.join(", ")}.` : "",
         s.skipped.length ? `Left out (not SSH): ${s.skipped.join(", ")}.` : "",
-        format === "faro" && secrets ? "Encrypted; share the passphrase separately." : "",
+        format === "faro" && encrypted ? "Encrypted; share the passphrase separately." : "",
       ].filter(Boolean);
       toast.success(
         `Exported ${s.connections} connection${s.connections === 1 ? "" : "s"}`,
@@ -218,7 +220,8 @@ export function ExportDialog({ request, onClose }: Props) {
                 <Lock size={12} className="text-text-muted" />
                 Include secrets
               </label>
-              {secrets ? (
+              <label className="flex items-center gap-2 text-[12px]"><input type="checkbox" checked={encrypted} disabled={secrets} onChange={e => setEncrypt(e.target.checked)} className="accent-accent" />Encrypt connection settings</label>
+              {encrypted ? (
                 <>
                   <div className="grid grid-cols-2 gap-2">
                     <input
@@ -241,8 +244,7 @@ export function ExportDialog({ request, onClose }: Props) {
                     />
                   </div>
                   <p className="text-[11px] text-text-dim">
-                    Saved passwords, key passphrases, keychain keys and service token secrets are included, and
-                    the file is encrypted with this passphrase. Share it separately from the file.
+                    {secrets ? "Saved credentials are included." : "Saved credentials are excluded."} Connection settings are encrypted with this passphrase. Share it separately from the file.
                     {passProblem && pass && <span className="block text-warning">{passProblem}</span>}
                   </p>
                 </>
