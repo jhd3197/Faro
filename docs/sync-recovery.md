@@ -71,10 +71,25 @@ same endpoint and root. If the original name is empty, the old version matches
 the journal, and the new file is still staged at its expected size, Faro restores
 the old version. It leaves staged bytes for inspection. Existing destinations are
 never replaced by replay. Ambiguous cases stop with an inspection message. OS
-file locks prevent replay or cleanup while a publisher is active.
+file locks prevent replay or cleanup while a publisher on this computer is active.
 
 The recovery panel can preview permanent cleanup of saved versions or staged
 files older than 7, 30, 90 or 365 days. Nothing expires automatically. The app
 shows the exact candidates and requires a separate delete confirmation. It
 rechecks each file against the preview and refuses batches with unfinished
 publications. Empty storage directories may remain after cleanup.
+
+
+To repeat the live transfer checks, install `paramiko` and `pyftpdlib` in an
+isolated Python environment and run `python scripts/sync-test-servers.py`. The
+fixture serves a new temporary directory on loopback only and prints
+`FARO_LIVE_FTP` and `FARO_LIVE_SFTP` values. Set those variables, then run
+`cargo test -p faro --lib sync_recovery_roundtrip -- --ignored --test-threads 1`
+from `src-tauri`. Stop the fixture after testing. The checks publish a staged
+replacement, download both versions to compare bytes, restore without replacing
+the current file, and preserve a deletion on each protocol.
+
+With `npm run dev:mock` running, `node scripts/test-improvements-ui.mjs` checks
+connection diagnostics, encrypted export, organization undo, conflict choices
+and relay settings. `node scripts/test-sync-recovery.mjs` checks copy selection,
+restore and cleanup confirmation, including visible errors for refused cleanup.

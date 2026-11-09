@@ -61,7 +61,28 @@ try {
   await page.waitForSelector('[aria-label="Restore dist/old.js"]');
   await page.screenshot({ path: path.join(os.tmpdir(), "faro-sync-recovery.png") });
   await page.click('[aria-label="Restore dist/old.js"]');
-  await page.waitForFunction(() => document.body.textContent.includes("Restored to") && document.body.textContent.includes("No saved versions"));
+  await page.waitForFunction(() => document.body.textContent.includes("Restored to") && document.body.textContent.includes("No files in this storage area"));
+  await page.evaluate(async () => {
+    const { ipc } = await import("/src/lib/ipc.ts");
+    window.__versions = [{ batch: "1-old", relative: "partial.bin", size: 17, state: { size: 17, modified: 1, etag: null } }];
+    ipc.syncRecoveryPurge = async () => { throw new Error("active publication: cleanup refused"); };
+  });
+  await page.click('[aria-label="Refresh recovery files"]');
+  await page.waitForFunction(() => document.body.textContent.includes("Review cleanup (1)"));
+  await clickText("Review cleanup (1)");
+  await clickText("Delete 1 files permanently");
+  await page.waitForFunction(() => document.body.textContent.includes("active publication: cleanup refused"));
+  await page.select('[aria-label="Sync storage area"]', "staging");
+  await page.waitForFunction(() => document.body.textContent.includes("Remote staging files") || document.body.textContent.includes("Local staging files"));
+  assert.equal(await page.$('[aria-label="Restore partial.bin"]'), null);
+  await page.evaluate(async () => {
+    const { ipc } = await import("/src/lib/ipc.ts");
+    ipc.syncRecoveryPurge = async (_id, _root, _local, staging, days, entries) => { window.__cleanup = { staging, days, entries }; window.__versions = []; return entries.length; };
+  });
+  await clickText("Review cleanup (1)");
+  await clickText("Delete 1 files permanently");
+  await page.waitForFunction(() => window.__cleanup?.staging && document.body.textContent.includes("No files in this storage area"));
+  assert.equal(await page.evaluate(() => window.__cleanup.entries[0].relative), "partial.bin");
   assert.deepEqual(errors, []);
   console.log("PASS: skipped copies excluded, direction invalidates preview, recovery renders and restores");
 } finally {

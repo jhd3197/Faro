@@ -43,9 +43,12 @@ export function SyncRecovery({ sessionId, root, local, onRestored }: {
   const candidates = entries.filter(entry => { const created = Number(entry.batch.split("-")[0]); return created > 0 && created * 1000 < Date.now() - days * 86400000; });
   async function cleanup() {
     setBusy(true); setError(null);
-    try { await ipc.syncRecoveryPurge(sessionId, root, local, staging, days, candidates); }
-    catch (e) { setError(String(e)); }
-    finally { setBusy(false); setConfirmCleanup(false); setRevision(r => r + 1); }
+    try { await ipc.syncRecoveryPurge(sessionId, root, local, staging, days, candidates); setRevision(r => r + 1); }
+    catch (e) {
+      setError(String(e));
+      try { setEntries(await ipc.syncRecoveryList(sessionId, root, local, staging)); } catch { /* Keep the cleanup error visible. */ }
+    }
+    finally { setBusy(false); setConfirmCleanup(false); }
   }
 
   return <div className="mx-4 mb-3 min-h-0 overflow-y-auto rounded-md border border-border bg-bg-subtle text-[11.5px]">
@@ -70,7 +73,7 @@ export function SyncRecovery({ sessionId, root, local, onRestored }: {
     {error && <p role="alert" className="break-all px-3 py-2 text-danger">{error}</p>}
     {restored && <p role="status" className="break-all px-3 py-2 text-success">Restored to {restored}</p>}
     {loading ? <div className="flex items-center gap-2 p-3"><Loader2 size={12} className="animate-spin" />Loading versions…</div>
-      : !error && entries.length === 0 ? <p className="p-3 text-text-dim">No saved versions in this folder.</p>
+      : !error && entries.length === 0 ? <p className="p-3 text-text-dim">No files in this storage area.</p>
       : (confirmCleanup ? candidates : entries).map(entry => {
         const saved = Number(entry.batch.split("-")[0]) * 1000;
         return <div key={`${entry.batch}/${entry.relative}`} className="flex items-center gap-2 border-t border-border-subtle px-3 py-2">

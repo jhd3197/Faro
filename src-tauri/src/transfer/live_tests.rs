@@ -1059,3 +1059,50 @@ async fn live_cloudflare_access_round_trip() {
     assert!(err.to_string().contains("faro-no-such-tunnel-28.trycloudflare.com"), "{err:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+async fn sync_recovery_roundtrip(session: Arc<Session>) {
+    use crate::sync::recovery::{self, FileState, StagedReplacement};
+    let root = format!("faro-recovery-check-{}", Uuid::new_v4());
+    let fs = crate::commands::fs_for_session(&session);
+    fs.create_dir(&root).await.unwrap();
+    let dir = scratch("sync-recovery");
+    let source = dir.join("source");
+    let target = format!("{root}/file");
+    let mgr = Arc::new(TransferManager::new());
+    std::fs::write(&source, b"original bytes").unwrap();
+    let (t, _, _) = upload(&mgr, &session, &source, &target).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    let previous = fs.list_dir(&root).await.unwrap().into_iter().find(|e| e.name == "file").unwrap();
+    let stage = StagedReplacement { root: root.clone(), batch: recovery::new_batch(), relative: "file".into(), expected: FileState { size: previous.size, modified: previous.modified.unwrap_or(0), etag: previous.etag }, size: 17, destination_key: None };
+    stage.prepare(fs.as_ref()).await.unwrap();
+    std::fs::write(&source, b"replacement bytes").unwrap();
+    let (t, _, _) = upload(&mgr, &session, &source, &stage.path()).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    stage.publish(fs.as_ref()).await.unwrap();
+    let saved = recovery::list(fs.as_ref(), &root).await.unwrap();
+    assert_eq!(saved.len(), 1);
+    let restored = recovery::restore(fs.as_ref(), &root, &saved[0]).await.unwrap();
+    assert_ne!(restored, target);
+    let down = dir.join("downloads"); std::fs::create_dir(&down).unwrap();
+    let (t, _, _) = download(&mgr, &session, &restored, &down).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    assert_eq!(std::fs::read(down.join(basename(&restored))).unwrap(), b"original bytes");
+    let (t, _, _) = download(&mgr, &session, &target, &down).await;
+    assert_eq!(t.status, TransferStatus::Done, "{:?}", t.error);
+    assert_eq!(std::fs::read(down.join("file")).unwrap(), b"replacement bytes");
+    let current = fs.list_dir(&root).await.unwrap().into_iter().find(|e| e.name == "file").unwrap();
+    recovery::preserve(fs.as_ref(), &root, &recovery::new_batch(), "file", &FileState { size: current.size, modified: current.modified.unwrap_or(0), etag: current.etag }).await.unwrap();
+    assert!(!fs.list_dir(&root).await.unwrap().iter().any(|e| e.name == "file"));
+    assert_eq!(recovery::list(fs.as_ref(), &root).await.unwrap().len(), 1);
+    assert!(root.starts_with("faro-recovery-check-") && !root.contains('/'));
+    fs.delete(&root, true).await.unwrap();
+    assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires FARO_LIVE_FTP pointing at a disposable server"]
+async fn live_ftp_sync_recovery_roundtrip() { sync_recovery_roundtrip(ftp_session().await.expect("Set FARO_LIVE_FTP")).await; }
+#[tokio::test]
+#[ignore = "requires FARO_LIVE_SFTP pointing at a disposable server"]
+async fn live_sftp_sync_recovery_roundtrip() { sync_recovery_roundtrip(sftp_session().await.expect("Set FARO_LIVE_SFTP")).await; }
