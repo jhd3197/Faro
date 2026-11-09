@@ -39,6 +39,7 @@ import {
   Radar,
   Loader2,
   Link2,
+  Settings2,
   KeyRound,
   Copy,
   Sparkles,
@@ -846,6 +847,101 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                     ]
   ).filter(Boolean);
 
+  const isSftp = protocol === "sftp";
+  const iconField = <>
+          <Field group label={isSftp ? "Icon" : "Icon (optional)"}>
+            <IconPicker
+              value={icon}
+              onChange={setIcon}
+              fallback={monogram(name || "?")}
+            />
+          </Field>
+  </>;
+  const authenticationField = <>
+            <Field label={isSftp ? "Authentication" : "Auth"}>
+              <select
+                value={authKind}
+                onChange={(e) => setAuthKind(e.target.value as AuthMethod["kind"])}
+                className={inputCls}
+              >
+                <option value="password">Password</option>
+                <option value="key" disabled={isFtp}>
+                  Private key file{isFtp ? " — SFTP only" : ""}
+                </option>
+                <option value="agent" disabled={isFtp}>
+                  SSH agent{isFtp ? " — SFTP only" : ""}
+                </option>
+                {/* Only through Cloudflare (or a saved one that lost its route,
+                    so the select still shows what it has). */}
+                {!isFtp && (cfRoute || authKind === "cloudflarecert") && (
+                  <option
+                    value="cloudflarecert"
+                    disabled={cfServiceToken && authKind !== "cloudflarecert"}
+                  >
+                    Cloudflare identity (short-lived certificate)
+                    {cfServiceToken ? " — not with a service token" : ""}
+                  </option>
+                )}
+              </select>
+            </Field>
+
+  </>;
+  const localFolderField = (
+        <Field label="Default local folder (optional)">
+          <div className="flex gap-2">
+            <input aria-label="Default local folder" value={defaultLocalPath}
+              onChange={(e) => setDefaultLocalPath(e.target.value)} className={inputCls + " min-w-0 flex-1"} />
+            <button type="button" className="shrink-0 rounded-md border border-border px-3 text-sm hover:bg-bg-hover"
+              onClick={async () => {
+                try {
+                  const folder = await open({ directory: true, multiple: false, defaultPath: defaultLocalPath || undefined });
+                  if (typeof folder === "string") setDefaultLocalPath(folder);
+                } catch (e) { toast.error("Couldn't choose folder", String(e)); }
+              }}>Browse…</button>
+          </div>
+        </Field>
+  );
+  const startingFolders = <>
+        <Field label={isObject ? "Default key prefix" : isSftp ? "Starting folder on server" : "Default remote path"}>
+          <input
+            value={defaultRemotePath}
+            onChange={(e) => setDefaultRemotePath(e.target.value)}
+            placeholder={isObject ? "" : isFtp ? "/" : "."}
+            className={inputCls}
+          />
+        </Field>
+
+        {isSftp ? <details open={defaultLocalPath ? true : undefined} className="mb-3">
+          <summary className="cursor-pointer text-xs text-text-dim hover:text-text">Local starting folder</summary>
+          <div className="pt-2">{localFolderField}</div>
+        </details> : localFolderField}
+
+  </>;
+  const organizationFields = <>
+          <div className={isSftp ? undefined : "grid grid-cols-2 gap-3"}>
+          {!isSftp && iconField}
+          <Field label="Group (optional)">
+            <input
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder="e.g. Production"
+              list="profile-editor-groups"
+              className={inputCls}
+            />
+            <datalist id="profile-editor-groups">
+              {knownGroups.map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+          </Field>
+          </div>
+  </>;
+  const notesField = <>
+        <Field label="Server notes (optional)">
+          <textarea className={inputCls} rows={3} maxLength={20000} placeholder="Purpose, maintenance notes, or a runbook link. Avoid storing secrets here." value={notes} onChange={e => setNotes(e.target.value)} />
+        </Field>
+  </>;
+
   return (
     <div className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div
@@ -910,6 +1006,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               className={inputCls}
             />
           </Field>
+          {isSftp && <div className="w-36">{iconField}</div>}
         </div>
 
         {isS3 ? (
@@ -1137,6 +1234,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             </div>
             )}
 
+            <div className={isSftp ? "grid grid-cols-2 gap-3" : undefined}>
             <Field label={cfRoute ? "Log in as" : "Username"}>
               <input
                 value={username}
@@ -1145,6 +1243,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 className={inputCls}
               />
             </Field>
+
+            {isSftp && profile?.auth.kind !== "keyref" && authenticationField}
+            </div>
 
             {profile?.jumpHost && (
               <Hint>
@@ -1162,32 +1263,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               </Hint>
             ) : (
               <>
-            <Field label="Auth">
-              <select
-                value={authKind}
-                onChange={(e) => setAuthKind(e.target.value as AuthMethod["kind"])}
-                className={inputCls}
-              >
-                <option value="password">Password</option>
-                <option value="key" disabled={isFtp}>
-                  Private key file{isFtp ? " — SFTP only" : ""}
-                </option>
-                <option value="agent" disabled={isFtp}>
-                  SSH agent{isFtp ? " — SFTP only" : ""}
-                </option>
-                {/* Only through Cloudflare (or a saved one that lost its route,
-                    so the select still shows what it has). */}
-                {!isFtp && (cfRoute || authKind === "cloudflarecert") && (
-                  <option
-                    value="cloudflarecert"
-                    disabled={cfServiceToken && authKind !== "cloudflarecert"}
-                  >
-                    Cloudflare identity (short-lived certificate)
-                    {cfServiceToken ? " — not with a service token" : ""}
-                  </option>
-                )}
-              </select>
-            </Field>
+            {!isSftp && authenticationField}
 
             {authKind === "cloudflarecert" && (
               <CloudflareCertHint
@@ -1225,32 +1301,24 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </>
         )}
 
+          {isSftp && <>
+            <div className="mt-3 border-t border-border pt-3">{startingFolders}</div>
+            <details className="group border-t border-border py-3">
+              <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-text-muted hover:text-text [&::-webkit-details-marker]:hidden">
+                <FolderOpen size={13} /> Group & notes
+                <span className="ml-auto max-w-40 truncate text-text-dim">{group}</span>
+                <ChevronRight size={12} className="transition-transform group-open:rotate-90" />
+              </summary>
+              <div className="pt-3">{organizationFields}{notesField}</div>
+            </details>
+          </>}
         <details className="group mb-3 border-t border-border pt-3">
-          <summary className="cursor-pointer text-xs text-text-muted hover:text-text">More options</summary>
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-text-muted hover:text-text [&::-webkit-details-marker]:hidden">
+            {isSftp && <Settings2 size={13} />}{isSftp ? "Advanced" : "More options"}
+            <ChevronRight size={12} className="ml-auto transition-transform group-open:rotate-90" />
+          </summary>
           <div className="pt-4">
-          <div className="grid grid-cols-2 gap-3">
-          <Field group label="Icon (optional)">
-            <IconPicker
-              value={icon}
-              onChange={setIcon}
-              fallback={monogram(name || "?")}
-            />
-          </Field>
-          <Field label="Group (optional)">
-            <input
-              value={group}
-              onChange={(e) => setGroup(e.target.value)}
-              placeholder="e.g. Production"
-              list="profile-editor-groups"
-              className={inputCls}
-            />
-            <datalist id="profile-editor-groups">
-              {knownGroups.map((g) => (
-                <option key={g} value={g} />
-              ))}
-            </datalist>
-          </Field>
-          </div>
+          {!isSftp && organizationFields}
         {group.trim() && protocol === "sftp" && <Field label="Group gateway (applies to this group and nested groups)">
           <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
             const gateway = e.target.value;
@@ -1272,9 +1340,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
           <p className="text-[11px] text-text-muted">Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a new connection opens.</p>
         </div>}
-        <Field label="Server notes (optional)">
-          <textarea className={inputCls} rows={3} maxLength={20000} placeholder="Purpose, maintenance notes, or a runbook link. Avoid storing secrets here." value={notes} onChange={e => setNotes(e.target.value)} />
-        </Field>
+        {!isSftp && notesField}
         {iconUnknown && (
           <Hint tone="warn">
             Unknown icon key — the bubble falls back to the name monogram.
@@ -1282,28 +1348,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </Hint>
         )}
 
-        <Field label={isObject ? "Default key prefix" : "Default remote path"}>
-          <input
-            value={defaultRemotePath}
-            onChange={(e) => setDefaultRemotePath(e.target.value)}
-            placeholder={isObject ? "" : isFtp ? "/" : "."}
-            className={inputCls}
-          />
-        </Field>
-
-        <Field label="Default local folder (optional)">
-          <div className="flex gap-2">
-            <input aria-label="Default local folder" value={defaultLocalPath}
-              onChange={(e) => setDefaultLocalPath(e.target.value)} className={inputCls + " min-w-0 flex-1"} />
-            <button type="button" className="shrink-0 rounded-md border border-border px-3 text-sm hover:bg-bg-hover"
-              onClick={async () => {
-                try {
-                  const folder = await open({ directory: true, multiple: false, defaultPath: defaultLocalPath || undefined });
-                  if (typeof folder === "string") setDefaultLocalPath(folder);
-                } catch (e) { toast.error("Couldn't choose folder", String(e)); }
-              }}>Browse…</button>
-          </div>
-        </Field>
+        {!isSftp && startingFolders}
 
         {isFtp && (
           <div className="flex gap-3">
@@ -3456,13 +3501,16 @@ type Reach = "direct" | "cloudflare" | "jump";
 
 function ReachPicker({ value, onChange }: { value: Reach; onChange: (r: Reach) => void }) {
   return (
-    <Field label="Connect via">
-      <select aria-label="Connect via" value={value} onChange={e => onChange(e.target.value as Reach)} className={inputCls}>
+    <label className="mb-3 flex items-center gap-2 text-xs text-text-muted">
+      <Link2 size={13} className="shrink-0" />
+      <span className="shrink-0">Connect via</span>
+      <select aria-label="Connect via" value={value} onChange={e => onChange(e.target.value as Reach)}
+        className={cn(inputCls, "ml-auto w-auto max-w-[70%] text-xs")}>
         <option value="direct">Direct connection</option>
         <option value="cloudflare">Cloudflare Access</option>
         <option value="jump">Jump host</option>
       </select>
-    </Field>
+    </label>
   );
 }
 

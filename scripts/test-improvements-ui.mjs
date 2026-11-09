@@ -26,12 +26,18 @@ try {
   await page.evaluate(() => {
     const d = window.__demo;
     d.useLayout.getState().closeDialog();
-    d.useLayout.getState().openNewConnection({ ...d.useConnections.getState().profiles[0], notes: "Maintenance runbook", group: "Production" });
+    d.useLayout.getState().openNewConnection({ ...d.useConnections.getState().profiles[0], notes: "Maintenance runbook", group: "Production", defaultLocalPath: "" });
   });
   await page.waitForSelector("details summary");
-  assert.equal(await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "More options").parentElement.open), false);
+  assert.equal(await page.$('[role="dialog"] [role="tablist"]'), null);
+  assert.equal(await page.evaluate(() => document.body.textContent.includes("SFTP preview")), false);
+  assert.equal(await page.$eval('input[aria-label="Default local folder"]', e => e.closest("details").open), false);
+  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "Local starting folder").click());
+  assert.ok(await page.$eval('input[aria-label="Default local folder"]', e => e.closest("details").open));
+  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "Local starting folder").click());
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent.trim() === "Advanced").parentElement.open), false);
   await page.screenshot({ path: path.join(os.tmpdir(), "faro-connection-simple.png") });
-  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "More options").click());
+  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent.includes("Group & notes")).click());
   await page.waitForSelector("textarea");
   assert.equal(await page.$eval("textarea", e => e.value), "Maintenance runbook");
   await click("Test connection");
