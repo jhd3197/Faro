@@ -116,6 +116,8 @@ Keep servers in the connection rail, drag files between panes, and save frequent
 | **Save your locations.** Group connections and bookmark folders as sites, using the parent connection's credentials and permissions. | **Work from the keyboard.** Use the command palette, breadcrumbs, filters, and sortable columns. |
 | **Connect across services.** Use SSH servers, object storage, cloud drives, and CMS APIs from one connection list. | **Automate your fleet.** Run saved shell workflows across servers with Fleet Skills, the CLI, or MCP tools. |
 
+Deleted and replaced sync files are kept in `.faro-sync-recovery`. Use **Sync → Recover files** to restore a version without replacing the current file. See [sync recovery](docs/sync-recovery.md).
+
 ## Transfers
 
 Queue uploads and downloads, pause work, retry failures, and set bandwidth limits. Faro uses pipelined SFTP reads and parallel download ranges on supported sources.

@@ -550,6 +550,8 @@ pub fn run() {
             commands::save_imported_profiles,
             commands::sync_plan,
             commands::sync_execute,
+            commands::sync_recovery_list,
+            commands::sync_recovery_restore,
             commands::start_edit,
             commands::stop_edit,
             commands::list_directory,

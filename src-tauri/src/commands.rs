@@ -2083,6 +2083,13 @@ pub(crate) async fn execute_sync_plan(
     let local_fs: Box<dyn RemoteFs> = Box::new(crate::remotefs::local::LocalFs);
     let remote_fs = fs_for_session(&session);
 
+    let destination_fs: &dyn RemoteFs = match plan.direction {
+        SyncDirection::LocalToRemote => remote_fs.as_ref(),
+        SyncDirection::RemoteToLocal => local_fs.as_ref(),
+    };
+    crate::sync::recovery::validate_plan(destination_fs, &plan).await?;
+    let recovery_root = crate::sync::recovery::destination_root(&plan).to_string();
+    let recovery_batch = crate::sync::recovery::new_batch();
     let mut ids = Vec::new();
     let policy = crate::transfer::OverwritePolicy::Overwrite;
 
@@ -2094,6 +2101,11 @@ pub(crate) async fn execute_sync_plan(
     }
 
     for copy in plan.copies {
+        if let Some(previous) = &copy.destination_state {
+            crate::sync::recovery::preserve(destination_fs, &recovery_root, &recovery_batch, &copy.relative, previous).await?;
+        } else {
+            crate::sync::recovery::check_missing(destination_fs, &recovery_root, &copy.relative).await?;
+        }
         let dest_parent = parent_of(&copy.destination_path);
         let id = match plan.direction {
             SyncDirection::LocalToRemote => {
@@ -2142,10 +2154,25 @@ pub(crate) async fn execute_sync_plan(
             SyncDirection::LocalToRemote => remote_fs.as_ref(),
             SyncDirection::RemoteToLocal => local_fs.as_ref(),
         };
-        fs.delete(&d.path, false).await?;
+        crate::sync::recovery::preserve(fs, &recovery_root, &recovery_batch, &d.relative,
+            d.destination_state.as_ref().ok_or_else(|| anyhow::anyhow!("Missing sync preview; re-plan"))?).await?;
     }
 
     Ok(ids)
+}
+
+#[tauri::command]
+pub async fn sync_recovery_list(session_id: String, root: String, local: bool, state: State<'_, AppState>) -> Result<Vec<crate::sync::recovery::RecoveryEntry>, String> {
+    let session = state.sessions.get(&session_id).await.ok_or_else(|| "Session not found".to_string())?;
+    let fs: Box<dyn RemoteFs> = if local { Box::new(crate::remotefs::local::LocalFs) } else { fs_for_session(&session) };
+    crate::sync::recovery::list(fs.as_ref(), &root).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn sync_recovery_restore(session_id: String, root: String, local: bool, entry: crate::sync::recovery::RecoveryEntry, state: State<'_, AppState>) -> Result<String, String> {
+    let session = state.sessions.get(&session_id).await.ok_or_else(|| "Session not found".to_string())?;
+    let fs: Box<dyn RemoteFs> = if local { Box::new(crate::remotefs::local::LocalFs) } else { fs_for_session(&session) };
+    crate::sync::recovery::restore(fs.as_ref(), &root, &entry).await.map_err(err)
 }
 
 fn parent_of(p: &str) -> String {

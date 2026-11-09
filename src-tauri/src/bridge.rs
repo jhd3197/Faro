@@ -3975,7 +3975,7 @@ fn sync_gate_summary(
 ) -> String {
     let tail = match strategy {
         SyncStrategy::Mirror => {
-            format!(", delete {deletes} files on the destination (mirror)")
+            format!(", move {deletes} destination files to .faro-sync-recovery (mirror)")
         }
         SyncStrategy::Additive => ", no deletes (additive)".to_string(),
     };
@@ -5650,7 +5650,7 @@ async fn mcp_tools_list(state: &Arc<BridgeState>) -> Value {
                         "localDir": { "type": "string", "description": "Local directory (the source for push, the destination for pull)." },
                         "remoteDir": { "type": "string", "description": "Remote directory (the destination for push, the source for pull)." },
                         "direction": { "type": "string", "enum": ["push", "pull"], "description": "push = local → remote (default), pull = remote → local." },
-                        "strategy": { "type": "string", "enum": ["additive", "mirror"], "description": "additive = copy only, never delete (default). mirror = also DELETE destination files missing from the source." },
+                        "strategy": { "type": "string", "enum": ["additive", "mirror"], "description": "additive = copy only, never delete (default). mirror = move destination files missing from the source into .faro-sync-recovery. Previous versions of replaced files are also preserved." },
                         "dryRun": { "type": "boolean", "description": "Plan only — return what would copy/delete without changing anything. Do this first." },
                         "session": session_prop
                     },
@@ -6671,7 +6671,7 @@ mod tests {
         );
         assert_eq!(
             s,
-            "Sync push ./dist ↔ prod:/var/www/app — copy 12 files (3.5 MB), delete 3 files on the destination (mirror)"
+            "Sync push ./dist ↔ prod:/var/www/app — copy 12 files (3.5 MB), move 3 destination files to .faro-sync-recovery (mirror)"
         );
     }
 

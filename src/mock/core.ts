@@ -369,6 +369,10 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- sync ----
     case "sync_plan":
       return data.syncPlan(a.localPath, a.remotePath);
+    case "sync_recovery_list":
+      return [];
+    case "sync_recovery_restore":
+      return `${a.root}/${a.entry.relative}`;
     case "sync_execute":
       return ["t-sync"];
 

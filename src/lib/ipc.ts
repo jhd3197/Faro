@@ -45,6 +45,7 @@ import type {
   SessionId,
   SyncDirection,
   SyncPlan,
+  SyncRecoveryEntry,
   SyncStrategy,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -534,6 +535,11 @@ export const ipc = {
 
   syncExecute: (sessionId: SessionId, plan: SyncPlan) =>
     invoke<string[]>("sync_execute", { sessionId, plan }),
+
+  syncRecoveryList: (sessionId: SessionId, root: string, local: boolean) =>
+    invoke<SyncRecoveryEntry[]>("sync_recovery_list", { sessionId, root, local }),
+  syncRecoveryRestore: (sessionId: SessionId, root: string, local: boolean, entry: SyncRecoveryEntry) =>
+    invoke<string>("sync_recovery_restore", { sessionId, root, local, entry }),
 
   startEdit: (sessionId: SessionId, remotePath: string, editor?: string) =>
     invoke<EditStartedEvent>("start_edit", { sessionId, remotePath, editor }),

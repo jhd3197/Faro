@@ -1,3 +1,5 @@
+pub mod recovery;
+
 use crate::remotefs::{FileKind, RemoteFs};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -38,6 +40,9 @@ pub struct SyncFile {
     pub destination_path: String,
     pub size: u64,
     pub reason: SyncReason,
+    /// Destination observed at preview time. Missing means a new file.
+    #[serde(default)]
+    pub destination_state: Option<recovery::FileState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +52,8 @@ pub struct SyncDelete {
     pub path: String,
     pub kind: FileKind,
     pub size: u64,
+    #[serde(default)]
+    pub destination_state: Option<recovery::FileState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,9 +71,10 @@ pub struct SyncPlan {
 }
 
 fn join(base: &str, rel: &str) -> String {
+    let absolute = base.starts_with('/');
     let base = base.trim_end_matches('/').trim_end_matches('\\');
     if base.is_empty() {
-        return rel.to_string();
+        return if absolute { format!("/{rel}") } else { rel.to_string() };
     }
     // For local Windows paths, mirror the backslash separator. Everywhere
     // else POSIX `/` is fine.
@@ -119,14 +127,16 @@ pub(crate) async fn plan_indexed(
     index: Option<&std::collections::HashMap<String, crate::db::SyncStateRow>>,
     source_signal: crate::remotefs::ChangeSignal,
 ) -> Result<(SyncPlan, crate::scan::ScanTree)> {
+    recovery::validate_root(local_root)?;
+    recovery::validate_root(remote_root)?;
     let (local_tree, remote_tree) = match direction {
         SyncDirection::LocalToRemote => (
-            crate::scan::walk_tree(local_fs, local_root).await?,
-            crate::scan::destination_tree(remote_fs, remote_root).await?,
+            crate::scan::sync_tree(local_fs, local_root, false).await?,
+            crate::scan::sync_tree(remote_fs, remote_root, true).await?,
         ),
         SyncDirection::RemoteToLocal => (
-            crate::scan::destination_tree(local_fs, local_root).await?,
-            crate::scan::walk_tree(remote_fs, remote_root).await?,
+            crate::scan::sync_tree(local_fs, local_root, true).await?,
+            crate::scan::sync_tree(remote_fs, remote_root, false).await?,
         ),
     };
 
@@ -183,6 +193,7 @@ pub(crate) async fn plan_indexed(
                     destination_path: join(dest_root, rel),
                     size: src.size,
                     reason,
+                    destination_state: dest.files.get(rel).map(recovery::FileState::from),
                 });
             }
         }
@@ -201,6 +212,7 @@ pub(crate) async fn plan_indexed(
                         path: d.absolute.clone(),
                         kind: FileKind::File,
                         size: d.size,
+                        destination_state: Some(recovery::FileState::from(d)),
                     });
                 }
             }

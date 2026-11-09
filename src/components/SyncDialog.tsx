@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   ArrowRightLeft,
   ArrowRight,
@@ -11,6 +11,7 @@ import {
   Pencil,
   Maximize2,
   Folder,
+  History,
 } from "lucide-react";
 import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
@@ -22,6 +23,7 @@ import type {
   SyncReason,
   SyncStrategy,
 } from "@/lib/types";
+import { SyncRecovery } from "./SyncRecovery";
 import { cn } from "@/lib/cn";
 
 interface Props {
@@ -46,6 +48,16 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
   const [planning, setPlanning] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const generation = useRef(0);
+  useEffect(() => {
+    generation.current += 1;
+    setPlan(null);
+    setSkipped(new Set());
+    setError(null);
+    setPlanning(false);
+  }, [direction, strategy, sessionId, localPath, remotePath]);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   useDialog(panelRef, { onClose });
@@ -56,7 +68,9 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
 
   const computePlan = async () => {
     if (!sessionId) return;
+    const request = ++generation.current;
     setPlanning(true);
+    setSkipped(new Set());
     setError(null);
     setPlan(null);
     try {
@@ -67,11 +81,11 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
         direction,
         strategy
       );
-      setPlan(result);
+      if (request === generation.current) setPlan(result);
     } catch (e) {
-      setError(String(e));
+      if (request === generation.current) setError(String(e));
     } finally {
-      setPlanning(false);
+      if (request === generation.current) setPlanning(false);
     }
   };
 
@@ -80,7 +94,8 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
     setExecuting(true);
     setError(null);
     try {
-      await ipc.syncExecute(sessionId, plan);
+      const copies = plan.copies.filter(c => !skipped.has(c.relative));
+      await ipc.syncExecute(sessionId, { ...plan, copies, totalBytes: copies.reduce((sum, c) => sum + c.size, 0) });
       togglePanel(); // open the transfer queue so progress is visible
       onClose();
     } catch (e) {
@@ -90,7 +105,7 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
   };
 
   const totalOps =
-    (plan?.copies.length ?? 0) + (plan?.deletes.length ?? 0) + (plan?.directories?.length ?? 0);
+    (plan?.copies.filter(c => !skipped.has(c.relative)).length ?? 0) + (plan?.deletes.length ?? 0) + (plan?.directories?.length ?? 0);
 
   return (
     <div className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -129,12 +144,14 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
               <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-bg-subtle p-1">
                 <DirectionButton
                   active={direction === "localToRemote"}
+                  disabled={executing}
                   onClick={() => setDirection("localToRemote")}
                   icon={<ArrowRight size={12} />}
                   label="Local → Remote"
                 />
                 <DirectionButton
                   active={direction === "remoteToLocal"}
+                  disabled={executing}
                   onClick={() => setDirection("remoteToLocal")}
                   icon={<ArrowLeft size={12} />}
                   label="Remote → Local"
@@ -148,6 +165,7 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
               <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-bg-subtle p-1">
                 <DirectionButton
                   active={strategy === "additive"}
+                  disabled={executing}
                   onClick={() => setStrategy("additive")}
                   icon={<Plus size={12} />}
                   label="Additive"
@@ -155,6 +173,7 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
                 />
                 <DirectionButton
                   active={strategy === "mirror"}
+                  disabled={executing}
                   onClick={() => setStrategy("mirror")}
                   icon={<Trash2 size={12} />}
                   label="Mirror"
@@ -168,15 +187,21 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
           {strategy === "mirror" && (
             <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger-soft/60 px-2.5 py-2 text-[11.5px] text-text-muted">
               <AlertTriangle size={12} className="mt-0.5 shrink-0 text-danger" />
-              Mirror deletes files on the destination that don't exist on the
-              source. Review the plan before executing.
+              Mirror moves destination-only files into .faro-sync-recovery.
+              Replaced files are kept there too, until you remove them yourself.
             </div>
           )}
 
-          <div className="flex justify-end">
+          <p className="text-[11px] text-text-muted">
+            Existing versions are saved before replacement. Skip a copy to keep the destination version.
+          </p>
+          <div className="flex justify-between">
+            <button disabled={executing} onClick={() => setShowRecovery(!showRecovery)} className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] hover:bg-bg-hover disabled:opacity-40">
+              <History size={12} /> {showRecovery ? "Back to preview" : "Recover files"}
+            </button>
             <button
               onClick={computePlan}
-              disabled={!sessionId || planning}
+              disabled={!sessionId || planning || executing || showRecovery}
               className="flex items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-[12px] hover:bg-bg-hover disabled:opacity-40"
             >
               {planning ? (
@@ -196,14 +221,22 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
           </div>
         )}
 
-        {plan && (
-          <PlanSummary plan={plan} />
+        {showRecovery && sessionId ? (
+          <SyncRecovery key={`${sessionId}:${direction}:${localPath}:${remotePath}`} sessionId={sessionId}
+            root={direction === "remoteToLocal" ? localPath : remotePath} local={direction === "remoteToLocal"}
+            onRestored={() => { setPlan(null); setSkipped(new Set()); }} />
+        ) : plan && (
+          <PlanSummary plan={plan} skipped={skipped} disabled={executing} onToggle={(relative) => setSkipped(before => {
+            const next = new Set(before);
+            if (next.has(relative)) next.delete(relative); else next.add(relative);
+            return next;
+          })} />
         )}
 
         <div className="mt-auto flex items-center justify-between gap-2 border-t border-border bg-bg-subtle px-4 py-3 text-[11px] text-text-dim">
           <span>
             {plan
-              ? `${plan.copies.length} copies · ${plan.deletes.length} deletes · ${fmtBytes(plan.totalBytes)}`
+              ? `${plan.copies.filter(c => !skipped.has(c.relative)).length} copies · ${plan.deletes.length} to recovery · ${fmtBytes(plan.copies.filter(c => !skipped.has(c.relative)).reduce((sum, c) => sum + c.size, 0))}`
               : "Nothing planned yet."}
           </span>
           <div className="flex items-center gap-2">
@@ -215,7 +248,7 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
             </button>
             <button
               onClick={execute}
-              disabled={!plan || totalOps === 0 || executing}
+              disabled={!plan || totalOps === 0 || executing || planning || showRecovery}
               className="btn-accent flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
             >
               {executing ? (
@@ -272,6 +305,7 @@ function DirectionButton({
   label,
   hint,
   danger,
+  disabled,
 }: {
   active: boolean;
   onClick: () => void;
@@ -279,10 +313,12 @@ function DirectionButton({
   label: string;
   hint?: string;
   danger?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       className={cn(
         "flex flex-col items-start rounded-sm px-2 py-1.5 text-left transition-colors",
@@ -308,7 +344,10 @@ function DirectionButton({
   );
 }
 
-function PlanSummary({ plan }: { plan: SyncPlan }) {
+function PlanSummary({ plan, skipped, onToggle, disabled }: {
+  plan: SyncPlan; skipped: Set<string>; onToggle: (relative: string) => void; disabled: boolean;
+}) {
+  const [visibleCopies, setVisibleCopies] = useState(200);
   const both = plan.copies.length > 0 && plan.deletes.length > 0;
   return (
     <div className="mx-4 mb-3 flex-1 overflow-hidden rounded-md border border-border bg-bg-subtle">
@@ -330,8 +369,10 @@ function PlanSummary({ plan }: { plan: SyncPlan }) {
               title={`Copy (${plan.copies.length})`}
               icon={<ArrowRightLeft size={11} className="text-accent" />}
             >
-              {plan.copies.slice(0, 200).map((c) => (
+              {plan.copies.slice(0, visibleCopies).map((c) => (
                 <Row key={c.relative}>
+                  <input type="checkbox" checked={!skipped.has(c.relative)} disabled={disabled}
+                    onChange={() => onToggle(c.relative)} aria-label={`Copy ${c.relative}`} />
                   <ReasonBadge reason={c.reason} />
                   <span className="min-w-0 flex-1 truncate font-mono">
                     {c.relative}
@@ -341,11 +382,13 @@ function PlanSummary({ plan }: { plan: SyncPlan }) {
                   </span>
                 </Row>
               ))}
-              {plan.copies.length > 200 && (
+              {plan.copies.length > visibleCopies && (
                 <Row>
                   <Maximize2 size={10} className="text-text-dim" />
                   <span className="text-text-dim">
-                    …and {plan.copies.length - 200} more
+                    <button disabled={disabled} onClick={() => setVisibleCopies(n => n + 200)} className="text-accent hover:underline">
+                      Show more ({plan.copies.length - visibleCopies} remaining)
+                    </button>
                   </span>
                 </Row>
               )}
@@ -354,7 +397,7 @@ function PlanSummary({ plan }: { plan: SyncPlan }) {
           {both && <div className="h-px bg-border" />}
           {plan.deletes.length > 0 && (
             <PlanSection
-              title={`Delete (${plan.deletes.length})`}
+              title={`Move to recovery (${plan.deletes.length})`}
               icon={<Trash2 size={11} className="text-danger" />}
             >
               {plan.deletes.slice(0, 200).map((d) => (

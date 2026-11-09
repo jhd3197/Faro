@@ -413,8 +413,8 @@ function PairForm({ onDone }: { onDone: () => void }) {
         <div className="space-y-2 rounded-md border border-danger/30 bg-danger-soft/60 px-2.5 py-2">
           <div className="flex items-start gap-2 text-[11.5px] text-text-muted">
             <AlertTriangle size={12} className="mt-0.5 shrink-0 text-danger" />
-            Mirror deletes files on the destination that don't exist on the
-            source. As a safeguard, Faro refuses to delete when the source folder
+            Mirror moves files on the destination that don't exist on the
+            source into .faro-sync-recovery. Replaced versions are kept there too. Restore them from the Sync dialog’s Recover files view. Faro refuses to remove files when the source folder
             is empty or unreadable, and caps deletions per sync.
           </div>
           <div className="flex items-center gap-1.5 pl-5">

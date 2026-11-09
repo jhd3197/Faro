@@ -1255,6 +1255,13 @@ async fn cmd_sync(
         return Ok(());
     }
 
+    let destination_fs: &dyn RemoteFs = match direction {
+        Dir::Push => remote_fs.as_ref(),
+        Dir::Pull => local_fs.as_ref(),
+    };
+    faro_lib::sync::recovery::validate_plan(destination_fs, &plan).await?;
+    let recovery_root = faro_lib::sync::recovery::destination_root(&plan);
+    let recovery_batch = faro_lib::sync::recovery::new_batch();
     for directory in &plan.directories {
         match direction {
             Dir::Push => remote_fs.create_dir(directory).await?,
@@ -1268,6 +1275,11 @@ async fn cmd_sync(
     );
     for c in &plan.copies {
         bar.set_message(c.relative.clone());
+        if let Some(previous) = &c.destination_state {
+            faro_lib::sync::recovery::preserve(destination_fs, recovery_root, &recovery_batch, &c.relative, previous).await?;
+        } else {
+            faro_lib::sync::recovery::check_missing(destination_fs, recovery_root, &c.relative).await?;
+        }
         match direction {
             Dir::Push => {
                 let dest_parent = parent_of(&c.destination_path);
@@ -1289,9 +1301,10 @@ async fn cmd_sync(
             Dir::Push => remote_fs.as_ref(),
             Dir::Pull => local_fs.as_ref(),
         };
-        fs.delete(&d.path, false).await.with_context(|| format!("sync deletion failed: {}", d.path))?;
+        faro_lib::sync::recovery::preserve(fs, recovery_root, &recovery_batch, &d.relative,
+            d.destination_state.as_ref().ok_or_else(|| anyhow!("Missing sync preview; re-plan"))?).await?;
     }
-    eprintln!("Sync complete.");
+    eprintln!("Sync complete. Previous versions are kept under {recovery_root}/.faro-sync-recovery/; restore them through Faro’s Sync dialog or move them back manually.");
     Ok(())
 }
 

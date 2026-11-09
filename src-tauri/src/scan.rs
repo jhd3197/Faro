@@ -111,7 +111,25 @@ pub async fn walk<F: FnMut(ScanProgress)>(
     fs: &dyn RemoteFs,
     root: &str,
     opts: &ScanOptions,
-    mut on_progress: F,
+    on_progress: F,
+) -> Result<ScanTree> {
+    walk_filtered(fs, root, opts, on_progress, false).await
+}
+
+/// Sync never traverses recovery folders, including ones inside nested roots.
+pub(crate) async fn sync_tree(fs: &dyn RemoteFs, root: &str, destination: bool) -> Result<ScanTree> {
+    if destination {
+        match fs.list_dir(root).await {
+            Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => return Ok(ScanTree::default()),
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
+    }
+    walk_filtered(fs, root, &ScanOptions::default(), |_| {}, true).await
+}
+
+async fn walk_filtered<F: FnMut(ScanProgress)>(
+    fs: &dyn RemoteFs, root: &str, opts: &ScanOptions, mut on_progress: F, sync: bool,
 ) -> Result<ScanTree> {
     let normalized_root = root.trim_end_matches('/').to_string();
     let limit = opts.concurrency.max(1);
@@ -146,6 +164,9 @@ pub async fn walk<F: FnMut(ScanProgress)>(
             let entries = res?;
             tree.directories.insert(relative_of(&normalized_root, dir.trim_end_matches('/')));
             for entry in entries {
+                if sync && entry.name.eq_ignore_ascii_case(crate::sync::recovery::DIRECTORY) {
+                    continue;
+                }
                 match entry.kind {
                     FileKind::Directory => queue.push_back(entry.path.clone()),
                     // An in-progress download's temp (Plan 24) is not a file

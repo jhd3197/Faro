@@ -543,12 +543,26 @@ export type SyncReason = "missing" | "newer" | "sizeChanged" | "edited";
  *  (Plan 9 — Windows-only, inert elsewhere). */
 export type SyncMode = "mirror" | "onDemand";
 
+export interface SyncFileState {
+  size: number;
+  modified: number;
+  etag: string | null;
+}
+
+export interface SyncRecoveryEntry {
+  batch: string;
+  relative: string;
+  size: number;
+  state: SyncFileState;
+}
+
 export interface SyncFile {
   relative: string;
   sourcePath: string;
   destinationPath: string;
   size: number;
   reason: SyncReason;
+  destinationState?: SyncFileState | null;
 }
 
 export interface SyncDelete {
@@ -556,6 +570,7 @@ export interface SyncDelete {
   path: string;
   kind: FileKind;
   size: number;
+  destinationState?: SyncFileState | null;
 }
 
 export interface SyncPlan {
