@@ -40,10 +40,10 @@ import {
   Loader2,
   Link2,
   Settings2,
+  FolderOpen,
   KeyRound,
   Copy,
   Sparkles,
-  FolderOpen,
   X,
   ChevronRight,
 } from "lucide-react";
@@ -851,6 +851,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const iconField = <>
           <Field group label={isSftp ? "Icon" : "Icon (optional)"}>
             <IconPicker
+              compact={isSftp}
               value={icon}
               onChange={setIcon}
               fallback={monogram(name || "?")}
@@ -1006,7 +1007,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               className={inputCls}
             />
           </Field>
-          {isSftp && <div className="w-36">{iconField}</div>}
+          {isSftp && <div className="w-20 shrink-0">{iconField}</div>}
         </div>
 
         {isS3 ? (
@@ -1303,22 +1304,14 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
           {isSftp && <>
             <div className="mt-3 border-t border-border pt-3">{startingFolders}</div>
-            <details className="group border-t border-border py-3">
-              <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-text-muted hover:text-text [&::-webkit-details-marker]:hidden">
-                <FolderOpen size={13} /> Group & notes
-                <span className="ml-auto max-w-40 truncate text-text-dim">{group}</span>
-                <ChevronRight size={12} className="transition-transform group-open:rotate-90" />
-              </summary>
-              <div className="pt-3">{organizationFields}{notesField}</div>
-            </details>
           </>}
         <details className="group mb-3 border-t border-border pt-3">
           <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-text-muted hover:text-text [&::-webkit-details-marker]:hidden">
-            {isSftp && <Settings2 size={13} />}{isSftp ? "Advanced" : "More options"}
+            {isSftp && <Settings2 size={13} />}More options
             <ChevronRight size={12} className="ml-auto transition-transform group-open:rotate-90" />
           </summary>
           <div className="pt-4">
-          {!isSftp && organizationFields}
+          {organizationFields}
         {group.trim() && protocol === "sftp" && <Field label="Group gateway (applies to this group and nested groups)">
           <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
             const gateway = e.target.value;
@@ -1340,7 +1333,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
           <p className="text-[11px] text-text-muted">Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a new connection opens.</p>
         </div>}
-        {!isSftp && notesField}
+        {notesField}
         {iconUnknown && (
           <Hint tone="warn">
             Unknown icon key — the bubble falls back to the name monogram.
@@ -3499,18 +3492,26 @@ function proxyCmdDraft(c?: ProxyCommandConfig, host?: string): ProxyCmdDraft {
 
 type Reach = "direct" | "cloudflare" | "jump";
 
+const REACH_OPTIONS = [
+  { id: "direct", label: "Direct", hint: "SSH port is open to you", Icon: Globe },
+  { id: "cloudflare", label: "Cloudflare", hint: "Access protects this server", Icon: Cloud },
+  { id: "jump", label: "Jump host", hint: "Via another SSH server", Icon: Link2 },
+] as const;
+
 function ReachPicker({ value, onChange }: { value: Reach; onChange: (r: Reach) => void }) {
   return (
-    <label className="mb-3 flex items-center gap-2 text-xs text-text-muted">
-      <Link2 size={13} className="shrink-0" />
-      <span className="shrink-0">Connect via</span>
-      <select aria-label="Connect via" value={value} onChange={e => onChange(e.target.value as Reach)}
-        className={cn(inputCls, "ml-auto w-auto max-w-[70%] text-xs")}>
-        <option value="direct">Direct connection</option>
-        <option value="cloudflare">Cloudflare Access</option>
-        <option value="jump">Jump host</option>
-      </select>
-    </label>
+    <div className="mb-3">
+      <div className="mb-1.5 text-xs text-text-muted">How do you reach this server?</div>
+      <div role="radiogroup" aria-label="Connect via" className="grid grid-cols-3 gap-2">
+        {REACH_OPTIONS.map(({ id, label, hint, Icon }) => <button key={id} type="button" role="radio"
+          aria-checked={value === id} onClick={() => onChange(id)}
+          className={cn("rounded-md border px-2.5 py-2 text-left transition-colors", value === id
+            ? "border-accent bg-accent-soft" : "border-border bg-bg-subtle hover:bg-bg-hover")}>
+          <span className="flex items-center gap-1.5 text-xs font-medium"><Icon size={13} className={value === id ? "text-accent" : "text-text-dim"} />{label}</span>
+          <span className="mt-1 block text-[10.5px] leading-snug text-text-dim">{hint}</span>
+        </button>)}
+      </div>
+    </div>
   );
 }
 

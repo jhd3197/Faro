@@ -48,7 +48,9 @@ export function IconPicker({
   value,
   onChange,
   fallback,
+  compact = false,
 }: {
+  compact?: boolean;
   value: string;
   onChange: (v: string) => void;
   /** What the preview shows when nothing is picked (the name monogram). */
@@ -105,8 +107,11 @@ export function IconPicker({
         ref={btnRef}
         type="button"
         onClick={openPicker}
-        title="Pick a bubble icon"
-        className="flex h-[34px] w-full items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2 text-sm hover:border-accent/60"
+        title={trimmed || "Choose connection icon"}
+        aria-label="Choose connection icon"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className="flex h-[34px] w-full items-center justify-between gap-1.5 rounded-md border border-border bg-bg-subtle px-2 text-sm hover:border-accent/60"
       >
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-bg text-[13px] font-bold leading-none">
           {trimmed && valueIsKnownKey ? (
@@ -117,9 +122,9 @@ export function IconPicker({
             <span className="text-text-dim">{fallback}</span>
           )}
         </span>
-        <span className="flex-1 truncate text-left text-[11px] text-text-muted">
+        {!compact && <span className="flex-1 truncate text-left text-[11px] text-text-muted">
           {trimmed || "Default (monogram)"}
-        </span>
+        </span>}
         <ChevronDown size={13} className="shrink-0 text-text-dim" />
       </button>
 

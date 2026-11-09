@@ -191,7 +191,7 @@ try {
 
   // ---- 2. The editor --------------------------------------------------------
   await page.evaluate(() => document.querySelector('[aria-label="New connection"]')?.click());
-  await page.select('[aria-label="Connect via"]', "cloudflare");
+  await page.click('[aria-label="Connect via"] button:nth-child(2)');
   const form = (await waitFor(async () => {
     const t = await dialogText();
     return t.includes("Log in as") ? t : null;
@@ -205,14 +205,14 @@ try {
   });
   check(
     "Through Cloudflare asks for the server and who to log in as",
-    form.includes("Server") && form.includes("Log in as") && form.includes("Connect via"),
+    form.includes("Server") && form.includes("Log in as") && form.includes("How do you reach this server?"),
   );
   check("it defaults to the Cloudflare identity login", auth === "cloudflarecert", auth);
   check("no form asks for a service token", !/service token id|service token secret/i.test(form));
   await shot("editor-through-cloudflare");
   // Back to Direct: the Cloudflare login isn't offered at all, and the
   // chosen login moves off it.
-  await page.select('[aria-label="Connect via"]', "direct");
+  await page.click('[aria-label="Connect via"] button:nth-child(1)');
   const direct = await waitFor(() =>
     page.evaluate(() => {
       const d = document.querySelector('[role="dialog"]');
@@ -270,9 +270,9 @@ try {
   }, 20000);
   check("its editor shows sign-in, tunnel health and the certificate login", !!status, status ?? "");
   const reachChecked = await page.evaluate(
-    () => document.querySelector('[aria-label="Connect via"]')?.value ?? ""
+    () => document.querySelector('[aria-label="Connect via"] [aria-checked="true"]')?.textContent ?? ""
   );
-  check("and opens on Through Cloudflare", reachChecked === "cloudflare", reachChecked);
+  check("and opens on Through Cloudflare", reachChecked.startsWith("Cloudflare"), reachChecked);
   await shot("editor-new-connection");
   await closeDialog();
 
