@@ -850,9 +850,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   const isSftp = protocol === "sftp";
   const iconField = <>
-          <Field group label={isSftp ? "Icon" : "Icon (optional)"}>
+          <Field group label="Icon">
             <IconPicker
-              compact={isSftp}
+              compact
               value={icon}
               onChange={setIcon}
               fallback={monogram(name || "?")}
@@ -889,7 +889,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   </>;
   const localFolderField = (
-        <Field label={isSftp ? "" : "Default local folder (optional)"}>
+        <Field label="Local starting folder">
           <div className="relative">
             <input aria-label="Default local folder" value={defaultLocalPath}
               onChange={(e) => setDefaultLocalPath(e.target.value)} className={cn(inputCls, "pr-10")} placeholder="Choose a folder…" />
@@ -913,16 +913,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           />
         </Field>
 
-        {isSftp ? <details open={defaultLocalPath ? true : undefined} className="mb-3">
-          <summary className="cursor-pointer text-xs text-text-dim hover:text-text">Local starting folder</summary>
-          <div className="pt-2">{localFolderField}</div>
-        </details> : localFolderField}
+
 
   </>;
   const organizationFields = <>
-          <div className={isSftp ? undefined : "grid grid-cols-2 gap-3"}>
-          {!isSftp && iconField}
-          <Field label="Group (optional)">
+          <div>
+          <Field label="Group">
             <input
               value={group}
               onChange={(e) => setGroup(e.target.value)}
@@ -939,8 +935,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </div>
   </>;
   const notesField = <>
-        <Field label="Server notes (optional)">
-          <textarea className={inputCls} rows={3} maxLength={20000} placeholder="Purpose, maintenance notes, or a runbook link. Avoid storing secrets here." value={notes} onChange={e => setNotes(e.target.value)} />
+        <Field label="Notes" help={<>Use notes for context or a runbook link. Keep passwords and other secrets in credential fields.</>}>
+          <textarea className={inputCls} rows={2} maxLength={20000} placeholder="Purpose or runbook link" value={notes} onChange={e => setNotes(e.target.value)} />
         </Field>
   </>;
 
@@ -1008,7 +1004,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               className={inputCls}
             />
           </Field>
-          {isSftp && <div className="w-20 shrink-0">{iconField}</div>}
+          <div className="w-20 shrink-0">{iconField}</div>
         </div>
 
         {isS3 ? (
@@ -1309,11 +1305,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </>}
         <details className="group mb-3 border-t border-border pt-3">
           <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-text-muted hover:text-text [&::-webkit-details-marker]:hidden">
-            {isSftp && <Settings2 size={13} />}More options
+            <Settings2 size={13} />More options
             <ChevronRight size={12} className="ml-auto transition-transform group-open:rotate-90" />
           </summary>
           <div className="pt-4">
           {organizationFields}
+          {localFolderField}
         {group.trim() && protocol === "sftp" && <Field label="Group gateway" help={<>Saved immediately for this group and nested groups. Explicit connection routes take precedence. Use / in group names to inherit a parent gateway.</>}>
           <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
             const gateway = e.target.value;
@@ -1325,7 +1322,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </select>
 
         </Field>}
-        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div className="space-y-2 rounded-md border border-border p-3">
+        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div>
           <Field label="Credential source" help={<>Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a connection opens.</>}>
             <select className={inputCls} value={credentialProvider} onChange={e => setCredentialProvider(e.target.value)}>
               <option value="">Saved credential</option>
@@ -1335,7 +1332,6 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
 
         </div>}
-        {notesField}
         {iconUnknown && (
           <Hint tone="warn">
             Unknown icon key — the bubble falls back to the name monogram.
@@ -1431,7 +1427,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           ftpActiveMode={isFtp && ftpActiveMode}
         />
 
-        <label className="mb-3 flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-bg-subtle px-2.5 py-2">
+        {notesField}
+
+        <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs text-text-muted">
           <input
             type="checkbox"
             checked={autoConnect}
@@ -1439,7 +1437,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             className="h-3.5 w-3.5 shrink-0 accent-[rgb(var(--accent))]"
           />
           <span className="min-w-0">
-            <span className="block text-xs font-medium text-text">
+            <span className="block text-xs text-text-muted">
               Auto-connect on startup
             </span>
 
@@ -3668,12 +3666,12 @@ function NetworkSection({
   const setCmd = (patch: Partial<ProxyCmdDraft>) => setProxyCmd({ ...proxyCmd, ...patch });
 
   return (
-    <div className="mb-3 rounded-md border border-border">
+    <div className="mb-3 border-y border-border">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 px-2.5 py-2 text-left text-xs font-medium text-text hover:bg-bg-hover"
+        className="flex w-full items-center gap-1.5 py-2.5 text-left text-xs text-text-muted hover:text-text"
       >
         <ChevronRight
           size={12}
@@ -3685,7 +3683,7 @@ function NetworkSection({
         </span>
       </button>
       {open && (
-        <div className="border-t border-border px-2.5 pt-3">
+        <div className="pt-2">
           <div className="flex gap-3">
             <Field label="Proxy" className={cn("shrink-0", isSsh ? "w-40" : "w-32")}>
               <select

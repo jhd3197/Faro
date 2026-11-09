@@ -32,9 +32,9 @@ try {
   assert.equal(await page.$('[role="dialog"] [role="tablist"]'), null);
   assert.equal(await page.evaluate(() => document.body.textContent.includes("SFTP preview")), false);
   assert.equal(await page.$eval('input[aria-label="Default local folder"]', e => e.closest("details").open), false);
-  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "Local starting folder").click());
+  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent.trim() === "More options").click());
   assert.ok(await page.$eval('input[aria-label="Default local folder"]', e => e.closest("details").open));
-  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "Local starting folder").click());
+  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent.trim() === "More options").click());
   assert.equal(await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent.trim() === "More options").parentElement.open), false);
   await page.screenshot({ path: path.join(os.tmpdir(), "faro-connection-simple.png") });
   assert.equal(await page.$$eval('[role="radiogroup"][aria-label="Connect via"] [role="radio"]', es => es.length), 3);
@@ -66,7 +66,7 @@ try {
   await page.click('[aria-label="Generate strong password"]');
   assert.ok(await page.$eval('[aria-label="Hide password"]', b => b.parentElement.querySelector("input").value.length >= 16));
   assert.ok(await page.$eval('[aria-label="Hide password"]', b => Math.abs(b.getBoundingClientRect().top - b.parentElement.querySelector("input").getBoundingClientRect().top) < 2));
-  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "Local starting folder").click());
+  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent.trim() === "More options").click());
   assert.ok(await page.$('[aria-label="Choose local starting folder"]'));
   await page.screenshot({ path: path.join(os.tmpdir(), "faro-compact-sftp.png") });
   await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
@@ -180,6 +180,33 @@ try {
   assert.equal(await page.$eval('[aria-label="Host relay address"]', input => input.value), "new-relay.example.com:8723");
   await click("Save relay settings");
   await page.waitForFunction(() => window.__savedRelay?.address === "new-relay.example.com:8723");
+  await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));
+  await page.evaluate(() => window.__demo.useLayout.getState().openNewConnection());
+  await page.waitForSelector('[role="dialog"] nav button');
+  const protocols = await page.$$eval('[role="dialog"] nav button', es => es.map(e => e.textContent.trim()));
+  for (const protocol of protocols) {
+    await page.evaluate(protocol => [...document.querySelectorAll('[role="dialog"] nav button')].find(b => b.textContent.trim() === protocol).click(), protocol);
+    await page.waitForFunction(protocol => [...document.querySelectorAll('[role="dialog"] nav button')].some(b => b.textContent.trim() === protocol && b.getAttribute('aria-current') === 'true'), {}, protocol);
+    const layout = await page.evaluate(() => {
+      const name = document.querySelector('input[placeholder="my-prod-box"], input[placeholder="my-bucket"]').getBoundingClientRect();
+      const icons = [...document.querySelectorAll('[aria-label="Choose connection icon"]')];
+      const icon = icons[0].getBoundingClientRect();
+      const local = document.querySelector('[aria-label="Default local folder"]');
+      return { count: icons.length, dy: Math.abs(name.y - icon.y), dh: Math.abs(name.height - icon.height), inOptions: local.closest('details')?.querySelector('summary')?.textContent.trim() === 'More options' };
+    });
+    assert.equal(layout.count, 1, protocol);
+    assert.ok(layout.dy < 1 && layout.dh < 1, `${protocol}: name and icon must align (${JSON.stringify(layout)})`);
+    assert.ok(layout.inOptions, `${protocol}: local folder belongs in More options`);
+  }
+  await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] nav button')].find(b => b.textContent.trim() === 'SFTP').click());
+  await page.evaluate(() => [...document.querySelectorAll('summary')].find(e => e.textContent.trim() === 'More options').click());
+  await page.evaluate(() => {
+    const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'agent'));
+    select.value = 'password'; select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.evaluate(() => [...document.querySelectorAll('summary')].find(e => e.textContent.trim() === 'More options').scrollIntoView({ block: 'start' }));
+  await page.screenshot({ path: path.join(os.tmpdir(), "faro-options-standardized.png") });
   assert.deepEqual(errors, []);
   console.log(`PASS: encrypted settings, notes, diagnostics, organization undo and version-bound conflict choice\n${diagnosticShot}\n${conflictShot}`);
 } finally { await browser.close(); }
