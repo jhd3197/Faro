@@ -51,6 +51,36 @@ try {
   assert.ok(await page.evaluate(() => document.body.textContent.includes("Starting folder access")));
   const diagnosticShot = path.join(os.tmpdir(), "faro-diagnostics-ui.png");
   await page.screenshot({ path: diagnosticShot });
+  await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));
+  await page.evaluate(() => {
+    window.__demo.useLayout.getState().openNewConnection({ protocol: "sftp", auth: { kind: "password" } });
+  });
+  await page.waitForSelector('[aria-label="Connection routes"]');
+  assert.equal(await page.evaluate(() => document.body.textContent.includes("SSH port is open to you")), false);
+  await page.click('[aria-label="Connection routes"]');
+  await page.waitForSelector('[role="region"][aria-label="Connection routes"]');
+  await page.keyboard.press("Escape");
+  assert.equal(await page.$('[role="region"][aria-label="Connection routes"]'), null);
+  assert.ok(await page.$('[role="dialog"]'));
+  await page.click('[aria-label="Generate strong password"]');
+  assert.ok(await page.$eval('[aria-label="Hide password"]', b => b.parentElement.querySelector("input").value.length >= 16));
+  assert.ok(await page.$eval('[aria-label="Hide password"]', b => Math.abs(b.getBoundingClientRect().top - b.parentElement.querySelector("input").getBoundingClientRect().top) < 2));
+  await page.evaluate(() => [...document.querySelectorAll("summary")].find(e => e.textContent === "Local starting folder").click());
+  assert.ok(await page.$('[aria-label="Choose local starting folder"]'));
+  await page.screenshot({ path: path.join(os.tmpdir(), "faro-compact-sftp.png") });
+  await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));
+  await page.evaluate(() => {
+    window.__demo.useLayout.getState().openNewConnection({ protocol: "wordpress" });
+  });
+  await page.waitForSelector('[aria-label="Site address help"]');
+  assert.equal(await page.evaluate(() => document.body.textContent.includes("Works without FTP or SSH")), false);
+  await page.click('[aria-label="Site address help"]');
+  await page.waitForSelector('[role="region"][aria-label="Site address help"]');
+  assert.ok(await page.evaluate(() => document.body.textContent.includes("Works without FTP or SSH")));
+  await page.click('[aria-label="Close help"]');
+  await page.screenshot({ path: path.join(os.tmpdir(), "faro-compact-wordpress.png") });
   await page.evaluate(async () => {
     const d = window.__demo;
     d.useLayout.getState().closeDialog();

@@ -59,6 +59,7 @@ import { IconPicker } from "./IconPicker";
 import { generatePassword } from "@/lib/password";
 import { ipc, type OAuthApp } from "@/lib/ipc";
 import { messageOf } from "@/lib/errors";
+import { ConnectionHelp } from "@/components/ui/ConnectionHelp";
 import { CopyTextButton } from "@/components/ui/CopyText";
 import { toast } from "@/stores/toastStore";
 
@@ -888,17 +889,17 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   </>;
   const localFolderField = (
-        <Field label="Default local folder (optional)">
-          <div className="flex gap-2">
+        <Field label={isSftp ? "" : "Default local folder (optional)"}>
+          <div className="relative">
             <input aria-label="Default local folder" value={defaultLocalPath}
-              onChange={(e) => setDefaultLocalPath(e.target.value)} className={inputCls + " min-w-0 flex-1"} />
-            <button type="button" className="shrink-0 rounded-md border border-border px-3 text-sm hover:bg-bg-hover"
+              onChange={(e) => setDefaultLocalPath(e.target.value)} className={cn(inputCls, "pr-10")} placeholder="Choose a folder…" />
+            <button type="button" aria-label="Choose local starting folder" title="Choose local starting folder" className="absolute inset-y-0 right-0 flex items-center px-3 text-text-dim hover:text-text"
               onClick={async () => {
                 try {
                   const folder = await open({ directory: true, multiple: false, defaultPath: defaultLocalPath || undefined });
                   if (typeof folder === "string") setDefaultLocalPath(folder);
                 } catch (e) { toast.error("Couldn't choose folder", String(e)); }
-              }}>Browse…</button>
+              }}><FolderOpen size={15} /></button>
           </div>
         </Field>
   );
@@ -1249,7 +1250,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             </div>
 
             {profile?.jumpHost && (
-              <Hint>
+              <Hint always>
                 via bastion{" "}
                 <span className="font-mono text-text-dim">
                   {profile.jumpUsername ? `${profile.jumpUsername}@` : ""}
@@ -1259,7 +1260,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             )}
 
             {profile?.auth.kind === "keyref" ? (
-              <Hint>
+              <Hint always>
                 Managed key (access grant) — stored in your OS keychain.
               </Hint>
             ) : (
@@ -1620,7 +1621,7 @@ function CloudflareCertHint({
       ? status.identity.split("@")[0]
       : null;
   return (
-    <Hint>
+    <Hint always>
       Logs in with your Cloudflare identity: no key to choose or store. Each
       connect gets a certificate valid for a few minutes, and removing you from
       the Access policy removes your access.
@@ -1854,7 +1855,7 @@ function KeyAuthSection({
           </button>
         </div>
       </Field>
-      <Hint>
+      <Hint label="SSH certificate help">
         For servers that trust an SSH certificate authority. Empty uses the
         key's <span className="font-mono">-cert.pub</span> when there is one.
         Faro offers the certificate first, then the key on its own.
@@ -2342,7 +2343,7 @@ function AzureSection({
 }) {
   return (
     <>
-      <Hint>
+      <Hint label="Azure connection help">
         Azure Blob Storage. Use the storage account name and an account key
         (Portal → Storage account → Access keys). Custom endpoints target
         Azurite (local emulator) or sovereign clouds.
@@ -2516,7 +2517,7 @@ function OAuthConnectSection({
 
   return (
     <>
-      <Hint>
+      <Hint label="Account authorization help">
         Connect a {label} account. Authorizing opens your browser once; Faro
         stores the refresh token in your OS keychain and never sees your {label}{" "}
         password.
@@ -2577,7 +2578,7 @@ function OAuthConnectSection({
             <PasswordInput value={clientSecret} onChange={setClientSecret} generate={false} />
           </Field>
           {secretSaved && (
-            <Hint>
+            <Hint always>
               A secret is already in your OS keychain; leave the field blank to
               keep it.
             </Hint>
@@ -2639,7 +2640,7 @@ function HttpSection({
   const [auth, setAuth] = useState<boolean>(!!username);
   return (
     <>
-      <Hint>
+      <Hint label="HTTP connection help">
         Read-only browse of any static file server. Point at a directory with an
         autoindex (nginx / Apache) to browse it, or paste a direct file URL to
         pull a single artifact. No uploads, renames, or deletes.
@@ -2847,7 +2848,7 @@ function ShopifySection({
         />
       </Field>
 
-      <Hint>
+      <Hint always>
         Browse and edit theme files like an FTP site. Prefer an
         unpublished/duplicate theme — changes deploy instantly.
       </Hint>
@@ -2887,7 +2888,7 @@ function ShopifySection({
         </>
       )}
 
-      <Hint>
+      <Hint always>
         Stored in your OS keychain — never in the connections file.
         {secretSaved
           ? " A credential is already saved; leave the fields blank to keep it."
@@ -2936,7 +2937,12 @@ function WordPressSection({
 
   return (
     <>
-      <Field label="Site address">
+      <Field label="Site address" help={<>
+        Works without FTP or SSH: Faro talks to the site's REST API with an
+        Application Password (WordPress 5.6+). You'll see the media library, and
+        every plugin API the site offers (Gravity Forms, WooCommerce…) as JSON
+        files you can open, edit and save. Needs an administrator account.
+       </>}>
         <input
           value={site}
           onChange={(e) => setSite(e.target.value)}
@@ -2946,12 +2952,7 @@ function WordPressSection({
         />
       </Field>
 
-      <Hint>
-        Works without FTP or SSH: Faro talks to the site's REST API with an
-        Application Password (WordPress 5.6+). You'll see the media library, and
-        every plugin API the site offers (Gravity Forms, WooCommerce…) as JSON
-        files you can open, edit and save. Needs an administrator account.
-      </Hint>
+
 
       <button
         type="button"
@@ -2968,7 +2969,7 @@ function WordPressSection({
       </button>
 
       {link && (
-        <Hint>
+        <Hint always>
           In the browser, log in if asked and click{" "}
           <b>Yes, I approve of this connection</b>. Copy the password WordPress
           shows and paste it below with your WordPress username. Browser didn't
@@ -2997,19 +2998,19 @@ function WordPressSection({
             spellCheck={false}
           />
         </Field>
-        <Field label="Application password" className="flex-1">
-          <PasswordInput value={password} onChange={setPassword} generate={false} />
-        </Field>
-      </div>
-
-      <Hint>
+        <Field label="Application password" className="flex-1" help={<>
         Not your login password — you can revoke it any time in wp-admin → Users
         → Profile → Application Passwords. Stored in your OS keychain, never in
         the connections file.
         {secretSaved ? " One is already saved; leave the field blank to keep it." : ""}
         {" "}If the site runs Wordfence, Login Security → Settings → "Disable
         application passwords" must be off.
-      </Hint>
+       </>}>
+          <PasswordInput value={password} onChange={setPassword} generate={false} />
+        </Field>
+      </div>
+
+
     </>
   );
 }
@@ -3031,7 +3032,7 @@ function HubSpotSection({
         <PasswordInput value={token} onChange={setToken} />
       </Field>
 
-      <Hint>
+      <Hint label="HubSpot connection help">
         No URL needed — the token identifies your portal; the API base
         (api.hubapi.com) is fixed. Create a private app in your HubSpot portal
         (Settings → Integrations → Private Apps). Each scope unlocks a root:{" "}
@@ -3051,7 +3052,7 @@ function HubSpotSection({
         </Hint>
       )}
 
-      <Hint>
+      <Hint always>
         Stored in your OS keychain — never in the connections file.
         {secretSaved
           ? " A token is already saved; leave the field blank to keep it."
@@ -3137,7 +3138,7 @@ function DynamicsSection({
 
       {mode === "client" ? (
         <>
-          <Hint>
+          <Hint label="Microsoft app setup help">
             Register an app in Microsoft Entra ID and add it as an application
             user on the environment (Power Platform admin center → Environments
             → Settings → Users + permissions → Application users).
@@ -3153,7 +3154,7 @@ function DynamicsSection({
             <PasswordInput value={clientSecret} onChange={setClientSecret} />
           </Field>
 
-          <Hint>
+          <Hint always>
             Stored in your OS keychain — never in the connections file.
             {secretSaved
               ? " A credential is already saved; leave the fields blank to keep it."
@@ -3201,7 +3202,7 @@ function GcsSection({
 }) {
   return (
     <>
-      <Hint>
+      <Hint label="Google Cloud Storage help">
         Google Cloud Storage. Create a service account with Storage access, then
         use its JSON key (Cloud console → IAM &amp; Admin → Service accounts →
         Keys). Point at the downloaded file, or paste the key directly.
@@ -3501,14 +3502,16 @@ const REACH_OPTIONS = [
 function ReachPicker({ value, onChange }: { value: Reach; onChange: (r: Reach) => void }) {
   return (
     <div className="mb-3">
-      <div className="mb-1.5 text-xs text-text-muted">How do you reach this server?</div>
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs text-text-muted">Connect via
+        <ConnectionHelp label="Connection routes"><dl className="space-y-2">{REACH_OPTIONS.map(option => <div key={option.id}><dt className="font-medium text-text">{option.label}</dt><dd>{option.hint}</dd></div>)}</dl></ConnectionHelp>
+      </div>
       <div role="radiogroup" aria-label="Connect via" className="grid grid-cols-3 gap-2">
-        {REACH_OPTIONS.map(({ id, label, hint, Icon }) => <button key={id} type="button" role="radio"
+        {REACH_OPTIONS.map(({ id, label, Icon }) => <button key={id} type="button" role="radio"
           aria-checked={value === id} onClick={() => onChange(id)}
-          className={cn("rounded-md border px-2.5 py-2 text-left transition-colors", value === id
+          className={cn("rounded-md border px-2.5 py-1.5 text-left transition-colors", value === id
             ? "border-accent bg-accent-soft" : "border-border bg-bg-subtle hover:bg-bg-hover")}>
           <span className="flex items-center gap-1.5 text-xs font-medium"><Icon size={13} className={value === id ? "text-accent" : "text-text-dim"} />{label}</span>
-          <span className="mt-1 block text-[10.5px] leading-snug text-text-dim">{hint}</span>
+
         </button>)}
       </div>
     </div>
@@ -3557,7 +3560,7 @@ function JumpHostField({
       {candidates.length === 0 && !jumpProfile ? (
         <Hint tone="warn">Save the jump host as an SSH connection first, then pick it here.</Hint>
       ) : (
-        <Hint>
+        <Hint label="Jump host help">
           Faro signs in to the jump host with its own login, then opens this server through it. A
           proxy, if needed, goes on the jump host's connection.
         </Hint>
@@ -3846,7 +3849,7 @@ function NetworkSection({
                   className={cn(inputCls, "font-mono text-[11.5px]")}
                 />
               </Field>
-              <Hint>
+              <Hint label="Proxy command help">
                 Faro runs this command and speaks SSH over its input and output,
                 like OpenSSH's <code>ProxyCommand</code>. <code>%h</code>,{" "}
                 <code>%p</code> and <code>%r</code> become the host, port and
@@ -3866,13 +3869,13 @@ function NetworkSection({
   );
 }
 
-function Hint({
-  children,
-  tone,
-}: {
+function Hint({ children, tone, always = false, label = "Connection help" }: {
   children: React.ReactNode;
   tone?: "warn";
+  always?: boolean;
+  label?: string;
 }) {
+  if (!tone && !always) return <div className="mb-2"><ConnectionHelp label={label}>{children}</ConnectionHelp></div>;
   return (
     <div
       className={
@@ -3922,8 +3925,10 @@ function Field({
   className,
   group,
   children,
+  help,
 }: {
   label: string;
+  help?: ReactNode;
   className?: string;
   /** Wraps buttons, not one input: render a <div>, since a <label> turns any
    *  click on its caption or padding into a click on its first button. */
@@ -3932,10 +3937,13 @@ function Field({
 }) {
   const Tag = group ? "div" : "label";
   return (
-    <Tag className={`mb-3 block ${className ?? ""}`}>
-      <div className="mb-1 text-xs text-text-muted">{label}</div>
-      {children}
-    </Tag>
+    <div className={`relative mb-3 ${className ?? ""}`}>
+      <Tag className="block">
+        {label && <div className={cn("mb-1 text-xs text-text-muted", help && "pr-6")}>{label}</div>}
+        {children}
+      </Tag>
+      {help && <div className="absolute right-0 top-0"><ConnectionHelp label={`${label} help`}>{help}</ConnectionHelp></div>}
+    </div>
   );
 }
 
@@ -3978,7 +3986,7 @@ function PasswordInput({
           type={reveal ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className={cn(inputCls, "pr-9")}
+          className={cn(inputCls, canGenerate ? "pr-16" : "pr-9")}
           autoComplete="off"
           spellCheck={false}
         />
@@ -3991,21 +3999,22 @@ function PasswordInput({
         >
           {reveal ? <EyeOff size={13} /> : <Eye size={13} />}
         </button>
-      </div>
       {canGenerate && (
         <button
           type="button"
           onClick={generate}
-          className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-border bg-bg-subtle px-2 py-1 text-[11.5px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
+          title={copied ? "Generated & copied" : "Generate strong password"}
+          aria-label={copied ? "Generated & copied" : "Generate strong password"}
+          className="absolute inset-y-0 right-8 flex items-center px-2 text-text-dim hover:text-text"
         >
           {copied ? (
             <Check size={11} className="text-accent" />
           ) : (
             <Wand2 size={11} />
           )}
-          {copied ? "Generated & copied" : "Generate strong password"}
         </button>
       )}
+      </div>
     </div>
   );
 }

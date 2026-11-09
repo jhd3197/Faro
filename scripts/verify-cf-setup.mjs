@@ -200,12 +200,12 @@ try {
     const d = document.querySelector('[role="dialog"]');
     for (const el of d.querySelectorAll("label, div.mb-3")) {
       const cap = el.firstElementChild;
-      if (cap?.tagName === "DIV" && cap.textContent.trim() === "Auth") return el.querySelector("select")?.value;
+      if (cap?.tagName === "DIV" && cap.textContent.trim() === "Authentication") return el.querySelector("select")?.value;
     }
   });
   check(
     "Through Cloudflare asks for the server and who to log in as",
-    form.includes("Server") && form.includes("Log in as") && form.includes("How do you reach this server?"),
+    form.includes("Server") && form.includes("Log in as") && form.includes("Connect via"),
   );
   check("it defaults to the Cloudflare identity login", auth === "cloudflarecert", auth);
   check("no form asks for a service token", !/service token id|service token secret/i.test(form));
