@@ -853,11 +853,11 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="anim-modal flex max-h-[88vh] w-[52rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
+        className="anim-modal flex h-[min(42rem,88vh)] w-[48rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
       >
         {/* Left rail — grouped protocol picker. Scrolls as the list grows so the
             dialog stays wide-and-short instead of tall-and-narrow. */}
-        <nav className="flex w-52 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-bg-subtle/50 p-2">
+        <nav className="flex w-48 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-bg-subtle/50 p-2">
           <div
             id={titleId}
             className="px-2 pb-0.5 pt-1 text-[15px] font-semibold tracking-tight"
@@ -910,59 +910,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               className={inputCls}
             />
           </Field>
-          <Field group label="Icon (optional)" className="w-40">
-            <IconPicker
-              value={icon}
-              onChange={setIcon}
-              fallback={monogram(name || "?")}
-            />
-          </Field>
-          <Field label="Group (optional)" className="w-40">
-            <input
-              value={group}
-              onChange={(e) => setGroup(e.target.value)}
-              placeholder="e.g. Production"
-              list="profile-editor-groups"
-              className={inputCls}
-            />
-            <datalist id="profile-editor-groups">
-              {knownGroups.map((g) => (
-                <option key={g} value={g} />
-              ))}
-            </datalist>
-          </Field>
         </div>
-
-        {group.trim() && protocol === "sftp" && <Field label="Group gateway (applies to this group and nested groups)">
-          <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
-            const gateway = e.target.value;
-            try { await ipc.setGroupGateway(group.trim(), gateway || null); setGroupGateways(await ipc.groupGateways()); }
-            catch (e) { toast.error("Couldn't save group gateway", messageOf(e)); }
-          }}>
-            <option value="">No group gateway / inherit parent</option>
-            {profiles.filter(p => p.protocol === "sftp").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <p className="text-[11px] text-text-muted">Saved immediately. Explicit connection routes take precedence. Use / in group names to inherit a parent group's gateway.</p>
-        </Field>}
-        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div className="space-y-2 rounded-md border border-border p-3">
-          <Field label="Credential source">
-            <select className={inputCls} value={credentialProvider} onChange={e => setCredentialProvider(e.target.value)}>
-              <option value="">Saved credential</option>
-              {[...new Set([...credentialProviders, ...(credentialProvider ? [credentialProvider] : [])])].map(provider => <option key={provider} value={provider}>{provider}{!credentialProviders.includes(provider) ? " (not configured here)" : ""}</option>)}
-            </select>
-          </Field>
-          {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
-          <p className="text-[11px] text-text-muted">Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a new connection opens.</p>
-        </div>}
-        <Field label="Server notes (optional)">
-          <textarea className={inputCls} rows={3} maxLength={20000} placeholder="Purpose, maintenance notes, or a runbook link. Avoid storing secrets here." value={notes} onChange={e => setNotes(e.target.value)} />
-        </Field>
-        {iconUnknown && (
-          <Hint tone="warn">
-            Unknown icon key — the bubble falls back to the name monogram.
-            Bundled keys look like <code>mdi:rocket-launch</code>.
-          </Hint>
-        )}
 
         {isS3 ? (
           <S3Section
@@ -1129,8 +1077,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           {agentKey && <div className="mt-3 space-y-2 rounded-md border border-border p-3">
             <div className="text-xs font-medium">Internet relay (optional)</div>
             <p className="text-[11px] text-text-muted">Use a self-hosted relay after pairing these devices. Leave the address empty for a direct connection.</p>
-            <input className="input w-full" aria-label="Relay address" placeholder="relay.example.com:8723" value={agentRelayAddress} onChange={e => setAgentRelayAddress(e.target.value)} />
-            <input className="input w-full" aria-label="Relay public key" placeholder="Relay public key (base64)" value={agentRelayKey} onChange={e => setAgentRelayKey(e.target.value)} />
+            <input className={inputCls} aria-label="Relay address" placeholder="relay.example.com:8723" value={agentRelayAddress} onChange={e => setAgentRelayAddress(e.target.value)} />
+            <input className={inputCls} aria-label="Relay public key" placeholder="Relay public key (base64)" value={agentRelayKey} onChange={e => setAgentRelayKey(e.target.value)} />
           </div>}</>
         ) : (
           <>
@@ -1251,17 +1199,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             )}
 
             {authKind === "agent" && (
-              <Hint>
-                Uses the running SSH agent for authentication.{" "}
-                <span className="font-mono text-text-dim">
-                  {/* eslint-disable-next-line no-undef */}
-                  {navigator.platform.startsWith("Win")
-                    ? "\\\\.\\pipe\\openssh-ssh-agent (OpenSSH Authentication Agent service)"
-                    : "$SSH_AUTH_SOCK"}
-                </span>
-                . Run <span className="font-mono">ssh-add</span> first to load
-                your keys.
-              </Hint>
+              <p className="mb-3 text-xs text-text-dim">Uses keys loaded in your SSH agent.</p>
             )}
 
             {authKind === "password" && (
@@ -1285,6 +1223,63 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               </>
             )}
           </>
+        )}
+
+        <details className="group mb-3 border-t border-border pt-3">
+          <summary className="cursor-pointer text-xs text-text-muted hover:text-text">More options</summary>
+          <div className="pt-4">
+          <div className="grid grid-cols-2 gap-3">
+          <Field group label="Icon (optional)">
+            <IconPicker
+              value={icon}
+              onChange={setIcon}
+              fallback={monogram(name || "?")}
+            />
+          </Field>
+          <Field label="Group (optional)">
+            <input
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder="e.g. Production"
+              list="profile-editor-groups"
+              className={inputCls}
+            />
+            <datalist id="profile-editor-groups">
+              {knownGroups.map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+          </Field>
+          </div>
+        {group.trim() && protocol === "sftp" && <Field label="Group gateway (applies to this group and nested groups)">
+          <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
+            const gateway = e.target.value;
+            try { await ipc.setGroupGateway(group.trim(), gateway || null); setGroupGateways(await ipc.groupGateways()); }
+            catch (e) { toast.error("Couldn't save group gateway", messageOf(e)); }
+          }}>
+            <option value="">No group gateway / inherit parent</option>
+            {profiles.filter(p => p.protocol === "sftp").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <p className="text-[11px] text-text-muted">Saved immediately. Explicit connection routes take precedence. Use / in group names to inherit a parent group's gateway.</p>
+        </Field>}
+        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div className="space-y-2 rounded-md border border-border p-3">
+          <Field label="Credential source">
+            <select className={inputCls} value={credentialProvider} onChange={e => setCredentialProvider(e.target.value)}>
+              <option value="">Saved credential</option>
+              {[...new Set([...credentialProviders, ...(credentialProvider ? [credentialProvider] : [])])].map(provider => <option key={provider} value={provider}>{provider}{!credentialProviders.includes(provider) ? " (not configured here)" : ""}</option>)}
+            </select>
+          </Field>
+          {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
+          <p className="text-[11px] text-text-muted">Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a new connection opens.</p>
+        </div>}
+        <Field label="Server notes (optional)">
+          <textarea className={inputCls} rows={3} maxLength={20000} placeholder="Purpose, maintenance notes, or a runbook link. Avoid storing secrets here." value={notes} onChange={e => setNotes(e.target.value)} />
+        </Field>
+        {iconUnknown && (
+          <Hint tone="warn">
+            Unknown icon key — the bubble falls back to the name monogram.
+            Bundled keys look like <code>mdi:rocket-launch</code>.
+          </Hint>
         )}
 
         <Field label={isObject ? "Default key prefix" : "Default remote path"}>
@@ -1413,6 +1408,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </span>
         </label>
 
+          </div>
+        </details>
+
         {isFtp && (
           <Hint tone="warn">
             <ShieldOff size={11} className="mr-1 inline-block align-text-bottom" />
@@ -1459,7 +1457,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             </div>
           )}
 
-          {diagnostic && <div className="mx-5 mb-3 max-h-48 overflow-auto rounded-md border border-border bg-bg-subtle px-3 py-2 text-[11px]">
+          {diagnostic && <details className="mx-5 my-2 max-h-40 shrink-0 overflow-auto text-[11px]">
+            <summary className="cursor-pointer text-text-muted">Connection diagnostics</summary>
             <div className="mb-2 flex items-center justify-between">
               <span className="font-semibold">Connection diagnostics</span>
               <CopyTextButton text={JSON.stringify(diagnostic, null, 2)} label />
@@ -1470,7 +1469,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               <span className="text-text-dim">{step.elapsedMs} ms</span>
             </div>)}
             <p className="mt-2 text-text-dim">The copied report excludes addresses, usernames, paths, and credentials.</p>
-          </div>}
+          </details>}
 
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
             {!canSave ? (
@@ -3455,36 +3454,15 @@ function proxyCmdDraft(c?: ProxyCommandConfig, host?: string): ProxyCmdDraft {
 
 type Reach = "direct" | "cloudflare" | "jump";
 
-const REACH_OPTIONS: { id: Reach; label: string; hint: string }[] = [
-  { id: "direct", label: "Direct", hint: "Its SSH port is open to you" },
-  { id: "cloudflare", label: "Through Cloudflare", hint: "Port closed, Access in front" },
-  { id: "jump", label: "Through a jump host", hint: "Via another SSH server" },
-];
-
-/// "How do you reach this server?" at the top of an SFTP form.
 function ReachPicker({ value, onChange }: { value: Reach; onChange: (r: Reach) => void }) {
   return (
-    <div className="mb-3">
-      <div className="mb-1 text-[11px] font-medium text-text-muted">How do you reach this server?</div>
-      <div role="radiogroup" aria-label="How do you reach this server?" className="grid grid-cols-3 gap-1.5">
-        {REACH_OPTIONS.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            role="radio"
-            aria-checked={value === o.id}
-            onClick={() => onChange(o.id)}
-            className={cn(
-              "rounded-md border px-2.5 py-1.5 text-left",
-              value === o.id ? "border-accent bg-accent-soft" : "border-border bg-bg-subtle hover:bg-bg-hover"
-            )}
-          >
-            <span className="block text-[12px] font-medium text-text">{o.label}</span>
-            <span className="block truncate text-[10.5px] text-text-dim">{o.hint}</span>
-          </button>
-        ))}
-      </div>
-    </div>
+    <Field label="Connect via">
+      <select aria-label="Connect via" value={value} onChange={e => onChange(e.target.value as Reach)} className={inputCls}>
+        <option value="direct">Direct connection</option>
+        <option value="cloudflare">Cloudflare Access</option>
+        <option value="jump">Jump host</option>
+      </select>
+    </Field>
   );
 }
 

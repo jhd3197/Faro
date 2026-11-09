@@ -7,7 +7,6 @@ import {
   Plus,
   AlertTriangle,
   Folder,
-  FolderSync,
   Loader2,
   Cloud,
   CloudOff,
@@ -46,14 +45,7 @@ export function SyncSettings() {
     <div className="space-y-4">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 text-sm">
-            <FolderSync size={14} className="text-accent" />
-            Keep folders in sync automatically
-          </div>
-          <div className="mt-1 text-xs text-text-dim">
-            Watch a local folder and mirror changes to (or from) a server in the
-            background. Each pair runs on its own while Faro is open.
-          </div>
+          <p className="text-xs text-text-muted">Sync runs while Faro is open.</p>
         </div>
         {!adding && (
           <button
@@ -61,17 +53,17 @@ export function SyncSettings() {
             onClick={() => setAdding(true)}
             className="btn-accent flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white"
           >
-            <Plus size={13} /> New sync pair
+            <Plus size={13} /> Add folder
           </button>
         )}
       </div>
 
       {adding && <PairForm onDone={() => setAdding(false)} />}
 
-      <div className="space-y-1.5">
+      <div className="divide-y divide-border">
         {pairs.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border bg-bg-subtle/50 px-3 py-6 text-center text-xs text-text-dim">
-            No sync pairs yet. Create one to keep a folder mirrored to a server.
+          <div className="py-8 text-center text-sm text-text-dim">
+            No folders syncing yet.
           </div>
         ) : (
           pairs.map((p) => <PairRow key={p.id} pair={p} />)
@@ -89,7 +81,7 @@ function PairRow({ pair }: { pair: PairView }) {
   const [conflicts, setConflicts] = useState<TwoWayConflict[]>([]);
   const [resolving, setResolving] = useState(false);
   const [conflictError, setConflictError] = useState<string | null>(null);
-  useEffect(() => { if (pair.twoWay) void ipc.folderSyncConflicts(pair.id).then(setConflicts).catch(e => setConflictError(String(e))); }, [pair.id, pair.twoWay, pair.lastError, pair.lastSynced]);
+  useEffect(() => { if (pair.twoWay) void ipc.folderSyncConflicts(pair.id).then(setConflicts).catch(e => setConflictError(String(e))); }, [pair.id, pair.twoWay, pair.state, pair.lastError, pair.lastSynced]);
   async function resolveConflict(conflict: TwoWayConflict, local: boolean) {
     setResolving(true); setConflictError(null);
     try { await ipc.folderSyncResolve(pair.id, conflict, local); await syncNow(pair.id); setConflicts(await ipc.folderSyncConflicts(pair.id)); }
@@ -114,7 +106,7 @@ function PairRow({ pair }: { pair: PairView }) {
   };
 
   return (
-    <div className="rounded-lg border border-border bg-bg-subtle p-3">
+    <div className="py-4">
       <div className="flex items-start gap-3">
         <StatusDot pair={pair} />
         <div className="min-w-0 flex-1">
@@ -138,7 +130,7 @@ function PairRow({ pair }: { pair: PairView }) {
                 <Cloud size={10} /> on-demand
               </span>
             ) : (
-              <span className="uppercase tracking-wider">{pair.strategy}</span>
+              <span>{pair.twoWay ? "Both directions" : pair.direction === "localToRemote" ? "Upload" : "Download"} · {pair.strategy === "mirror" ? "Sync deletions" : "Keep extra files"}</span>
             )}
             {pair.exclude?.length > 0 && (
               <span title={pair.exclude.join("\n")}>
@@ -147,7 +139,7 @@ function PairRow({ pair }: { pair: PairView }) {
               </span>
             )}
             {isOnDemand ? (
-              <span>Hydrates on open</span>
+              <span>Downloads on open</span>
             ) : syncing ? (
               <span className="flex items-center gap-1 text-warning">
                 <Loader2 size={10} className="animate-spin" />
@@ -318,9 +310,18 @@ function PairForm({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-bg-subtle p-3">
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold text-text">New sync pair</div>
+    <div className="space-y-3 border-y border-border py-3">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 text-xs font-semibold text-text">Add folder</div>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!canSubmit || busy}
+          className="btn-accent flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+          Start syncing
+        </button>
         <button
           type="button"
           onClick={onDone}
@@ -331,6 +332,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
         </button>
       </div>
 
+      <div className="grid grid-cols-2 gap-3">
       <Field label="Name">
         <input
           value={name}
@@ -354,6 +356,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
         )}
       </Field>
 
+      </div>
       <Field label="Local folder">
         <div className="flex w-full items-center gap-1.5">
           <input
@@ -406,38 +409,36 @@ function PairForm({ onDone }: { onDone: () => void }) {
 
       {mode === "mirror" && (
         <>
-      <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={twoWay} onChange={e => setTwoWay(e.target.checked)} />Two-way sync with conflict review</label>
-      {twoWay && <p className="text-[11px] text-text-muted">Changes are compared with the last successful sync. Files already present on both sides require an initial version choice. Additive restores deletions; Mirror propagates them with recovery.</p>}
       <div className="grid grid-cols-2 gap-3">
-        {!twoWay && <Field label="Direction">
-          <Segmented<SyncDirection>
-            value={direction}
-            onChange={setDirection}
-            options={[
-              { value: "localToRemote", label: "Local → Remote" },
-              { value: "remoteToLocal", label: "Remote → Local" },
-            ]}
-          />
-        </Field>}
-        <Field label="Strategy">
-          <Segmented<SyncStrategy>
-            value={strategy}
-            onChange={setStrategy}
-            options={[
-              { value: "additive", label: "Additive" },
-              { value: "mirror", label: "Mirror" },
-            ]}
-          />
-        </Field>
-      </div>
+      <Field label="Direction">
+        <Select value={twoWay ? "both" : direction}
+          onChange={value => { setTwoWay(value === "both"); if (value !== "both") setDirection(value as SyncDirection); }}
+          options={[
+            { value: "localToRemote", label: "Upload · local to server" },
+            { value: "remoteToLocal", label: "Download · server to local" },
+            { value: "both", label: "Both directions" },
+          ]} />
 
+      </Field>
+      <Field label="Deleted files">
+        <Select value={strategy} onChange={value => setStrategy(value as SyncStrategy)} options={[
+          { value: "additive", label: "Keep extra files" },
+          { value: "mirror", label: "Sync deletions" },
+        ]} />
+      </Field>
+      </div>
+      <p className="text-xs text-text-dim">{strategy === "additive"
+        ? twoWay ? "Deleted files are restored from the other folder." : "Files missing from the source stay in the destination."
+        : "Deleted and replaced files are kept in recovery."}
+        {twoWay && " If both copies change, you choose which to keep."}</p>
+      <details className="border-t border-border pt-3">
+        <summary className="cursor-pointer text-xs text-text-muted hover:text-text">Advanced settings</summary>
+        <div className="space-y-3 pt-3">
       {strategy === "mirror" && (
         <div className="space-y-2 rounded-md border border-danger/30 bg-danger-soft/60 px-2.5 py-2">
           <div className="flex items-start gap-2 text-[11.5px] text-text-muted">
             <AlertTriangle size={12} className="mt-0.5 shrink-0 text-danger" />
-            Mirror moves files on the destination that don't exist on the
-            source into .faro-sync-recovery. Replaced versions are kept there too. Restore them from the Sync dialog’s Recover files view. Faro refuses to remove files when the source folder
-            is empty or unreadable, and caps deletions per sync.
+            Limit how many files can be moved to recovery in one sync. An empty source requires review before deleting files.
           </div>
           <div className="flex items-center gap-1.5 pl-5">
             <span className="text-[11px] text-text-muted">
@@ -475,7 +476,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
         </div>
       </Field>
 
-      <Field label="Poll interval">
+      <Field label="Check for changes every">
         <div className="flex items-center gap-1.5">
           <input
             type="number"
@@ -492,27 +493,11 @@ function PairForm({ onDone }: { onDone: () => void }) {
           <span className="text-xs text-text-dim">seconds</span>
         </div>
       </Field>
+        </div>
+      </details>
         </>
       )}
 
-      <div className="flex items-center justify-end gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onDone}
-          className="rounded-md border border-border bg-bg-panel px-3 py-1.5 text-xs hover:bg-bg-hover"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!canSubmit || busy}
-          className="btn-accent flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-        >
-          {busy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-          Create pair
-        </button>
-      </div>
     </div>
   );
 }
@@ -535,7 +520,7 @@ function Field({
 }) {
   return (
     <div>
-      <div className="mb-1 text-[11px] font-medium text-text-muted">{label}</div>
+      <div className="mb-1 text-xs text-text-muted">{label}</div>
       {children}
     </div>
   );
