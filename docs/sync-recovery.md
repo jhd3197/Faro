@@ -63,3 +63,18 @@ and the replacement in staging. Those files are not automatically expired.
 
 Mirror removals wait for queued copies to finish successfully. Sync is not a
 transaction: work completed before a later error is retained.
+
+
+Interrupted replacement publications are journaled in the local application data
+folder. Before planning another sync, Faro checks abandoned journals for that
+same endpoint and root. If the original name is empty, the old version matches
+the journal, and the new file is still staged at its expected size, Faro restores
+the old version. It leaves staged bytes for inspection. Existing destinations are
+never replaced by replay. Ambiguous cases stop with an inspection message. OS
+file locks prevent replay or cleanup while a publisher is active.
+
+The recovery panel can preview permanent cleanup of saved versions or staged
+files older than 7, 30, 90 or 365 days. Nothing expires automatically. The app
+shows the exact candidates and requires a separate delete confirmation. It
+rechecks each file against the preview and refuses batches with unfinished
+publications. Empty storage directories may remain after cleanup.

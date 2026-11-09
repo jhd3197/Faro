@@ -23,6 +23,7 @@ impl Drop for Scratch {
 async fn replacement(dir: &Scratch) -> StagedReplacement {
     std::fs::write(dir.0.join("file"), b"original").unwrap();
     StagedReplacement {
+        destination_key: None,
         root: dir.root().into(),
         batch: new_batch(),
         relative: "file".into(),

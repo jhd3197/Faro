@@ -559,6 +559,7 @@ pub fn run() {
             commands::sync_plan,
             commands::sync_execute,
             commands::sync_recovery_list,
+            commands::sync_recovery_purge,
             commands::sync_recovery_restore,
             commands::start_edit,
             commands::stop_edit,

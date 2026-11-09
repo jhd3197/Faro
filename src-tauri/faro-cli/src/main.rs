@@ -1206,6 +1206,10 @@ async fn cmd_sync(
         faro_lib::sync::SyncStrategy::Additive
     };
 
+    if !dry_run {
+        faro_lib::sync::journal::recover(local_fs.as_ref(), "local", &local_path).await?;
+        faro_lib::sync::journal::recover(remote_fs.as_ref(), &faro_lib::sync::recovery::destination_key(&profile, false), &remote_path).await?;
+    }
     let plan = faro_lib::sync::plan(
         local_fs.as_ref(),
         remote_fs.as_ref(),
@@ -1276,9 +1280,11 @@ async fn cmd_sync(
     for c in &plan.copies {
         bar.set_message(c.relative.clone());
         let stage = c.destination_state.as_ref().map(|previous| faro_lib::sync::recovery::StagedReplacement {
+            destination_key: Some(faro_lib::sync::recovery::destination_key(&profile, matches!(direction, Dir::Pull))),
             root: recovery_root.to_string(), batch: faro_lib::sync::recovery::new_batch(),
             relative: c.relative.clone(), expected: previous.clone(), size: c.size,
         });
+        let guard = if let Some(stage) = &stage { faro_lib::sync::journal::begin(stage)? } else { None };
         let destination = if let Some(stage) = &stage {
             stage.prepare(destination_fs).await?;
             stage.path()
@@ -1299,7 +1305,7 @@ async fn cmd_sync(
             }
         }
         if let Some(stage) = &stage {
-            stage.publish(destination_fs).await?;
+            stage.publish_guarded(destination_fs, guard).await?;
         }
         bar.inc(1);
     }

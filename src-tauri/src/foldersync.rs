@@ -485,6 +485,9 @@ async fn reconcile_inner(
         Box::new(crate::remotefs::local::LocalFs);
     let remote_fs = crate::commands::fs_for_session(&session);
 
+    crate::sync::journal::recover(local_fs.as_ref(), "local", &pair.local_root).await?;
+    crate::sync::journal::recover(remote_fs.as_ref(), &crate::sync::recovery::destination_key(session.profile(), false), &pair.remote_root).await?;
+
     // The index tracks the *source* side (authoritative for one-way sync); its
     // change signal comes from that backend's capabilities.
     let source_signal = match pair.direction {

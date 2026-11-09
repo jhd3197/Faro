@@ -2062,6 +2062,9 @@ pub async fn sync_plan(
 ) -> Result<SyncPlan, String> {
     let local_fs: Box<dyn RemoteFs> = Box::new(crate::remotefs::local::LocalFs);
     let remote_fs = fs_for(&session_id, &state).await?;
+    let session = state.sessions.get(&session_id).await.ok_or("Session not found")?;
+    sync::journal::recover(local_fs.as_ref(), "local", &local_path).await.map_err(err)?;
+    sync::journal::recover(remote_fs.as_ref(), &sync::recovery::destination_key(session.profile(), false), &remote_path).await.map_err(err)?;
     sync::plan(
         local_fs.as_ref(),
         remote_fs.as_ref(),
@@ -2108,6 +2111,7 @@ pub(crate) async fn execute_sync_plan(
         SyncDirection::LocalToRemote => remote_fs.as_ref(),
         SyncDirection::RemoteToLocal => local_fs.as_ref(),
     };
+    crate::sync::journal::recover(destination_fs, &crate::sync::recovery::destination_key(session.profile(), matches!(plan.direction, SyncDirection::RemoteToLocal)), crate::sync::recovery::destination_root(&plan)).await?;
     crate::sync::recovery::validate_plan(destination_fs, &plan).await?;
     let recovery_root = crate::sync::recovery::destination_root(&plan).to_string();
     let recovery_batch = crate::sync::recovery::new_batch();
@@ -2124,6 +2128,7 @@ pub(crate) async fn execute_sync_plan(
     for copy in plan.copies {
         if let Some(previous) = &copy.destination_state {
             let stage = crate::sync::recovery::StagedReplacement {
+                destination_key: Some(crate::sync::recovery::destination_key(session.profile(), matches!(plan.direction, SyncDirection::RemoteToLocal))),
                 root: recovery_root.clone(), batch: crate::sync::recovery::new_batch(),
                 relative: copy.relative.clone(), expected: previous.clone(), size: copy.size,
             };
@@ -2189,10 +2194,11 @@ pub(crate) async fn execute_sync_plan(
 }
 
 #[tauri::command]
-pub async fn sync_recovery_list(session_id: String, root: String, local: bool, state: State<'_, AppState>) -> Result<Vec<crate::sync::recovery::RecoveryEntry>, String> {
+pub async fn sync_recovery_list(session_id: String, root: String, local: bool, staging: Option<bool>, state: State<'_, AppState>) -> Result<Vec<crate::sync::recovery::RecoveryEntry>, String> {
     let session = state.sessions.get(&session_id).await.ok_or_else(|| "Session not found".to_string())?;
     let fs: Box<dyn RemoteFs> = if local { Box::new(crate::remotefs::local::LocalFs) } else { fs_for_session(&session) };
-    crate::sync::recovery::list(fs.as_ref(), &root).await.map_err(err)
+    crate::sync::journal::recover(fs.as_ref(), &crate::sync::recovery::destination_key(session.profile(), local), &root).await.map_err(err)?;
+    crate::sync::recovery::list_area(fs.as_ref(), &root, staging.unwrap_or(false)).await.map_err(err)
 }
 
 #[tauri::command]
@@ -2740,3 +2746,10 @@ pub async fn set_group_gateway(group: String, gateway: Option<String>, state: St
 
 #[tauri::command]
 pub fn credential_providers() -> Result<Vec<String>, String> { Ok(crate::credential_refs::providers().map_err(err)?.into_keys().collect()) }
+
+#[tauri::command]
+pub async fn sync_recovery_purge(session_id: String, root: String, local: bool, staging: bool, days: u32, entries: Vec<crate::sync::recovery::RecoveryEntry>, state: State<'_, AppState>) -> Result<usize, String> {
+    let session = state.sessions.get(&session_id).await.ok_or("Session not found")?;
+    let fs: Box<dyn RemoteFs> = if local { Box::new(crate::remotefs::local::LocalFs) } else { fs_for_session(&session) };
+    crate::sync::recovery::purge(fs.as_ref(), &root, staging, days, &entries).await.map_err(err)
+}

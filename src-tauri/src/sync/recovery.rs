@@ -38,7 +38,7 @@ pub fn validate_root(root: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_relative(relative: &str) -> Result<()> {
+pub(super) fn validate_relative(relative: &str) -> Result<()> {
     ensure!(
         !relative.is_empty()
             && !relative.contains(['\\', ':'])
@@ -139,7 +139,7 @@ async fn ensure_parents(fs: &dyn RemoteFs, root: &str, relative: &str, create: b
     Ok(())
 }
 
-async fn current_state(fs: &dyn RemoteFs, root: &str, relative: &str) -> Result<Option<FileState>> {
+pub(super) async fn current_state(fs: &dyn RemoteFs, root: &str, relative: &str) -> Result<Option<FileState>> {
     ensure_parents(fs, root, relative, false).await?;
     let parent = relative
         .rsplit_once('/')
@@ -176,8 +176,10 @@ pub async fn check_missing(fs: &dyn RemoteFs, root: &str, relative: &str) -> Res
 #[error("{0}")]
 pub struct PublicationError(pub String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagedReplacement {
+    #[serde(default)]
+    pub destination_key: Option<String>,
     pub root: String,
     pub batch: String,
     pub relative: String,
@@ -186,7 +188,7 @@ pub struct StagedReplacement {
 }
 
 impl StagedReplacement {
-    fn staging_relative(&self) -> String {
+    pub(super) fn staging_relative(&self) -> String {
         format!("{STAGING}/{}/{}", self.batch, self.relative)
     }
 
@@ -216,9 +218,14 @@ impl StagedReplacement {
 
     /// Verify independently of progress, preserve the old version, then publish.
     pub async fn publish(&self, fs: &dyn RemoteFs) -> Result<()> {
-        self.publish_inner(fs)
-            .await
-            .map_err(|e| PublicationError(format!("{e:#}")).into())
+        let guard = super::journal::begin(self)?;
+        self.publish_guarded(fs, guard).await
+    }
+
+    pub async fn publish_guarded(&self, fs: &dyn RemoteFs, guard: Option<super::journal::Guard>) -> Result<()> {
+        self.publish_inner(fs).await.map_err(|e| PublicationError(format!("{e:#}")))?;
+        if let Some(guard) = guard { guard.complete()?; }
+        Ok(())
     }
 
     async fn publish_inner(&self, fs: &dyn RemoteFs) -> Result<()> {
@@ -308,12 +315,15 @@ pub struct RecoveryEntry {
     pub state: FileState,
 }
 
-pub async fn list(fs: &dyn RemoteFs, root: &str) -> Result<Vec<RecoveryEntry>> {
+pub async fn list(fs: &dyn RemoteFs, root: &str) -> Result<Vec<RecoveryEntry>> { list_area(fs, root, false).await }
+
+pub async fn list_area(fs: &dyn RemoteFs, root: &str, staging: bool) -> Result<Vec<RecoveryEntry>> {
+    let area = if staging { STAGING } else { DIRECTORY };
     validate_root(root)?;
     let entries = fs.list_dir(root).await?;
     let Some(dir) = entries
         .iter()
-        .find(|e| e.name.eq_ignore_ascii_case(DIRECTORY))
+        .find(|e| e.name.eq_ignore_ascii_case(area))
     else {
         return Ok(vec![]);
     };
@@ -321,7 +331,7 @@ pub async fn list(fs: &dyn RemoteFs, root: &str) -> Result<Vec<RecoveryEntry>> {
         dir.kind == FileKind::Directory,
         "Recovery path is not a directory"
     );
-    let tree = crate::scan::walk_tree(fs, &join(root, DIRECTORY)).await?;
+    let tree = crate::scan::walk_tree(fs, &join(root, area)).await?;
     let mut out = Vec::new();
     for (path, entry) in tree.files {
         if let Some((batch, relative)) = path.split_once('/') {
@@ -370,7 +380,7 @@ pub async fn restore(fs: &dyn RemoteFs, root: &str, entry: &RecoveryEntry) -> Re
     } else {
         join(root, &entry.relative)
     };
-    fs.rename(&join(root, &stored_relative), &target).await?;
+    fs.rename_no_replace(&join(root, &stored_relative), &target).await?;
     Ok(target)
 }
 
@@ -383,6 +393,28 @@ mod tests {
     use super::*;
     use crate::remotefs::local::LocalFs;
     use crate::sync::{plan, SyncDirection, SyncStrategy};
+
+    #[tokio::test]
+    async fn cleanup_refuses_recent_or_changed_versions_and_keeps_original() {
+        let root = std::env::temp_dir().join(format!("faro-cleanup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let root_str = root.to_str().unwrap();
+        std::fs::write(root.join("file"), b"old").unwrap();
+        let state = current_state(&LocalFs, root_str, "file").await.unwrap().unwrap();
+        let batch = format!("1-{}", uuid::Uuid::new_v4());
+        preserve(&LocalFs, root_str, &batch, "file", &state).await.unwrap();
+        std::fs::write(root.join("file"), b"current").unwrap();
+        let entries = list(&LocalFs, root_str).await.unwrap();
+        let mut recent = entries[0].clone(); recent.batch = new_batch();
+        assert!(purge(&LocalFs, root_str, false, 30, &[recent]).await.is_err());
+        std::fs::write(root.join(DIRECTORY).join(&batch).join("file"), b"changed").unwrap();
+        assert!(purge(&LocalFs, root_str, false, 30, &entries).await.is_err());
+        let refreshed = list(&LocalFs, root_str).await.unwrap();
+        assert_eq!(purge(&LocalFs, root_str, false, 30, &refreshed).await.unwrap(), 1);
+        assert_eq!(std::fs::read(root.join("file")).unwrap(), b"current");
+        assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn flat_object_store_recovery_needs_no_physical_directories() {
@@ -630,4 +662,36 @@ mod tests {
         let target = restore(&LocalFs, root, &entries[0]).await.unwrap();
         assert!(std::fs::metadata(target).unwrap().len() > 0);
     }
+}
+
+/// Bind a journal to the endpoint as well as its saved id; changing a profile's
+/// server must never replay another server's unfinished publication.
+pub fn destination_key(p: &crate::profiles::ConnectionProfile, local: bool) -> String {
+    if local { return "local".into(); }
+    use sha2::{Digest, Sha256};
+    let data = serde_json::to_vec(&(&p.id, &p.protocol, &p.host, p.port, &p.username, &p.bucket, &p.endpoint, &p.account, &p.agent_key)).unwrap();
+    format!("{:x}", Sha256::digest(data))
+}
+
+/// Permanently remove only the old reserved files shown in a cleanup preview.
+/// No recursive deletion and no fallback to deleting an original path.
+pub async fn purge(fs: &dyn RemoteFs, root: &str, staging: bool, days: u32, entries: &[RecoveryEntry]) -> Result<usize> {
+    ensure!(days >= 7, "Keep at least seven days of sync history");
+    validate_root(root)?;
+    let cutoff = crate::db::now_ms() / 1000 - i64::from(days) * 86400;
+    let area = if staging { STAGING } else { DIRECTORY };
+    let mut removed = 0;
+    for entry in entries {
+        validate_relative(&entry.relative)?;
+        validate_relative(&entry.batch)?;
+        ensure!(!entry.batch.contains('/'), "Invalid recovery batch");
+        let created: i64 = entry.batch.split('-').next().context("Invalid batch timestamp")?.parse()?;
+        ensure!(created > 0 && created < cutoff, "File is newer than the retention cutoff");
+        let _lock = super::journal::cleanup_lock(&entry.batch)?;
+        let relative = format!("{area}/{}/{}", entry.batch, entry.relative);
+        ensure!(current_state(fs, root, &relative).await?.as_ref() == Some(&entry.state), "Cleanup preview is stale; refresh before deleting");
+        fs.delete(&join(root, &relative), false).await?;
+        removed += 1;
+    }
+    Ok(removed)
 }

@@ -3974,6 +3974,7 @@ async fn run_sync_replacement(
         crate::sync::SyncDirection::RemoteToLocal => Box::new(crate::remotefs::local::LocalFs),
     };
     stage.prepare(fs.as_ref()).await.map_err(|e| crate::sync::recovery::PublicationError(format!("{e:#}")))?;
+    let guard = crate::sync::journal::begin(stage)?;
     let staged_path = stage.path();
     let written = match direction {
         crate::sync::SyncDirection::LocalToRemote => dispatch_upload(mgr, id, session, Path::new(source), &staged_path).await?,
@@ -3991,7 +3992,7 @@ async fn run_sync_replacement(
         publishing.insert(id.to_string());
     }
     mgr.update(id, |t| t.notice = Some("Publishing verified replacement".into())).await;
-    stage.publish(fs.as_ref()).await?;
+    stage.publish_guarded(fs.as_ref(), guard).await?;
     mgr.update(id, |t| t.notice = Some("Replacement published; previous version kept in recovery".into())).await;
     Ok(written)
 }
@@ -4972,6 +4973,7 @@ mod tests {
         let fs = crate::commands::fs_for_session(&session);
         let old = fs.list_dir("/").await.unwrap().into_iter().find(|e| e.name == "f.bin").unwrap();
         let stage = crate::sync::recovery::StagedReplacement {
+            destination_key: None,
             root: "/".into(), batch: crate::sync::recovery::new_batch(), relative: "f.bin".into(),
             expected: crate::sync::recovery::FileState { size: old.size, modified: old.modified.unwrap_or(0), etag: old.etag },
             size: data.len() as u64,
@@ -5008,6 +5010,7 @@ mod tests {
             let old = crate::remotefs::local::LocalFs.list_dir(local.to_str().unwrap()).await.unwrap()
                 .into_iter().find(|e| e.name == "f.bin").unwrap();
             let stage = crate::sync::recovery::StagedReplacement {
+                destination_key: None,
                 root: local.to_string_lossy().into_owned(), batch: crate::sync::recovery::new_batch(),
                 relative: "f.bin".into(),
                 expected: crate::sync::recovery::FileState { size: old.size, modified: old.modified.unwrap_or(0), etag: old.etag },

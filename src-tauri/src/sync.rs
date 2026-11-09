@@ -1,4 +1,5 @@
 pub mod recovery;
+pub mod journal;
 
 use crate::remotefs::{FileKind, RemoteFs};
 use anyhow::Result;
