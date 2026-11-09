@@ -18,7 +18,7 @@ import { useDialog } from "@/hooks/useDialog";
 import { toast } from "@/stores/toastStore";
 import { toastError, messageOf } from "@/lib/errors";
 import { useCloudflareAccount, TunnelHealth } from "./CloudflareAccount";
-import type { CfSetupState, CfZone, ConnectionProfile, RootRun } from "@/lib/types";
+import type { CfSetupState, CfTunnelHealth, CfZone, ConnectionProfile, RootRun } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
 interface Props {
@@ -82,7 +82,7 @@ export function MoveToCloudflareDialog({ profileId, onClose }: Props) {
   const [setup, setSetup] = useState<CfSetupState | null>(null);
   const [run, setRun] = useState<RootRun | null>(null);
   const [sudoPassword, setSudoPassword] = useState("");
-  const [tunnel, setTunnel] = useState<string>("");
+  const [tunnel, setTunnel] = useState<CfTunnelHealth | null>(null);
   const [newProfile, setNewProfile] = useState<ConnectionProfile | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [openPorts, setOpenPorts] = useState<number[] | null>(null);
@@ -120,7 +120,7 @@ export function MoveToCloudflareDialog({ profileId, onClose }: Props) {
         const s = await ipc.cfTunnelStatus(setup.tunnelId);
         if (stop) return;
         setTunnel(s);
-        if (s === "healthy") setStep("connect");
+        if (s.status === "healthy") setStep("connect");
       } catch {
         /* keep polling */
       }
@@ -218,7 +218,7 @@ export function MoveToCloudflareDialog({ profileId, onClose }: Props) {
         const r = await ipc.sshRunAsRoot(sessionId, setup.undoScript, sudoPassword || undefined).catch(() => null);
         serverNote = r?.ok ? " The server's sshd and cloudflared changes were reverted." : " Revert the server with the undo command (copied).";
         if (!r?.ok) await navigator.clipboard.writeText(setup.undoScript).catch(() => {});
-      } else if (run?.ok || tunnel === "healthy") {
+      } else if (run?.ok || tunnel?.status === "healthy") {
         await navigator.clipboard.writeText(setup.undoScript).catch(() => {});
         serverNote = " Paste the undo command (copied) into a root console to revert the server.";
       }
@@ -409,7 +409,13 @@ export function MoveToCloudflareDialog({ profileId, onClose }: Props) {
                     <p className="mt-1.5 text-[11px] text-text-dim">
                       No sudo? Paste it into any root console: the provider's web console, a root SSH session or a
                       control panel terminal. This step turns green by itself when the tunnel connects.{" "}
-                      {tunnel && <TunnelHealth status={tunnel} />}
+                      {tunnel && (
+                        <TunnelHealth
+                          status={tunnel.status}
+                          lastSeen={tunnel.connectorLastSeen}
+                          version={tunnel.connectorVersion}
+                        />
+                      )}
                     </p>
                   </>
                 )}

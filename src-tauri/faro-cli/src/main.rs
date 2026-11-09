@@ -299,6 +299,29 @@ enum CfCmd {
     Login { host: String },
     /// Install or update Faro's own copy of the official cloudflared.
     Install,
+    /// Start or stop a named Access TCP forward saved on a connection.
+    ///
+    /// Uses the same cloudflared, Access credentials and forward definitions
+    /// as the app. `name` is the forward's name, or `connection/name` when
+    /// more than one connection uses it.
+    Forward {
+        #[command(subcommand)]
+        action: CfForwardCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CfForwardCmd {
+    /// Listen on the forward's local port (`cloudflared access tcp`).
+    Start {
+        /// Forward name, or `connection/name` when it isn't unique.
+        name: String,
+    },
+    /// Stop a forward started from the app or from `start`.
+    Stop {
+        /// Forward name, or `connection/name` when it isn't unique.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -810,6 +833,7 @@ async fn cmd_cf(store: &ProfileStore, action: CfCmd) -> Result<()> {
             println!("{host}: {}", describe_access(&s));
             Ok(())
         }
+        CfCmd::Forward { action } => cmd_cf_forward(store, action).await,
         CfCmd::Install => {
             let dest = cloudflared::managed_path(&dir);
             eprintln!("Downloading the official cloudflared release…");
@@ -820,6 +844,32 @@ async fn cmd_cf(store: &ProfileStore, action: CfCmd) -> Result<()> {
                 std::fs::write(dir.join("cloudflared.json"), serde_json::to_vec_pretty(&cfg)?)?;
             }
             println!("Installed cloudflared {version} to {} (checksum verified)", dest.display());
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_cf_forward(store: &ProfileStore, action: CfForwardCmd) -> Result<()> {
+    let dir = default_data_dir()?;
+    let profiles = store.list().await?;
+    match action {
+        CfForwardCmd::Start { name } => {
+            let (profile, forward) = faro_lib::cf_forward::resolve(&profiles, &name)?;
+            let running = faro_lib::cf_forward::start(&dir, profile, forward, "cli", None)?;
+            if running.already {
+                println!("{} is already listening on 127.0.0.1:{}", running.name, running.local_port);
+            } else {
+                println!(
+                    "{} listening on 127.0.0.1:{} → {}",
+                    running.name, running.local_port, running.hostname
+                );
+            }
+            Ok(())
+        }
+        CfForwardCmd::Stop { name } => {
+            let (profile, forward) = faro_lib::cf_forward::resolve(&profiles, &name)?;
+            faro_lib::cf_forward::stop(&dir, &profile.id, &forward.name)?;
+            println!("stopped {}", forward.name);
             Ok(())
         }
     }
