@@ -248,6 +248,7 @@ export interface AgentHostPairing {
 
 /** State of the in-app agent host (Settings → Remote control). */
 export interface AgentHostStatus {
+  relayOnline?: boolean;
   relay?: { address: string; publicKey: string } | null;
   publicKey?: string;
   enabled: boolean;

@@ -21,9 +21,14 @@ pub enum Registration {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Reply { Ready, Unavailable, Denied }
+pub enum Reply { Waiting, Ready, Unavailable, Denied }
 
 pub async fn connect(config: &RelayConfig, identity: &Identity, request: Registration) -> Result<TcpStream> {
+    connect_monitored(config, identity, request, None).await
+}
+
+pub async fn connect_monitored(config: &RelayConfig, identity: &Identity, request: Registration, online: Option<&std::sync::atomic::AtomicBool>) -> Result<TcpStream> {
+    let listening = matches!(request, Registration::Listen);
     let expect = decode_public(&config.public_key)?;
     anyhow::ensure!(expect.len() == 32, "relay public key must be 32 bytes");
     let mut channel = tokio::time::timeout(Duration::from_secs(15), async {
@@ -33,9 +38,11 @@ pub async fn connect(config: &RelayConfig, identity: &Identity, request: Registr
         channel.send(&request).await?;
         Ok::<_, anyhow::Error>(channel)
     }).await.context("relay connection timed out")??;
-    match tokio::time::timeout(Duration::from_secs(35), channel.recv::<Reply>()).await.context("relay rendezvous timed out")?? {
-        Reply::Ready => Ok(channel.into_inner()),
+    loop { match tokio::time::timeout(Duration::from_secs(35), channel.recv::<Reply>()).await.context("relay rendezvous timed out")?? {
+        Reply::Waiting if listening => { if let Some(online) = online { online.store(true, std::sync::atomic::Ordering::Relaxed); } },
+        Reply::Waiting => bail!("unexpected relay registration reply"),
+        Reply::Ready => return Ok(channel.into_inner()),
         Reply::Unavailable => bail!("remote Agent is not waiting at the relay; check its relay connection"),
         Reply::Denied => bail!("relay access denied; ask its administrator to allow this identity"),
-    }
+    }}
 }

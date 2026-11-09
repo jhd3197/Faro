@@ -43,6 +43,7 @@ impl Default for HostSettings {
 
 /// Live serving state; present only while the host is running.
 struct Running {
+    relay_online: std::sync::Arc<std::sync::atomic::AtomicBool>,
     daemon: Daemon,
     port: u16,
     advert: Option<Advertisement>,
@@ -136,12 +137,14 @@ impl AgentHost {
         let relay: Option<faro_agent_proto::relay::RelayConfig> = if relay_path.exists() {
             Some(serde_json::from_slice(&std::fs::read(relay_path)?)?)
         } else { None };
+        let relay_online = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let online = relay_online.clone();
         let serve_daemon = daemon.clone();
         let accept_task = tauri::async_runtime::spawn(async move {
             let result = if let Some(relay) = relay {
                 tokio::select! {
                     result = faro_agentd::serve(listener, serve_daemon.clone()) => result,
-                    _ = faro_agentd::relay::listen(relay, serve_daemon) => Ok(()),
+                    _ = faro_agentd::relay::listen_monitored(relay, serve_daemon, online) => Ok(()),
                 }
             } else { faro_agentd::serve(listener, serve_daemon).await };
             if let Err(e) = result {
@@ -149,7 +152,7 @@ impl AgentHost {
             }
         });
 
-        *running = Some(Running { daemon, port, advert, accept_task });
+        *running = Some(Running { daemon, port, advert, accept_task, relay_online });
         Ok(())
     }
 
@@ -189,6 +192,7 @@ impl AgentHost {
         };
 
         Ok(HostStatus {
+            relay_online: running.as_ref().is_some_and(|r| r.relay_online.load(Ordering::Relaxed)),
             relay: read_relay(&dir)?,
             public_key: identity.public_b64().to_string(),
             enabled: settings.enabled,
@@ -235,6 +239,7 @@ pub struct PeerView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostStatus {
+    pub relay_online: bool,
     pub relay: Option<faro_agent_proto::relay::RelayConfig>,
     pub public_key: String,
     pub enabled: bool,

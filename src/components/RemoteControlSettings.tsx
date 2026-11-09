@@ -41,6 +41,12 @@ export function RemoteControlSettings() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!status?.running || !status.relay) return;
+    const timer = setInterval(() => { void ipc.agentHostStatus().then(setStatus).catch(() => {}); }, 5000);
+    return () => clearInterval(timer);
+  }, [status?.running, status?.relay?.address]);
+
   // A controller finished pairing — refresh the peer list and celebrate.
   useEffect(() => {
     const un = onAgentHostPaired((e) => {
@@ -116,15 +122,7 @@ export function RemoteControlSettings() {
           <div className="mt-1 text-xs text-text-dim">
             Runs a tiny encrypted agent so another Faro on your network can browse,
             transfer files, and (if you allow it) run commands here. Off by default.
-            <div className="space-y-2 rounded-lg border border-border p-3">
-        <div className="text-xs font-medium">Self-hosted internet relay</div>
-        <p className="text-[11px] text-text-muted">Pair your devices first. Add this machine and its controllers to the relay allowlist. Saving restarts remote control and disconnects active sessions.</p>
-        <input className="input w-full" aria-label="Host relay address" placeholder="relay.example.com:8723" value={relayAddress} onChange={e => setRelayAddress(e.target.value)} />
-        <input className="input w-full" aria-label="Host relay public key" placeholder="Relay public key (base64)" value={relayKey} onChange={e => setRelayKey(e.target.value)} />
-        {status.publicKey && <div className="break-all text-[11px] text-text-muted">This machine's public key: <span className="select-all font-mono">{status.publicKey}</span></div>}
-        <button disabled={busy || (!!relayAddress.trim() && !relayKey.trim())} className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50" onClick={() => run(() => ipc.agentHostSetRelay(relayAddress.trim() ? { address: relayAddress.trim(), publicKey: relayKey.trim() } : null))}>Save relay settings</button>
-      </div>
-      {status.running && (
+            {status.running && (
               <>
                 {" "}
                 Listening on port{" "}
@@ -134,6 +132,16 @@ export function RemoteControlSettings() {
           </div>
         </div>
         <Toggle checked={status.enabled} disabled={busy} onChange={toggleEnabled} />
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-border p-3">
+        <div className="text-xs font-medium">Self-hosted internet relay</div>
+        {status.relay && <p role="status" className="text-[11px] text-text-muted">{!status.running ? "Remote control is off" : status.relayOnline ? "Relay available" : "Reconnecting to relay…"}</p>}
+        <p className="text-[11px] text-text-muted">Pair your devices first. Add this machine and its controllers to the relay allowlist. Saving restarts remote control and disconnects active sessions.</p>
+        <input className="w-full rounded-md border border-border bg-bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent" aria-label="Host relay address" placeholder="relay.example.com:8723" value={relayAddress} onChange={e => setRelayAddress(e.target.value)} />
+        <input className="w-full rounded-md border border-border bg-bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent" aria-label="Host relay public key" placeholder="Relay public key (base64)" value={relayKey} onChange={e => setRelayKey(e.target.value)} />
+        {status.publicKey && <div className="break-all text-[11px] text-text-muted">This machine's public key: <span className="select-all font-mono">{status.publicKey}</span></div>}
+        <button disabled={busy || (!!relayAddress.trim() && !relayKey.trim())} className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50" onClick={() => run(() => ipc.agentHostSetRelay(relayAddress.trim() ? { address: relayAddress.trim(), publicKey: relayKey.trim() } : null))}>Save relay settings</button>
       </div>
 
       {status.running && (

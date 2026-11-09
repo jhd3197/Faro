@@ -18,12 +18,15 @@ async fn relay_preserves_end_to_end_pins_and_rejects_unknown_identities() {
         let host_config = config.clone();
         let host_key = host.public_b64().to_string();
         let client_pin = client.public_bytes().unwrap();
+        let online = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let host_online = online.clone();
         let host_task = tokio::spawn(async move {
-            let socket = connect(&host_config, &host, Registration::Listen).await.unwrap();
+            let socket = faro_agent_proto::relay::connect_monitored(&host_config, &host, Registration::Listen, Some(&host_online)).await.unwrap();
             let mut end_to_end = SecureChannel::establish(socket, Role::Responder, &host.private_bytes().unwrap(), Auth::Paired { expect_remote: Some(client_pin) }).await.unwrap();
             assert_eq!(end_to_end.recv::<String>().await.unwrap(), "private payload");
             end_to_end.send(&"received").await.unwrap();
         });
+        while !online.load(std::sync::atomic::Ordering::Relaxed) { tokio::time::sleep(Duration::from_millis(10)).await; }
         // Retry until the authenticated host registration has reached the relay.
         let socket = loop {
             match connect(&config, &client, Registration::Connect { target: host_key.clone() }).await {

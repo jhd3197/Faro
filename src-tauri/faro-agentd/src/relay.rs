@@ -37,6 +37,7 @@ async fn handle(stream: TcpStream, identity: &Identity, allowed: &HashSet<String
     }).await.context("relay registration timeout")??;
     match request {
         Registration::Listen => {
+            channel.send(&Reply::Waiting).await?;
             let key = channel.remote_static_b64();
             let (tx, rx) = oneshot::channel();
             {
@@ -70,16 +71,20 @@ async fn handle(stream: TcpStream, identity: &Identity, allowed: &HashSet<String
 /// Maintain an outbound waiting socket, replenishing it as each client arrives.
 /// Aborting this future drops its active connections as well.
 pub async fn listen(config: RelayConfig, daemon: crate::Daemon) {
+    listen_monitored(config, daemon, Arc::new(std::sync::atomic::AtomicBool::new(false))).await;
+}
+
+pub async fn listen_monitored(config: RelayConfig, daemon: crate::Daemon, online: Arc<std::sync::atomic::AtomicBool>) {
     let mut connections = tokio::task::JoinSet::new();
     loop {
         while connections.try_join_next().is_some() {}
         if connections.len() >= 32 { connections.join_next().await; continue; }
-        match faro_agent_proto::relay::connect(&config, &daemon.identity, Registration::Listen).await {
+        match faro_agent_proto::relay::connect_monitored(&config, &daemon.identity, Registration::Listen, Some(&online)).await {
             Ok(stream) => {
                 let daemon = daemon.clone();
                 connections.spawn(async move { let _ = crate::server::dispatch(stream, daemon).await; });
             }
-            Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+            Err(_) => { online.store(false, std::sync::atomic::Ordering::Relaxed); tokio::time::sleep(Duration::from_secs(2)).await; },
         }
     }
 }

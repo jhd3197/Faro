@@ -40,3 +40,7 @@ Changing relay settings restarts remote control and disconnects current
 sessions. Removing a controller in Remote control revokes its Agent access even
 if its relay allowlist entry remains. Remove that entry too when it no longer
 needs any relay access. This feature does not provision or publish a service.
+
+Remote control shows whether the configured relay is available or reconnecting,
+refreshing its status while the settings panel is open. This reports authenticated
+relay registration, not whether a specific controller is currently connected.
