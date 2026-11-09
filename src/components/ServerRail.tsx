@@ -134,6 +134,8 @@ export function ServerRail() {
     saveProfiles,
     reorderProfiles,
     reordering,
+    undoOrganization,
+    organizationHistory,
   } = useConnections();
   const setTerminalOpen = useLayout((s) => s.setTerminalOpen);
   const openDialog = useLayout((s) => s.openDialog);
@@ -511,7 +513,7 @@ export function ServerRail() {
       items.push({
         label: `Move to "${g}"`,
         icon: <Folder size={14} />,
-        onClick: () => saveProfile({ ...p, group: g }),
+        onClick: () => saveProfiles([{ ...p, group: g }]),
       });
     }
     items.push({
@@ -524,7 +526,7 @@ export function ServerRail() {
       items.push({
         label: "Remove from group",
         icon: <FolderMinus size={14} />,
-        onClick: () => saveProfile({ ...p, group: undefined }),
+        onClick: () => saveProfiles([{ ...p, group: undefined }]),
         separatorAfter: true,
       });
     }
@@ -638,7 +640,7 @@ export function ServerRail() {
     setGroupPrompt(null);
     if (!prompt) return;
     if (prompt.kind === "assign") {
-      void saveProfile({ ...prompt.profile, group: name });
+      void saveProfiles([{ ...prompt.profile, group: name }]);
     } else {
       const members =
         sections.groups.find(([g]) => g === prompt.from)?.[1] ?? [];
@@ -718,6 +720,7 @@ export function ServerRail() {
         )}
       >
       <div ref={scrollRef} data-rail-scroll className="flex-1 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {organizationHistory.length > 0 && <button title="Undo last group or order change" aria-label="Undo organization" disabled={reordering} onClick={() => void undoOrganization()} className="mx-2 mb-2 rounded border border-border px-2 py-1 text-[11px] text-text-muted disabled:opacity-50">{expanded ? "Undo organization" : "↶"}</button>}
         {/* Local files (single-pane layout only) */}
         {browserLayout === "single" && (
           <div className="mb-2 flex flex-col items-center gap-1.5">

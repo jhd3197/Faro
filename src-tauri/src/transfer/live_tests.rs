@@ -56,6 +56,7 @@ fn profile(protocol: &str, host: &str, port: u16, user: &str, pass: &str) -> Con
         account: None,
         agent_key: None,
         agent_relay: None,
+        notes: None,
         group: None,
         sort_order: None,
         icon: None,

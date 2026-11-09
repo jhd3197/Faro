@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
 import { toast } from "./toastStore";
 import { toastError, messageOf } from "@/lib/errors";
-import type { ConnectionProfile, SessionId } from "@/lib/types";
+import type { ConnectionProfile, ProfileOrganization, SessionId } from "@/lib/types";
 import { useTerminals } from "./terminalsStore";
 import { useSites } from "./sitesStore";
 
@@ -18,6 +18,8 @@ export interface LiveSession {
 
 interface ConnectionsState {
   profiles: ConnectionProfile[];
+  organizationHistory: { before: ProfileOrganization[]; after: ProfileOrganization[] }[];
+  undoOrganization: () => Promise<void>;
   /** Every live connection, in the order they were opened. */
   sessions: LiveSession[];
   /** The focused session — drives the browser, terminal and status bar. */
@@ -52,6 +54,7 @@ interface ConnectionsState {
 
 export const useConnections = create<ConnectionsState>((set, get) => ({
   profiles: [],
+  organizationHistory: [],
   sessions: [],
   activeSessionId: null,
   activeProfileId: null,
@@ -70,34 +73,38 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
   },
 
   saveProfiles: async (ps) => {
-    for (const p of ps) await ipc.saveProfile(p);
-    await get().loadProfiles();
+    if (get().reordering) return;
+    set({ reordering: true });
+    const after = ps.map(organizationOf);
+    const expected = ps.map(p => get().profiles.find(old => old.id === p.id)).filter((p): p is ConnectionProfile => !!p).map(organizationOf);
+    try {
+      const before = await ipc.organizeProfiles(after, expected);
+      set(s => ({ organizationHistory: [...s.organizationHistory.slice(-19), { before, after }] }));
+      await get().loadProfiles();
+    } catch (e) { toastError(e, "Couldn't update organization"); }
+    finally { set({ reordering: false }); }
+  },
+
+  undoOrganization: async () => {
+    const history = get().organizationHistory;
+    const action = history.at(-1);
+    if (!action || get().reordering) return;
+    set({ reordering: true });
+    try {
+      await ipc.organizeProfiles(action.before, action.after);
+      set({ organizationHistory: history.slice(0, -1) });
+      await get().loadProfiles();
+    } catch (e) { toastError(e, "Couldn't undo organization"); }
+    finally { set({ reordering: false }); }
   },
 
   reorderProfiles: async (ids, groupChange) => {
-    if (get().reordering) return;
-    const before = get().profiles;
     const positions = new Map(ids.map((id, index) => [id, index]));
-    // Reflect the drop immediately; don't let overlapping saves race and put
-    // an older order back on screen. Read the saved state again on failure.
-    set({ reordering: true, profiles: before.map(p => ({
+    await get().saveProfiles(get().profiles.map(p => ({
       ...p,
       sortOrder: positions.get(p.id) ?? p.sortOrder,
       ...(groupChange?.id === p.id ? { group: groupChange.group } : {}),
-    })) });
-    try {
-      if (groupChange) {
-        const p = before.find(x => x.id === groupChange.id);
-        if (p) await ipc.saveProfile({ ...p, group: groupChange.group });
-      }
-      await ipc.reorderProfiles(ids);
-    } catch (e) {
-      try { await get().loadProfiles(); }
-      catch { set({ profiles: before }); }
-      throw e;
-    } finally {
-      set({ reordering: false });
-    }
+    })));
   },
 
   deleteProfile: async (id) => {
@@ -188,3 +195,5 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
     void ipc.bridgeSetActiveSession(sessionId);
   },
 }));
+
+function organizationOf(p: ConnectionProfile): ProfileOrganization { return { id: p.id, group: p.group, sortOrder: p.sortOrder }; }

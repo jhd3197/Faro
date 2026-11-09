@@ -115,6 +115,9 @@ export const ipc = {
     invoke<void>("save_profile", { profile }),
 
   /** Persist a manual rail order: every profile id, in display order. */
+  groupGateways: () => invoke<Record<string, string>>("group_gateways"),
+  setGroupGateway: (group: string, gateway: string | null) => invoke<void>("set_group_gateway", { group, gateway }),
+  organizeProfiles: (changes: import("./types").ProfileOrganization[], expected?: import("./types").ProfileOrganization[]) => invoke<import("./types").ProfileOrganization[]>("organize_profiles", { changes, expected }),
   reorderProfiles: (ids: string[]) =>
     invoke<void>("reorder_profiles", { ids }),
 

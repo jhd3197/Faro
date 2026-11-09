@@ -229,6 +229,7 @@ impl AgentSession {
                 account: None,
                 agent_key: None,
                 agent_relay: None,
+                notes: None,
                 group: None,
                 sort_order: None,
                 icon: None,

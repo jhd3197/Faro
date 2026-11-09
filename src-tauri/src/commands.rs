@@ -453,6 +453,7 @@ pub async fn dropbox_authorize(
         account: None,
         agent_key: None,
         agent_relay: None,
+        notes: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -513,6 +514,7 @@ pub async fn onedrive_authorize(
         account: None,
         agent_key: None,
         agent_relay: None,
+        notes: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -578,6 +580,7 @@ pub async fn dynamics_authorize(
         account: None,
         agent_key: None,
         agent_relay: None,
+        notes: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -633,6 +636,7 @@ pub async fn gdrive_authorize(
         account: None,
         agent_key: None,
         agent_relay: None,
+        notes: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -688,6 +692,7 @@ pub async fn box_authorize(
         account: None,
         agent_key: None,
         agent_relay: None,
+        notes: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -2008,7 +2013,7 @@ pub async fn export_connections(
     passphrase: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<crate::faro_file::ExportSummary, String> {
-    let all = state.profiles.list().await.map_err(err)?;
+    let all = state.profiles.exportable().await.map_err(err)?;
     let path = std::path::PathBuf::from(path);
     let (bytes, summary) = match format.as_str() {
         "openssh" => {
@@ -2716,3 +2721,13 @@ mod upload_inventory_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[tauri::command]
+pub async fn organize_profiles(changes: Vec<crate::profiles::Organization>, expected: Option<Vec<crate::profiles::Organization>>, state: State<'_, AppState>) -> Result<Vec<crate::profiles::Organization>, String> {
+    state.profiles.organize(&changes, expected.as_deref()).await.map_err(err)
+}
+
+#[tauri::command]
+pub fn group_gateways(state: State<'_, AppState>) -> Result<std::collections::BTreeMap<String, String>, String> { state.profiles.group_gateways().map_err(err) }
+#[tauri::command]
+pub async fn set_group_gateway(group: String, gateway: Option<String>, state: State<'_, AppState>) -> Result<(), String> { state.profiles.set_group_gateway(group, gateway).await.map_err(err) }

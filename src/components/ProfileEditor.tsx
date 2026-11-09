@@ -196,6 +196,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   // Faro Agent: the pinned daemon key. Set by pairing; carried through Save.
   const [agentRelayAddress, setAgentRelayAddress] = useState(seed?.agentRelay?.address ?? "");
   const [agentRelayKey, setAgentRelayKey] = useState(seed?.agentRelay?.publicKey ?? "");
+  const [groupGateways, setGroupGateways] = useState<Record<string, string>>({});
+  useEffect(() => { void ipc.groupGateways().then(setGroupGateways).catch(() => {}); }, []);
+  const [notes, setNotes] = useState(seed?.notes ?? "");
   const [agentKey, setAgentKey] = useState<string | undefined>(seed?.agentKey);
   const [host, setHost] = useState(seed?.host ?? "");
   const [port, setPort] = useState(seed?.port ?? defaultPort);
@@ -574,6 +577,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           : isDynamics && dynamicsMode === "delegated"
             ? dynamicsAccount || undefined
             : undefined,
+      notes: notes.trim() || undefined,
       agentKey: isAgent ? agentKey : undefined,
       agentRelay: isAgent && agentRelayAddress.trim() ? { address: agentRelayAddress.trim(), publicKey: agentRelayKey.trim() } : undefined,
       group: group.trim() || undefined,
@@ -923,6 +927,20 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </Field>
         </div>
 
+        {group.trim() && protocol === "sftp" && <Field label="Group gateway (applies to this group and nested groups)">
+          <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
+            const gateway = e.target.value;
+            try { await ipc.setGroupGateway(group.trim(), gateway || null); setGroupGateways(await ipc.groupGateways()); }
+            catch (e) { toast.error("Couldn't save group gateway", messageOf(e)); }
+          }}>
+            <option value="">No group gateway / inherit parent</option>
+            {profiles.filter(p => p.protocol === "sftp").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <p className="text-[11px] text-text-muted">Saved immediately. Explicit connection routes take precedence. Use / in group names to inherit a parent group's gateway.</p>
+        </Field>}
+        <Field label="Server notes (optional)">
+          <textarea className={inputCls} rows={3} maxLength={20000} placeholder="Purpose, maintenance notes, or a runbook link. Avoid storing secrets here." value={notes} onChange={e => setNotes(e.target.value)} />
+        </Field>
         {iconUnknown && (
           <Hint tone="warn">
             Unknown icon key — the bubble falls back to the name monogram.

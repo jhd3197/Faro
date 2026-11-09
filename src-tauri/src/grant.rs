@@ -460,6 +460,7 @@ async fn import_connection(
         account: None,
         agent_key: None,
         agent_relay: None,
+        notes: None,
         group: Some(group.to_string()),
         sort_order: None,
         icon: None,

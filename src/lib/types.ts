@@ -93,6 +93,7 @@ export interface ConnectionProfile {
   // Faro Agent (protocol === "faro-agent"): the paired daemon's pinned public
   // key (base64). Present === paired; absent === still needs a pairing code.
   agentKey?: string;
+  notes?: string;
   agentRelay?: { address: string; publicKey: string };
   /** Rail folder this server lives in. Absent = ungrouped (top of the rail). */
   group?: string;
@@ -1416,3 +1417,5 @@ export interface DiagnosticReport {
   ok: boolean;
   steps: { label: string; ok: boolean; detail: string; elapsedMs: number }[];
 }
+
+export interface ProfileOrganization { id: string; group?: string; sortOrder?: number }

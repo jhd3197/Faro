@@ -48,6 +48,7 @@ let snippets: any[] = [
 // Mock PATH-integration state (Plan 16 Phase 4). `managed` flips on add/remove so
 // the About tab's Add ⇄ Remove flow round-trips without the Rust backend.
 let pathManaged = false;
+let groupGateways: Record<string, string> = {};
 function pathStatus() {
   return {
     binDir: "C:\\Users\\demo\\AppData\\Roaming\\com.juandenis.faro\\bin",
@@ -75,6 +76,22 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
         newer: true, url: "https://github.com/jhd3197/Faro/releases/tag/v1.3.49" };
     }
     // ---- profiles ----
+    case "group_gateways": return groupGateways;
+    case "set_group_gateway": { if (a.gateway) groupGateways[a.group] = a.gateway; else delete groupGateways[a.group]; return null; }
+    case "organize_profiles": {
+      const changes = a.changes as { id: string; group?: string; sortOrder?: number }[];
+      const before = changes.map(c => {
+        const p = data.profiles.find(p => p.id === c.id);
+        if (!p) throw new Error("Profile was removed");
+        return { id: p.id, group: p.group, sortOrder: p.sortOrder };
+      });
+      for (const old of (a.expected ?? [])) {
+        const p = data.profiles.find(p => p.id === old.id);
+        if (!p || (p.group ?? null) !== (old.group ?? null) || (p.sortOrder ?? null) !== (old.sortOrder ?? null)) throw new Error("Organization changed since this action");
+      }
+      data.setProfiles(data.profiles.map(p => { const change = changes.find(c => c.id === p.id); return change ? { ...p, group: change.group, sortOrder: change.sortOrder } : p; }));
+      return before;
+    }
     case "list_profiles":
       return data.profiles;
     case "save_profile": {
