@@ -198,6 +198,10 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [agentRelayKey, setAgentRelayKey] = useState(seed?.agentRelay?.publicKey ?? "");
   const [groupGateways, setGroupGateways] = useState<Record<string, string>>({});
   useEffect(() => { void ipc.groupGateways().then(setGroupGateways).catch(() => {}); }, []);
+  const [credentialProvider, setCredentialProvider] = useState(seed?.credentialRef?.provider ?? "");
+  const [credentialItem, setCredentialItem] = useState(seed?.credentialRef?.item ?? "");
+  const [credentialProviders, setCredentialProviders] = useState<string[]>([]);
+  useEffect(() => { void ipc.credentialProviders().then(setCredentialProviders).catch(() => {}); }, []);
   const [notes, setNotes] = useState(seed?.notes ?? "");
   const [agentKey, setAgentKey] = useState<string | undefined>(seed?.agentKey);
   const [host, setHost] = useState(seed?.host ?? "");
@@ -482,18 +486,19 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   /// Build the profile from the current form state. Shared by Save and by the
   /// pairing flow (which must persist the profile before it can pair by id).
+  const useCredentialRef = !!credentialProvider && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && (authKind === "password" || authKind === "key");
   const buildProfile = (): ConnectionProfile => {
     let auth: AuthMethod;
     if (profile?.auth.kind === "keyref") {
       // Grant-managed key: lives in the OS keychain, never edited here.
       auth = profile.auth;
     } else if (authKind === "password") {
-      auth = { kind: "password", password };
+      auth = { kind: "password", password: useCredentialRef ? "" : password };
     } else if (authKind === "key") {
       auth = {
         kind: "key",
         path: keyPath,
-        passphrase: passphrase || undefined,
+        passphrase: useCredentialRef ? undefined : passphrase || undefined,
         certPath: certPath.trim() || undefined,
       };
     } else if (authKind === "cloudflarecert") {
@@ -578,6 +583,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             ? dynamicsAccount || undefined
             : undefined,
       notes: notes.trim() || undefined,
+      credentialRef: useCredentialRef ? { provider: credentialProvider, item: credentialItem } : undefined,
       agentKey: isAgent ? agentKey : undefined,
       agentRelay: isAgent && agentRelayAddress.trim() ? { address: agentRelayAddress.trim(), publicKey: agentRelayKey.trim() } : undefined,
       group: group.trim() || undefined,
@@ -938,6 +944,16 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </select>
           <p className="text-[11px] text-text-muted">Saved immediately. Explicit connection routes take precedence. Use / in group names to inherit a parent group's gateway.</p>
         </Field>}
+        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div className="space-y-2 rounded-md border border-border p-3">
+          <Field label="Credential source">
+            <select className={inputCls} value={credentialProvider} onChange={e => setCredentialProvider(e.target.value)}>
+              <option value="">Saved credential</option>
+              {[...new Set([...credentialProviders, ...(credentialProvider ? [credentialProvider] : [])])].map(provider => <option key={provider} value={provider}>{provider}{!credentialProviders.includes(provider) ? " (not configured here)" : ""}</option>)}
+            </select>
+          </Field>
+          {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
+          <p className="text-[11px] text-text-muted">Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a new connection opens.</p>
+        </div>}
         <Field label="Server notes (optional)">
           <textarea className={inputCls} rows={3} maxLength={20000} placeholder="Purpose, maintenance notes, or a runbook link. Avoid storing secrets here." value={notes} onChange={e => setNotes(e.target.value)} />
         </Field>

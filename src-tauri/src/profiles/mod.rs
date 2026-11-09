@@ -156,6 +156,8 @@ pub struct ConnectionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<crate::credential_refs::CredentialRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_relay: Option<faro_agent_proto::relay::RelayConfig>,
     // Rail organisation. `group` is a free-form folder name (absent = ungrouped);
     // `sort_order` is the manual drag-and-drop position. Profiles without one
@@ -622,6 +624,7 @@ fn for_disk(profiles: &[ConnectionProfile], keychain: bool) -> Vec<ConnectionPro
         .iter()
         .cloned()
         .map(|mut p| {
+            crate::credential_refs::clear_embedded_secret(&mut p);
             if keychain {
                 match &mut p.auth {
                     AuthMethod::Password { password } => password.clear(),

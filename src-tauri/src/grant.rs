@@ -461,6 +461,7 @@ async fn import_connection(
         agent_key: None,
         agent_relay: None,
         notes: None,
+        credential_ref: None,
         group: Some(group.to_string()),
         sort_order: None,
         icon: None,

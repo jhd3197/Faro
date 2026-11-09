@@ -241,6 +241,7 @@ mod tests {
             agent_key: None,
             agent_relay: None,
             notes: None,
+            credential_ref: None,
             group: None,
             sort_order: None,
             jump_host: None,

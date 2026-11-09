@@ -94,6 +94,7 @@ export interface ConnectionProfile {
   // key (base64). Present === paired; absent === still needs a pairing code.
   agentKey?: string;
   notes?: string;
+  credentialRef?: { provider: string; item: string };
   agentRelay?: { address: string; publicKey: string };
   /** Rail folder this server lives in. Absent = ungrouped (top of the rail). */
   group?: string;

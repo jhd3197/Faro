@@ -64,9 +64,10 @@ pub async fn list_profiles(
 
 #[tauri::command]
 pub async fn save_profile(
-    profile: ConnectionProfile,
+    mut profile: ConnectionProfile,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    crate::credential_refs::clear_embedded_secret(&mut profile);
     if state.profiles.keychain_enabled() {
         let keep = state.profiles.is_unresolved(&profile.id);
         crate::profiles::sync_profile_secret(&profile, &state.db, keep).map_err(err)?;
@@ -454,6 +455,7 @@ pub async fn dropbox_authorize(
         agent_key: None,
         agent_relay: None,
         notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -515,6 +517,7 @@ pub async fn onedrive_authorize(
         agent_key: None,
         agent_relay: None,
         notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -581,6 +584,7 @@ pub async fn dynamics_authorize(
         agent_key: None,
         agent_relay: None,
         notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -637,6 +641,7 @@ pub async fn gdrive_authorize(
         agent_key: None,
         agent_relay: None,
         notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -693,6 +698,7 @@ pub async fn box_authorize(
         agent_key: None,
         agent_relay: None,
         notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -2731,3 +2737,6 @@ pub async fn organize_profiles(changes: Vec<crate::profiles::Organization>, expe
 pub fn group_gateways(state: State<'_, AppState>) -> Result<std::collections::BTreeMap<String, String>, String> { state.profiles.group_gateways().map_err(err) }
 #[tauri::command]
 pub async fn set_group_gateway(group: String, gateway: Option<String>, state: State<'_, AppState>) -> Result<(), String> { state.profiles.set_group_gateway(group, gateway).await.map_err(err) }
+
+#[tauri::command]
+pub fn credential_providers() -> Result<Vec<String>, String> { Ok(crate::credential_refs::providers().map_err(err)?.into_keys().collect()) }

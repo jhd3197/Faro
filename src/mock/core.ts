@@ -76,6 +76,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
         newer: true, url: "https://github.com/jhd3197/Faro/releases/tag/v1.3.49" };
     }
     // ---- profiles ----
+    case "credential_providers": return [];
     case "group_gateways": return groupGateways;
     case "set_group_gateway": { if (a.gateway) groupGateways[a.group] = a.gateway; else delete groupGateways[a.group]; return null; }
     case "organize_profiles": {

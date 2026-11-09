@@ -10,6 +10,7 @@ use tauri::Manager;
 // the CLI deliberately redacts in `profiles show`.
 pub mod backup;
 pub mod diagnostics;
+pub mod credential_refs;
 pub mod faro_file;
 pub mod bridge;
 pub mod commands;
@@ -465,6 +466,7 @@ pub fn run() {
             commands::reorder_profiles,
             commands::organize_profiles,
             commands::group_gateways,
+            commands::credential_providers,
             commands::set_group_gateway,
             commands::delete_profile,
             commands::ssh_key_defaults,

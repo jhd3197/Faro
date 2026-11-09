@@ -111,6 +111,7 @@ pub fn build(
         .into_iter()
         .map(|p| {
             let mut profile = p.clone();
+            crate::credential_refs::clear_embedded_secret(&mut profile);
             profile.jump_via = None;
             profile.sort_order = None;
             // Auto-connecting someone else's server on their next launch

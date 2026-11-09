@@ -1438,6 +1438,8 @@ pub async fn open_session(
     profile: &ConnectionProfile,
     verifier: Arc<dyn HostKeyVerifier>,
 ) -> Result<Session> {
+    let resolved = crate::credential_refs::resolve_profile(profile.clone()).await?;
+    let profile = &resolved;
     match profile.protocol.as_str() {
         "sftp" | "ssh" | "" => {
             // The CLI has no interactive prompt UI, so forced-change/KBI servers
@@ -2110,6 +2112,7 @@ impl SessionManager {
         prompter: Arc<dyn AuthPrompter>,
     ) -> Result<String> {
         let _ = app;
+        let profile = crate::credential_refs::resolve_profile(profile).await?;
         let session = match profile.protocol.as_str() {
             "sftp" | "ssh" | "" => {
                 let accepted = AcceptedKeys::default();
