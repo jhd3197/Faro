@@ -2476,9 +2476,18 @@ fn print_exec_output_and_exit(body: &serde_json::Value) -> Result<()> {
     if body.get("timedOut").and_then(|v| v.as_bool()).unwrap_or(false) {
         eprintln!("{}", warn("command timed out before finishing"));
     }
+    std::process::exit(exec_exit_code(body))
+}
+
+/// Exit code for an exec result. A timeout is always a failure, reported as
+/// 124 like coreutils `timeout`: the wire carries a null exitCode for it, and
+/// exiting 0 would tell scripts the command succeeded.
+fn exec_exit_code(body: &serde_json::Value) -> i32 {
+    if body.get("timedOut").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return 124;
+    }
     // exitCode is a number or null on the wire; null => 0, like cmd_exec.
-    let code = body.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
-    std::process::exit(code as i32)
+    body.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0) as i32
 }
 
 fn cmd_agent(action: AgentCmd) -> Result<()> {
@@ -3628,9 +3637,18 @@ fn fmt_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_url, check_mangled_remote_path, is_windows_drive_path, parse_semver, swap_binary_at,
-        wp_route,
+        asset_url, check_mangled_remote_path, exec_exit_code, is_windows_drive_path, parse_semver,
+        swap_binary_at, wp_route,
     };
+
+    #[test]
+    fn timed_out_exec_is_a_failure() {
+        let timed_out = serde_json::json!({"timedOut": true, "exitCode": null});
+        assert_eq!(exec_exit_code(&timed_out), 124);
+        let finished = serde_json::json!({"timedOut": false, "exitCode": 3});
+        assert_eq!(exec_exit_code(&finished), 3);
+        assert_eq!(exec_exit_code(&serde_json::json!({"exitCode": null})), 0);
+    }
 
     #[test]
     fn asset_url_points_at_the_release() {
