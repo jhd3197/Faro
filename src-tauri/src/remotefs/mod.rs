@@ -114,6 +114,19 @@ pub trait RemoteFs: Send + Sync {
         Ok(DirectoryListing { entries: self.list_dir(path).await?, skipped_entries: 0 })
     }
     async fn rename(&self, from: &str, to: &str) -> anyhow::Result<()>;
+    /// Guarded publication; protocols without conditional moves retain a race.
+    /// Backends with atomic no-replace primitives override this method.
+    async fn rename_no_replace(&self, from: &str, to: &str) -> anyhow::Result<()> {
+        let (parent, name) = match to.rfind(['/', '\\']) {
+            Some(0) => ("/", &to[1..]),
+            Some(2) if to.as_bytes().get(1) == Some(&b':') => (&to[..3], &to[3..]),
+            Some(i) => (&to[..i], &to[i + 1..]),
+            None => (".", to),
+        };
+        anyhow::ensure!(!self.list_dir(parent).await?.iter().any(|e| e.name.eq_ignore_ascii_case(name)),
+            "Destination already exists: {to}");
+        self.rename(from, to).await
+    }
     /// Delete a file. For a directory, `recursive=true` walks children first.
     async fn delete(&self, path: &str, recursive: bool) -> anyhow::Result<()>;
     async fn create_dir(&self, path: &str) -> anyhow::Result<()>;

@@ -1275,22 +1275,31 @@ async fn cmd_sync(
     );
     for c in &plan.copies {
         bar.set_message(c.relative.clone());
-        if let Some(previous) = &c.destination_state {
-            faro_lib::sync::recovery::preserve(destination_fs, recovery_root, &recovery_batch, &c.relative, previous).await?;
+        let stage = c.destination_state.as_ref().map(|previous| faro_lib::sync::recovery::StagedReplacement {
+            root: recovery_root.to_string(), batch: faro_lib::sync::recovery::new_batch(),
+            relative: c.relative.clone(), expected: previous.clone(), size: c.size,
+        });
+        let destination = if let Some(stage) = &stage {
+            stage.prepare(destination_fs).await?;
+            stage.path()
         } else {
             faro_lib::sync::recovery::check_missing(destination_fs, recovery_root, &c.relative).await?;
-        }
+            c.destination_path.clone()
+        };
         match direction {
             Dir::Push => {
-                let dest_parent = parent_of(&c.destination_path);
+                let dest_parent = parent_of(&destination);
                 upload_file(&session, &c.source_path, &dest_parent, &basename(&c.source_path))
                     .await?;
             }
             Dir::Pull => {
-                let dest_parent = parent_of(&c.destination_path);
+                let dest_parent = parent_of(&destination);
                 tokio::fs::create_dir_all(&dest_parent).await.ok();
                 download_file(&session, &c.source_path, &dest_parent).await?;
             }
+        }
+        if let Some(stage) = &stage {
+            stage.publish(destination_fs).await?;
         }
         bar.inc(1);
     }

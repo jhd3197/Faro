@@ -164,7 +164,7 @@ async fn walk_filtered<F: FnMut(ScanProgress)>(
             let entries = res?;
             tree.directories.insert(relative_of(&normalized_root, dir.trim_end_matches('/')));
             for entry in entries {
-                if sync && entry.name.eq_ignore_ascii_case(crate::sync::recovery::DIRECTORY) {
+                if sync && crate::sync::recovery::is_reserved(&entry.name) {
                     continue;
                 }
                 match entry.kind {

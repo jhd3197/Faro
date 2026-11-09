@@ -2102,7 +2102,13 @@ pub(crate) async fn execute_sync_plan(
 
     for copy in plan.copies {
         if let Some(previous) = &copy.destination_state {
-            crate::sync::recovery::preserve(destination_fs, &recovery_root, &recovery_batch, &copy.relative, previous).await?;
+            let stage = crate::sync::recovery::StagedReplacement {
+                root: recovery_root.clone(), batch: crate::sync::recovery::new_batch(),
+                relative: copy.relative.clone(), expected: previous.clone(), size: copy.size,
+            };
+            ids.push(transfers.start_sync_replacement(session.clone(), copy.source_path, plan.direction,
+                stage, copy.destination_path, app.clone()).await?);
+            continue;
         } else {
             crate::sync::recovery::check_missing(destination_fs, &recovery_root, &copy.relative).await?;
         }

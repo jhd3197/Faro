@@ -326,6 +326,12 @@ enum RetryInfo {
         local: PathBuf,
         final_remote: String,
     },
+    SyncReplacement {
+        session: Arc<Session>,
+        source: String,
+        direction: crate::sync::SyncDirection,
+        stage: crate::sync::recovery::StagedReplacement,
+    },
     /// Unit tests drive the runner with a fake copy loop.
     #[cfg(test)]
     Test(
@@ -343,6 +349,8 @@ const DEFAULT_CONCURRENCY: usize = 3;
 
 pub struct TransferManager {
     transfers: Mutex<HashMap<String, Transfer>>,
+    /// Cancellation must not interrupt preservation/publication/rollback.
+    publishing: Mutex<std::collections::HashSet<String>>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
     /// FIFO of transfer ids waiting for a slot (Plan 17). An id is popped only
     /// once it is at the front, the pause-all gate is open, and a concurrency
@@ -628,6 +636,7 @@ impl TransferManager {
     pub fn new() -> Self {
         Self {
             transfers: Mutex::new(HashMap::new()),
+            publishing: Mutex::new(std::collections::HashSet::new()),
             tasks: Mutex::new(HashMap::new()),
             waiting: Mutex::new(VecDeque::new()),
             semaphore: Arc::new(Semaphore::new(DEFAULT_CONCURRENCY)),
@@ -822,6 +831,8 @@ impl TransferManager {
                 OverwritePolicy::Overwrite,
                 "upload",
             ),
+            // Restoring as a plain transfer would bypass conflict checks and publication.
+            RetryInfo::SyncReplacement { .. } => return None,
             #[cfg(test)]
             RetryInfo::Test(_) => return None,
         };
@@ -1352,6 +1363,8 @@ impl TransferManager {
     /// Pause a queued or transferring transfer. A running one parks at the
     /// next chunk boundary; a queued one is skipped by admission until resumed.
     pub async fn pause(&self, id: &str, app: &AppHandle) -> Result<()> {
+        let publishing = self.publishing.lock().await;
+        anyhow::ensure!(!publishing.contains(id), "This replacement is being published; wait for it to finish");
         match self.get(id).await.map(|t| t.status) {
             Some(TransferStatus::Transferring) | Some(TransferStatus::Queued) => {}
             _ => anyhow::bail!("transfer {id} is not running or queued"),
@@ -1426,6 +1439,8 @@ impl TransferManager {
     }
 
     pub async fn retry(self: &Arc<Self>, id: &str, app: &AppHandle) -> Result<()> {
+        anyhow::ensure!(!matches!(self.retry.lock().await.get(id), Some(RetryInfo::SyncReplacement { .. })),
+            "Re-plan this sync before retrying a replacement so destination conflicts are checked again");
         match self.get(id).await.map(|t| t.status) {
             Some(TransferStatus::Error) | Some(TransferStatus::Canceled) => {}
             _ => anyhow::bail!("only failed or canceled transfers can be retried"),
@@ -1497,6 +1512,8 @@ impl TransferManager {
     }
 
     pub async fn cancel(&self, id: &str, app: &AppHandle) -> Result<()> {
+        let publishing = self.publishing.lock().await;
+        anyhow::ensure!(!publishing.contains(id), "This replacement is being published; wait for it to finish");
         {
             let mut w = self.waiting.lock().await;
             if let Some(pos) = w.iter().position(|x| x == id) {
@@ -1525,6 +1542,34 @@ impl TransferManager {
         }
         self.bump_queue(app).await;
         Ok(())
+    }
+
+    /// A replacement remains a single queue item until publication succeeds.
+    pub async fn start_sync_replacement(
+        self: &Arc<Self>, session: Arc<Session>, source: String,
+        direction: crate::sync::SyncDirection, stage: crate::sync::recovery::StagedReplacement,
+        destination: String, app: AppHandle,
+    ) -> Result<String> {
+        self.set_app(&app);
+        let id = Uuid::new_v4().to_string();
+        let transfer = Transfer {
+            id: id.clone(),
+            kind: match direction { crate::sync::SyncDirection::LocalToRemote => TransferKind::Upload, _ => TransferKind::Download },
+            source: source.clone(), destination, size: stage.size, transferred: 0,
+            status: TransferStatus::Queued, error: None, retry_attempt: None, delta: None,
+            started_at: now_ts(), bytes_per_sec: None, eta_secs: None, segments: None,
+            stalled: false, notice: Some("Staging replacement; original stays in place until verified".into()), restored: false,
+        };
+        self.insert(transfer.clone()).await;
+        self.emit("transfer://added", &transfer);
+        let job = RetryInfo::SyncReplacement { session, source, direction, stage };
+        self.retry.lock().await.insert(id.clone(), job.clone());
+        self.waiting.lock().await.push_back(id.clone());
+        self.pauses.lock().await.insert(id.clone(), PauseGate::new());
+        self.bump_queue(&app).await;
+        let task = tokio::spawn(run_job(Arc::clone(self), id.clone(), job));
+        self.tasks.lock().await.insert(id.clone(), task);
+        Ok(id)
     }
 
     pub async fn start_download(
@@ -3870,6 +3915,8 @@ async fn run_job(mgr: Arc<TransferManager>, id: String, job: RetryInfo) {
                     local,
                     final_remote,
                 } => dispatch_upload(&mgr, &id, session, local, final_remote).await,
+                RetryInfo::SyncReplacement { session, source, direction, stage } =>
+                    run_sync_replacement(&mgr, &id, session, source, *direction, stage).await,
                 #[cfg(test)]
                 RetryInfo::Test(f) => f(Arc::clone(&mgr), id.clone()).await,
             };
@@ -3882,7 +3929,7 @@ async fn run_job(mgr: Arc<TransferManager>, id: String, job: RetryInfo) {
                 mgr.requeue_paused(&id).await;
                 continue 'admit;
             }
-            if retry::classify(&err) == retry::Verdict::Fatal {
+            if err.is::<crate::sync::recovery::PublicationError>() || retry::classify(&err) == retry::Verdict::Fatal {
                 break 'admit Err(err);
             }
             let server_wait = retry::retry_after(&err);
@@ -3914,7 +3961,39 @@ async fn run_job(mgr: Arc<TransferManager>, id: String, job: RetryInfo) {
         }
     };
     finalize(&mgr, &id, res).await;
+    mgr.publishing.lock().await.remove(&id);
     mgr.bump_queue_quiet().await;
+}
+
+async fn run_sync_replacement(
+    mgr: &Arc<TransferManager>, id: &str, session: &Arc<Session>, source: &str,
+    direction: crate::sync::SyncDirection, stage: &crate::sync::recovery::StagedReplacement,
+) -> Result<u64> {
+    let fs: Box<dyn crate::remotefs::RemoteFs> = match direction {
+        crate::sync::SyncDirection::LocalToRemote => crate::commands::fs_for_session(session),
+        crate::sync::SyncDirection::RemoteToLocal => Box::new(crate::remotefs::local::LocalFs),
+    };
+    stage.prepare(fs.as_ref()).await.map_err(|e| crate::sync::recovery::PublicationError(format!("{e:#}")))?;
+    let staged_path = stage.path();
+    let written = match direction {
+        crate::sync::SyncDirection::LocalToRemote => dispatch_upload(mgr, id, session, Path::new(source), &staged_path).await?,
+        crate::sync::SyncDirection::RemoteToLocal => mgr.run_download(id, session, source, Path::new(&staged_path), OverwritePolicy::Overwrite).await?,
+    };
+    if written != stage.size {
+        return Err(crate::sync::recovery::PublicationError("Source size changed since preview; original unchanged. Re-plan sync.".into()).into());
+    }
+    // cancel() holds this same lock until it has aborted the task and settled
+    // its row. Once inserted, the short publication phase cannot be canceled.
+    {
+        let mut publishing = mgr.publishing.lock().await;
+        mgr.checkpoint(id, 0).await?;
+        anyhow::ensure!(mgr.get(id).await.is_some_and(|t| !matches!(t.status, TransferStatus::Canceled)), "Sync canceled before publication");
+        publishing.insert(id.to_string());
+    }
+    mgr.update(id, |t| t.notice = Some("Publishing verified replacement".into())).await;
+    stage.publish(fs.as_ref()).await?;
+    mgr.update(id, |t| t.notice = Some("Replacement published; previous version kept in recovery".into())).await;
+    Ok(written)
 }
 
 /// Backend dispatch for a single-file upload.
@@ -4041,6 +4120,7 @@ async fn upload_by_backend(
 /// never "done". A size that was unknown at enqueue (0) takes the written
 /// count.
 async fn finalize(mgr: &Arc<TransferManager>, id: &str, result: Result<u64>) {
+    let sync_replacement = matches!(mgr.retry.lock().await.get(id), Some(RetryInfo::SyncReplacement { .. }));
     let result = match result {
         Ok(written) => {
             let expected = mgr.get(id).await.map(|t| t.size).unwrap_or(0);
@@ -4088,6 +4168,9 @@ async fn finalize(mgr: &Arc<TransferManager>, id: &str, result: Result<u64>) {
                 t.settle();
                 t.retry_attempt = None;
                 t.error = Some(e.to_string());
+                if sync_replacement {
+                    t.notice = Some("Sync replacement stopped. Re-plan sync before retrying.".into());
+                }
             })
             .await;
             if let Some(t) = mgr.get(id).await {
@@ -4869,6 +4952,80 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("{id} never reached {want:?}: {:?}", mgr.get(id).await);
+    }
+
+    #[tokio::test]
+    async fn sync_replacement_upload_publishes_to_flat_object_store() {
+        let dir = test_dirs("sync-upload");
+        let source = dir.join("local/f.bin");
+        let data = b"replacement upload";
+        std::fs::write(&source, data).unwrap();
+        let store = Arc::new(object_store::memory::InMemory::new());
+        put_object(&store, "f.bin", b"old").await;
+        let session = Arc::new(Session::Object(Arc::new(crate::session::ObjectSession {
+            namespace: Default::default(), id: "mem-sync".into(), profile: delta_gate_profile("gcs"),
+            container: "b".into(), store: store.clone(),
+        })));
+        let fs = crate::commands::fs_for_session(&session);
+        let old = fs.list_dir("/").await.unwrap().into_iter().find(|e| e.name == "f.bin").unwrap();
+        let stage = crate::sync::recovery::StagedReplacement {
+            root: "/".into(), batch: crate::sync::recovery::new_batch(), relative: "f.bin".into(),
+            expected: crate::sync::recovery::FileState { size: old.size, modified: old.modified.unwrap_or(0), etag: old.etag },
+            size: data.len() as u64,
+        };
+        let mgr = Arc::new(TransferManager::new());
+        queue_download(&mgr, "upload-sync", &session, "f.bin", &source, data.len() as u64).await;
+        mgr.update("upload-sync", |t| { t.kind = TransferKind::Upload; t.source = source.to_string_lossy().into_owned(); t.destination = "/f.bin".into(); }).await;
+        let job = RetryInfo::SyncReplacement { session, source: source.to_string_lossy().into_owned(),
+            direction: crate::sync::SyncDirection::LocalToRemote, stage };
+        mgr.retry.lock().await.insert("upload-sync".into(), job.clone());
+        run_job(Arc::clone(&mgr), "upload-sync".into(), job).await;
+        let row = mgr.get("upload-sync").await.unwrap();
+        assert_eq!(row.status, TransferStatus::Done, "{:?}", row.error);
+        use object_store::ObjectStore;
+        assert_eq!(store.get(&object_store::path::Path::from("f.bin")).await.unwrap().bytes().await.unwrap().as_ref(), data);
+        assert_eq!(crate::sync::recovery::list(fs.as_ref(), "/").await.unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn sync_replacement_queue_settles_only_after_verified_publication() {
+        use crate::remotefs::RemoteFs;
+        for wrong_size in [false, true] {
+            let dir = test_dirs(if wrong_size { "sync-short" } else { "sync-publish" });
+            let local = dir.join("local");
+            let target = local.join("f.bin");
+            std::fs::write(&target, b"original").unwrap();
+            let store = Arc::new(object_store::memory::InMemory::new());
+            let data = b"new file content";
+            put_object(&store, "f.bin", data).await;
+            let session = memory_session(store);
+            let mgr = Arc::new(TransferManager::new());
+            queue_download(&mgr, "sync", &session, "f.bin", &target, data.len() as u64).await;
+            let old = crate::remotefs::local::LocalFs.list_dir(local.to_str().unwrap()).await.unwrap()
+                .into_iter().find(|e| e.name == "f.bin").unwrap();
+            let stage = crate::sync::recovery::StagedReplacement {
+                root: local.to_string_lossy().into_owned(), batch: crate::sync::recovery::new_batch(),
+                relative: "f.bin".into(),
+                expected: crate::sync::recovery::FileState { size: old.size, modified: old.modified.unwrap_or(0), etag: old.etag },
+                size: data.len() as u64 + u64::from(wrong_size),
+            };
+            let job = RetryInfo::SyncReplacement { session, source: "f.bin".into(),
+                direction: crate::sync::SyncDirection::RemoteToLocal, stage };
+            mgr.retry.lock().await.insert("sync".into(), job.clone());
+            run_job(Arc::clone(&mgr), "sync".into(), job).await;
+            let transfer = mgr.get("sync").await.unwrap();
+            if wrong_size {
+                assert_eq!(transfer.status, TransferStatus::Error);
+                assert_eq!(std::fs::read(&target).unwrap(), b"original");
+            } else {
+                assert_eq!(transfer.status, TransferStatus::Done, "{:?}", transfer.error);
+                assert_eq!(std::fs::read(&target).unwrap(), data);
+                assert_eq!(crate::sync::recovery::list(&crate::remotefs::local::LocalFs, local.to_str().unwrap()).await.unwrap().len(), 1);
+            }
+            assert!(mgr.publishing.lock().await.is_empty());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[tokio::test]

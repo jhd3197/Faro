@@ -2,11 +2,13 @@
 
 Manual sync, continuous folder sync, `faro-cli sync`, and Agent Bridge sync keep
 previous destination versions under `.faro-sync-recovery/<batch>/<relative-path>`.
-Mirror moves destination-only files there. Both Additive and Mirror move an
-existing destination file there before transferring its replacement.
+Mirror moves destination-only files there. Both Additive and Mirror transfer
+replacements to `.faro-sync-staging/<batch>/<relative-path>` first. Faro checks
+staged size against the preview, rechecks the destination, moves the old version
+into recovery, then publishes the staged file. The old file stays available
+throughout the transfer. Transfer success is reported only after publication.
 
-Recovery folders are excluded from sync on both sides, including nested recovery
-folders. They remain ordinary files that you can browse. Faro does not expire
+Recovery and staging folders are excluded from sync on both sides, including nested folders. They remain ordinary files that you can browse. Faro does not expire
 them automatically; they consume space until you restore or remove them.
 
 ## Review and resolve
@@ -36,11 +38,28 @@ ordinary file commands. Use an unused destination name to keep both versions.
 
 ## Interrupted sync
 
-If preserving a file fails, Faro stops instead of permanently deleting it or
-overwriting without recovery. Backends that cannot rename/move files refuse
-replacements and mirror removals. A failed transfer after preservation can leave
-the original name absent or partially written; its previous version remains in
-the recovery folder. Restore it there, or retry the transfer.
+If transfer or verification fails, the original file remains in place. If
+preserving it fails, Faro stops without overwriting it. If publication fails
+and the destination is still absent, Faro attempts to restore the previous file
+automatically. If a destination file appeared or cannot be inspected, Faro
+leaves it untouched and reports the recovery path instead of risking an overwrite.
+
+Local publication uses a no-replace hard link followed by removal of the staging
+name; filesystems that cannot support this fail safely. SFTP publication uses
+its rename operation. Other backends use a checked rename and may retain a race
+with external writers. This is not an atomic swap of the old and new file:
+there is a short gap between preserving the old version and publishing the new.
+
+The staged byte count is always checked, including empty files. Optional transfer
+checksum verification continues to apply where supported. Size checks alone
+are not proof of identical content.
+
+Pause and resume remain available while staging. The queue’s Pause and Cancel actions are refused during
+the short publication/rollback phase. Failed or canceled replacements require a
+fresh sync preview rather than the ordinary transfer Retry action. Replacement
+jobs are not resumed automatically after restarting Faro; re-plan sync instead.
+A process crash during publication can leave the previous version in recovery
+and the replacement in staging. Those files are not automatically expired.
 
 Mirror removals wait for queued copies to finish successfully. Sync is not a
 transaction: work completed before a later error is retained.

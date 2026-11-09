@@ -55,6 +55,16 @@ impl RemoteFs for LocalFs {
         Ok(())
     }
 
+    async fn rename_no_replace(&self, from: &str, to: &str) -> anyhow::Result<()> {
+        // Same-volume staging: creating the link atomically refuses collisions.
+        // Unsupported filesystems fail safely, without falling back to overwrite.
+        tokio::fs::hard_link(from, to).await.with_context(|| format!("publish {from} -> {to}"))?;
+        if let Err(e) = tokio::fs::remove_file(from).await {
+            tracing::warn!("published {to}, but staging link {from} remains: {e}");
+        }
+        Ok(())
+    }
+
     async fn delete(&self, path: &str, recursive: bool) -> anyhow::Result<()> {
         let meta = tokio::fs::symlink_metadata(path)
             .await

@@ -6,6 +6,11 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const DIRECTORY: &str = ".faro-sync-recovery";
+pub const STAGING: &str = ".faro-sync-staging";
+
+pub fn is_reserved(name: &str) -> bool {
+    name.eq_ignore_ascii_case(DIRECTORY) || name.eq_ignore_ascii_case(STAGING)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,9 +32,7 @@ impl From<&crate::scan::ScanEntry> for FileState {
 
 pub fn validate_root(root: &str) -> Result<()> {
     ensure!(
-        !root
-            .split(['/', '\\'])
-            .any(|s| s.eq_ignore_ascii_case(DIRECTORY)),
+        !root.split(['/', '\\']).any(is_reserved),
         "A recovery folder cannot be used as a sync root"
     );
     Ok(())
@@ -39,10 +42,9 @@ fn validate_relative(relative: &str) -> Result<()> {
     ensure!(
         !relative.is_empty()
             && !relative.contains(['\\', ':'])
-            && relative.split('/').all(|p| !p.is_empty()
-                && p != "."
-                && p != ".."
-                && !p.eq_ignore_ascii_case(DIRECTORY)),
+            && relative
+                .split('/')
+                .all(|p| !p.is_empty() && p != "." && p != ".." && !is_reserved(p)),
         "Invalid sync recovery path"
     );
     Ok(())
@@ -169,6 +171,94 @@ pub async fn check_missing(fs: &dyn RemoteFs, root: &str, relative: &str) -> Res
     Ok(())
 }
 
+/// Publication errors require a new preview, never an automatic transfer retry.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct PublicationError(pub String);
+
+#[derive(Debug, Clone)]
+pub struct StagedReplacement {
+    pub root: String,
+    pub batch: String,
+    pub relative: String,
+    pub expected: FileState,
+    pub size: u64,
+}
+
+impl StagedReplacement {
+    fn staging_relative(&self) -> String {
+        format!("{STAGING}/{}/{}", self.batch, self.relative)
+    }
+
+    pub fn path(&self) -> String {
+        join(&self.root, &self.staging_relative())
+    }
+
+    pub async fn prepare(&self, fs: &dyn RemoteFs) -> Result<()> {
+        validate_root(&self.root)?;
+        validate_relative(&self.relative)?;
+        validate_relative(&self.batch)?;
+        ensure!(!self.batch.contains('/'), "Invalid staging batch");
+        ensure!(
+            fs.capabilities().can_rename,
+            "Destination cannot publish staged replacements"
+        );
+        ensure!(
+            current_state(fs, &self.root, &self.relative)
+                .await?
+                .as_ref()
+                == Some(&self.expected),
+            "Destination changed since preview: {}. Re-plan before syncing.",
+            self.relative
+        );
+        ensure_parents(fs, &self.root, &self.staging_relative(), true).await
+    }
+
+    /// Verify independently of progress, preserve the old version, then publish.
+    pub async fn publish(&self, fs: &dyn RemoteFs) -> Result<()> {
+        self.publish_inner(fs)
+            .await
+            .map_err(|e| PublicationError(format!("{e:#}")).into())
+    }
+
+    async fn publish_inner(&self, fs: &dyn RemoteFs) -> Result<()> {
+        self.prepare(fs).await?;
+        let staged = current_state(fs, &self.root, &self.staging_relative())
+            .await?
+            .context("Staged replacement is missing; original unchanged")?;
+        ensure!(
+            staged.size == self.size,
+            "Staged size mismatch: expected {}, got {}; original unchanged",
+            self.size,
+            staged.size
+        );
+        let backup = join(
+            &self.root,
+            &format!("{DIRECTORY}/{}/{}", self.batch, self.relative),
+        );
+        let target = join(&self.root, &self.relative);
+        // Even preserving the old version can succeed remotely while losing
+        // its reply. Treat both moves as potentially ambiguous operations.
+        let publication =
+            match preserve(fs, &self.root, &self.batch, &self.relative, &self.expected).await {
+                Ok(_) => fs.rename_no_replace(&self.path(), &target).await,
+                Err(e) => Err(e.context("preserving previous version")),
+            };
+        if let Err(publication) = publication {
+            // A failed response is ambiguous. Restore only into an absent name.
+            match current_state(fs, &self.root, &self.relative).await {
+                Ok(None) => match fs.rename_no_replace(&backup, &target).await {
+                    Ok(()) => bail!("Replacement failed; previous file restored at {target}: {publication:#}"),
+                    Err(rollback) => bail!("Replacement failed ({publication:#}); automatic restore failed ({rollback:#}). Previous version: {backup}. Staged version: {}", self.path()),
+                },
+                Ok(Some(_)) => bail!("Replacement could not be confirmed ({publication:#}); a destination file exists and was left untouched. Previous version: {backup}. Re-plan after checking the destination."),
+                Err(check) => bail!("Replacement could not be confirmed ({publication:#}); destination inspection failed ({check:#}). Previous version: {backup}. Reconnect and inspect before retrying."),
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Move the previous version intact. If this fails, callers must not overwrite
 /// or delete the original. A failed subsequent transfer leaves it recoverable.
 pub async fn preserve(
@@ -283,6 +373,10 @@ pub async fn restore(fs: &dyn RemoteFs, root: &str, entry: &RecoveryEntry) -> Re
     fs.rename(&join(root, &stored_relative), &target).await?;
     Ok(target)
 }
+
+#[cfg(test)]
+#[path = "staging_tests.rs"]
+mod staging_tests;
 
 #[cfg(test)]
 mod tests {
