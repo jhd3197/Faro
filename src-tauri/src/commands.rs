@@ -254,6 +254,11 @@ pub async fn test_connection(
 }
 
 #[tauri::command]
+pub async fn diagnose_connection(profile: ConnectionProfile, app: AppHandle, state: State<'_, AppState>) -> Result<crate::diagnostics::DiagnosticReport, String> {
+    Ok(crate::diagnostics::run(profile, app, &state).await)
+}
+
+#[tauri::command]
 pub async fn disconnect(
     session_id: String,
     state: State<'_, AppState>,

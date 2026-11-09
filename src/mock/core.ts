@@ -367,6 +367,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     }
 
     // ---- sync ----
+    case "diagnose_connection":
+      return { ok: true, steps: [{ label: "Destination connection and sign-in", ok: true, detail: "Passed", elapsedMs: 120 }, { label: "Starting folder access", ok: true, detail: "Passed", elapsedMs: 40 }] };
     case "sync_plan":
       return data.syncPlan(a.localPath, a.remotePath);
     case "sync_recovery_list":

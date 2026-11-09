@@ -45,6 +45,7 @@ import type {
   SessionId,
   SyncDirection,
   SyncPlan,
+  DiagnosticReport,
   SyncRecoveryEntry,
   SyncStrategy,
   TerminalDataEvent,
@@ -141,6 +142,9 @@ export const ipc = {
 
   /** Connect with a profile as it stands in the editor (saved or not), then
    *  disconnect. Keychain-held secrets must be set first. */
+  diagnoseConnection: (profile: ConnectionProfile) =>
+    invoke<DiagnosticReport>("diagnose_connection", { profile }),
+
   testConnection: (profile: ConnectionProfile) =>
     invoke<void>("test_connection", { profile }),
 

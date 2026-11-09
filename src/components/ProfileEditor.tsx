@@ -24,6 +24,7 @@ import {
   type ProxyCommandConfig,
   type ProxyCommandKind,
   type AccessStatus,
+  type DiagnosticReport,
 } from "@/lib/types";
 import {
   ShieldOff,
@@ -655,16 +656,19 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   // Test connection: connect with the form as it stands, then disconnect.
   const [testing, setTesting] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<DiagnosticReport | null>(null);
   const [testResult, setTestResult] = useState<
     { ok: true } | { ok: false; title: string; message: string } | null
   >(null);
   const testConnection = async () => {
     setTesting(true);
     setTestResult(null);
+    setDiagnostic(null);
     try {
       await persistSecrets();
-      await ipc.testConnection(buildProfile());
-      setTestResult({ ok: true });
+      const report = await ipc.diagnoseConnection(buildProfile());
+      setDiagnostic(report);
+      setTestResult(report.ok ? { ok: true } : { ok: false, title: "Connection check stopped", message: report.steps.find(step => !step.ok)?.detail ?? "No destination was verified." });
     } catch (e) {
       setTestResult({ ok: false, title: "Couldn't connect", message: messageOf(e) });
     } finally {
@@ -1411,6 +1415,19 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               )}
             </div>
           )}
+
+          {diagnostic && <div className="mx-5 mb-3 max-h-48 overflow-auto rounded-md border border-border bg-bg-subtle px-3 py-2 text-[11px]">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-semibold">Connection diagnostics</span>
+              <CopyTextButton text={JSON.stringify(diagnostic, null, 2)} label />
+            </div>
+            {diagnostic.steps.map((step, index) => <div key={index} className="flex items-start gap-2 border-t border-border-subtle py-1.5">
+              {step.ok ? <Check size={12} className="mt-0.5 shrink-0 text-success" /> : <X size={12} className="mt-0.5 shrink-0 text-danger" />}
+              <div className="min-w-0 flex-1"><div>{step.label}</div>{!step.ok && <p className="text-text-muted">{step.detail}</p>}</div>
+              <span className="text-text-dim">{step.elapsedMs} ms</span>
+            </div>)}
+            <p className="mt-2 text-text-dim">The copied report excludes addresses, usernames, paths, and credentials.</p>
+          </div>}
 
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
             {!canSave ? (

@@ -1408,3 +1408,8 @@ export interface BackupSummary {
   hasSync: boolean;
   dbBytes: number;
 }
+
+export interface DiagnosticReport {
+  ok: boolean;
+  steps: { label: string; ok: boolean; detail: string; elapsedMs: number }[];
+}
