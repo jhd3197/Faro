@@ -880,7 +880,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                     value="cloudflarecert"
                     disabled={cfServiceToken && authKind !== "cloudflarecert"}
                   >
-                    Cloudflare identity (short-lived certificate)
+                    Cloudflare identity
                     {cfServiceToken ? " — not with a service token" : ""}
                   </option>
                 )}
@@ -1174,8 +1174,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             onUnpair={() => setAgentKey(undefined)}
           />
           {agentKey && <div className="mt-3 space-y-2 rounded-md border border-border p-3">
-            <div className="text-xs font-medium">Internet relay (optional)</div>
-            <p className="text-[11px] text-text-muted">Use a self-hosted relay after pairing these devices. Leave the address empty for a direct connection.</p>
+            <div className="flex items-center gap-2 text-xs font-medium">Internet relay
+              <ConnectionHelp label="Internet relay help">Pair the devices first, then enter your self-hosted relay address and public key. Leave the address empty for a direct connection.</ConnectionHelp>
+            </div>
             <input className={inputCls} aria-label="Relay address" placeholder="relay.example.com:8723" value={agentRelayAddress} onChange={e => setAgentRelayAddress(e.target.value)} />
             <input className={inputCls} aria-label="Relay public key" placeholder="Relay public key (base64)" value={agentRelayKey} onChange={e => setAgentRelayKey(e.target.value)} />
           </div>}</>
@@ -1313,7 +1314,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </summary>
           <div className="pt-4">
           {organizationFields}
-        {group.trim() && protocol === "sftp" && <Field label="Group gateway (applies to this group and nested groups)">
+        {group.trim() && protocol === "sftp" && <Field label="Group gateway" help={<>Saved immediately for this group and nested groups. Explicit connection routes take precedence. Use / in group names to inherit a parent gateway.</>}>
           <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
             const gateway = e.target.value;
             try { await ipc.setGroupGateway(group.trim(), gateway || null); setGroupGateways(await ipc.groupGateways()); }
@@ -1322,17 +1323,17 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             <option value="">No group gateway / inherit parent</option>
             {profiles.filter(p => p.protocol === "sftp").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          <p className="text-[11px] text-text-muted">Saved immediately. Explicit connection routes take precedence. Use / in group names to inherit a parent group's gateway.</p>
+
         </Field>}
         {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div className="space-y-2 rounded-md border border-border p-3">
-          <Field label="Credential source">
+          <Field label="Credential source" help={<>Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a connection opens.</>}>
             <select className={inputCls} value={credentialProvider} onChange={e => setCredentialProvider(e.target.value)}>
               <option value="">Saved credential</option>
               {[...new Set([...credentialProviders, ...(credentialProvider ? [credentialProvider] : [])])].map(provider => <option key={provider} value={provider}>{provider}{!credentialProviders.includes(provider) ? " (not configured here)" : ""}</option>)}
             </select>
           </Field>
           {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
-          <p className="text-[11px] text-text-muted">Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a new connection opens.</p>
+
         </div>}
         {notesField}
         {iconUnknown && (
@@ -1441,9 +1442,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             <span className="block text-xs font-medium text-text">
               Auto-connect on startup
             </span>
-            <span className="block text-[11px] text-text-dim">
-              Open this server automatically when Faro launches.
-            </span>
+
           </span>
         </label>
 
@@ -1594,17 +1593,14 @@ function CloudflareCertHint({
   if (!routed) {
     return (
       <Hint tone="warn">
-        Cloudflare issues these certificates through Access. Choose{" "}
-        <span className="font-medium text-text">Through Cloudflare</span> above.
+        Choose Cloudflare above to use certificate authentication.
       </Hint>
     );
   }
   if (serviceToken) {
     return (
       <Hint tone="warn">
-        A service token has no person to issue a certificate for. Connections
-        that faro-cli or the Agent Bridge use unattended should log in with a
-        key or password and keep the service token.
+        Service tokens require password or key authentication.
       </Hint>
     );
   }
@@ -1621,29 +1617,18 @@ function CloudflareCertHint({
       ? status.identity.split("@")[0]
       : null;
   return (
-    <Hint always>
-      Logs in with your Cloudflare identity: no key to choose or store. Each
-      connect gets a certificate valid for a few minutes, and removing you from
-      the Access policy removes your access.
-      {principal ? (
-        <span className="mt-1 block" data-testid="cf-cert-principal">
-          Certificate for <span className="font-mono text-text">{principal}</span>{" "}
-          ({status?.identity}).
-          {username && username !== principal && (
-            <>
-              {" "}
-              To log in as <span className="font-mono text-text">{username}</span>, the
-              server must accept <span className="font-mono text-text">{principal}</span>{" "}
-              for that user (its AuthorizedPrincipalsFile).
-            </>
-          )}
-        </span>
-      ) : (
-        <span className="mt-1 block">
-          Sign in above to see which user the certificate is for.
-        </span>
-      )}
-    </Hint>
+    <div className="mb-3 flex items-start gap-2 text-xs text-text-muted">
+      <span className="min-w-0 flex-1" data-testid={principal ? "cf-cert-principal" : undefined}>
+        {principal ? <>Certificate for <span className="font-mono text-text">{principal}</span> ({status?.identity}).
+          {username && username !== principal && <span className="mt-1 block">Server must allow {principal} to log in as {username}.</span>}
+        </> : hostname ? "Sign in to Cloudflare above." : "Enter the server address to sign in."}
+      </span>
+      <ConnectionHelp label="Cloudflare identity help">
+        Faro uses your Cloudflare identity to request a short-lived SSH certificate. No private key needs to be selected here.
+        Removing your identity from the Access policy removes access. If the certificate user differs from the login user,
+        the server must permit it in AuthorizedPrincipalsFile.
+      </ConnectionHelp>
+    </div>
   );
 }
 
@@ -1985,9 +1970,7 @@ function KeyAuthSection({
             {genBusy ? "Generating…" : "Generate key"}
           </button>
           <div className="mt-1.5 text-[11px] leading-relaxed text-text-dim">
-            Faro writes the private key here (and a{" "}
-            <span className="font-mono">.pub</span> beside it) and points this
-            connection at it. Then add the public key to the server.
+            Saves a key pair here. Add the public key to the server afterward.
           </div>
         </div>
       )}
@@ -2170,9 +2153,7 @@ function AgentSection({
         </button>
         {found && found.length === 0 && !scanning && (
           <div className="mt-1.5 text-[11px] text-text-dim">
-            No devices found. Enable Faro Agent on your phone or TV, or Remote
-            control in the desktop Faro app. Keep both devices on the same
-            network, or enter the device's IP above.
+            No devices found. Enter an address or enable Remote control on the other device.
           </div>
         )}
         {found && found.length > 0 && (
@@ -2233,7 +2214,7 @@ function AgentSection({
         <div className="mb-3 flex items-center justify-between rounded-md border border-success/30 bg-success/10 px-2.5 py-2">
           <span className="flex items-center gap-1.5 text-xs text-text">
             <Check size={13} className="text-success" />
-            Paired — the daemon's key is pinned.
+            Paired
           </span>
           <button
             type="button"
@@ -2251,48 +2232,14 @@ function AgentSection({
               ? `Pair with ${selectedMachine.hostname || host}`
               : "Pair with this machine"}
           </div>
-          <div className="mb-2 text-[11px] leading-relaxed text-text-dim">
-            {selectedMachine?.os === "android" ? (
-              <>
-                On your phone or TV, open Faro Agent, grant storage access,
-                enable the agent, and select Show pairing code. Enter that
-                6-digit code here.
-              </>
-            ) : selectedMachine && selectedMachine.pairable === false ? (
-              <>
-                <span className="font-medium text-text-muted">
-                  {selectedMachine.hostname || host}
-                </span>{" "}
-                isn't accepting pairing right now. On that machine run{" "}
-                <span className="font-mono text-text-muted">faro-agentd pair</span> (or
-                open its Faro app →{" "}
-                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
-                {" "}→ Show pairing code),
-                then type the code here.
-              </>
-            ) : selectedMachine ? (
-              <>
-                Type the 6-digit code showing on{" "}
-                <span className="font-medium text-text-muted">
-                  {selectedMachine.hostname || host}
-                </span>
-                . No code there? Run{" "}
-                <span className="font-mono text-text-muted">faro-agentd pair</span> on
-                it, or open its Faro app →{" "}
-                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
-                {" "}→ Show pairing code.
-              </>
-            ) : (
-              <>
-                On the machine you want to control, run{" "}
-                <span className="font-mono text-text-muted">faro-agentd pair</span> (or
-                open its Faro app →{" "}
-                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
-                {" "}→ Show pairing code) and
-                type the 6-digit code below. Pairing sets up an end-to-end encrypted
-                link and pins the machine's key — you won't need the code again.
-              </>
-            )}
+          <div className="mb-2 flex items-center gap-2 text-xs text-text-dim">
+            <span className="flex-1">{selectedMachine?.pairable === false ? "Enable pairing on the other device." : "Enter the other device’s 6-digit pairing code."}</span>
+            <ConnectionHelp label="Find the pairing code">
+              {selectedMachine?.os === "android"
+                ? "On your phone or TV, open Faro Agent, allow storage access, enable the agent, and choose Show pairing code."
+                : <>On the other computer, open <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump> → Show pairing code, or run <code>faro-agentd pair</code>.</>}
+              <p className="mt-2">Pairing pins the device’s key for an encrypted connection. You only need the code once.</p>
+            </ConnectionHelp>
           </div>
           <div className="flex gap-2">
             <input
@@ -2517,19 +2464,9 @@ function OAuthConnectSection({
 
   return (
     <>
-      <Hint label="Account authorization help">
-        Connect a {label} account. Authorizing opens your browser once; Faro
-        stores the refresh token in your OS keychain and never sees your {label}{" "}
-        password.
-      </Hint>
 
-      {builtin === false && (
-        <Hint tone="warn">
-          This build of Faro has no built-in {label} app, so you need to
-          register your own (free, about five minutes) and paste its Client ID
-          here.
-        </Hint>
-      )}
+
+      {builtin === false && <p className="mb-3 text-xs text-text-muted">Your own {label} app is required.</p>}
 
       {builtin === true && (
         <label className="mb-3 flex items-center gap-2 text-xs text-text-muted">
@@ -2547,24 +2484,11 @@ function OAuthConnectSection({
 
       {usingOwnApp && setup && (
         <>
-          <div className="mb-3 rounded-md border border-border bg-bg-subtle px-2.5 py-2 text-[11.5px] leading-relaxed text-text-muted">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="font-medium text-text">Register a {label} app</span>
-              <button
-                type="button"
-                onClick={() => ipc.openExternalUrl(setup.console).catch(() => {})}
-                className="text-[11px] text-accent underline hover:text-text"
-              >
-                Open developer console
-              </button>
-            </div>
-            <ol className="list-decimal space-y-0.5 pl-4">
-              {setup.steps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-          </div>
-          <Field label="Client ID">
+          <Field label="Client ID" help={<>
+              <button type="button" onClick={() => ipc.openExternalUrl(setup.console).catch(() => {})}
+                className="mb-2 text-accent underline hover:text-text">Open developer console</button>
+              <ol className="list-decimal space-y-1 pl-4">{setup.steps.map(step => <li key={step}>{step}</li>)}</ol>
+            </>}>
             <input
               value={clientId}
               onChange={(e) => changeClientId(e.target.value)}
@@ -2578,10 +2502,7 @@ function OAuthConnectSection({
             <PasswordInput value={clientSecret} onChange={setClientSecret} generate={false} />
           </Field>
           {secretSaved && (
-            <Hint always>
-              A secret is already in your OS keychain; leave the field blank to
-              keep it.
-            </Hint>
+            <p className="mb-3 text-xs text-text-dim">Secret saved. Leave blank to keep it.</p>
           )}
         </>
       )}
@@ -2848,10 +2769,7 @@ function ShopifySection({
         />
       </Field>
 
-      <Hint always>
-        Browse and edit theme files like an FTP site. Prefer an
-        unpublished/duplicate theme — changes deploy instantly.
-      </Hint>
+      <Hint tone="warn">Theme edits publish immediately. Use a duplicate theme.</Hint>
 
       <Field group label="Auth">
         <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-bg-subtle p-1">
@@ -2888,12 +2806,7 @@ function ShopifySection({
         </>
       )}
 
-      <Hint always>
-        Stored in your OS keychain — never in the connections file.
-        {secretSaved
-          ? " A credential is already saved; leave the fields blank to keep it."
-          : ""}
-      </Hint>
+      {secretSaved && <p className="mb-3 text-xs text-text-dim">Saved credential. Leave blank to keep it.</p>}
     </>
   );
 }
@@ -3052,12 +2965,7 @@ function HubSpotSection({
         </Hint>
       )}
 
-      <Hint always>
-        Stored in your OS keychain — never in the connections file.
-        {secretSaved
-          ? " A token is already saved; leave the field blank to keep it."
-          : ""}
-      </Hint>
+      {secretSaved && <p className="mb-3 text-xs text-text-dim">Saved credential. Leave blank to keep it.</p>}
     </>
   );
 }
@@ -3154,12 +3062,7 @@ function DynamicsSection({
             <PasswordInput value={clientSecret} onChange={setClientSecret} />
           </Field>
 
-          <Hint always>
-            Stored in your OS keychain — never in the connections file.
-            {secretSaved
-              ? " A credential is already saved; leave the fields blank to keep it."
-              : ""}
-          </Hint>
+          {secretSaved && <p className="mb-3 text-xs text-text-dim">Saved credential. Leave blank to keep it.</p>}
         </>
       ) : urlOk ? (
         <OAuthConnectSection
@@ -3173,8 +3076,7 @@ function DynamicsSection({
         />
       ) : (
         <Hint tone="warn">
-          Enter a valid environment URL above before signing in — the delegated
-          flow is scoped to that organization.
+          Enter the environment URL to sign in.
         </Hint>
       )}
     </>
@@ -3639,11 +3541,9 @@ function CloudflareServerFields({
       )}
       {serviceTokenId.trim() && (
         <Hint tone="warn">
-          This connection still carries its own service token (
-          <span className="font-mono">{serviceTokenId}</span>). Faro now keeps one service token
-          for the whole Cloudflare account, in{" "}
+          This connection uses a legacy service token. Account tokens are in{" "}
           <SettingsJump entry="profileCloudflareAccount">Settings › Cloudflare</SettingsJump>
-          , for faro-cli and the Agent Bridge.{" "}
+          .{" "}
           <button type="button" onClick={onRemoveToken} className="font-medium text-accent hover:underline">
             Remove it from this connection
           </button>

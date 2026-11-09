@@ -81,6 +81,35 @@ try {
   assert.ok(await page.evaluate(() => document.body.textContent.includes("Works without FTP or SSH")));
   await page.click('[aria-label="Close help"]');
   await page.screenshot({ path: path.join(os.tmpdir(), "faro-compact-wordpress.png") });
+  for (const protocol of ["dropbox", "onedrive", "gdrive", "box"]) {
+    await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
+    await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));
+    await page.evaluate(protocol => window.__demo.useLayout.getState().openNewConnection({ protocol }), protocol);
+    await page.waitForSelector('[aria-label="Client ID help"]');
+    assert.equal(await page.evaluate(() => !!document.querySelector('ol')), false);
+    assert.equal(await page.evaluate(() => document.body.textContent.includes("This build of Faro")), false);
+    await page.click('[aria-label="Client ID help"]');
+    await page.waitForSelector('[role="region"] ol');
+    assert.ok(await page.$$eval('[role="region"] ol li', es => es.length >= 4));
+    assert.ok(await page.evaluate(() => document.body.textContent.includes("Open developer console")));
+    await page.click('[aria-label="Close help"]');
+    if (protocol === "onedrive") await page.screenshot({ path: path.join(os.tmpdir(), "faro-audit-onedrive.png") });
+  }
+  await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));
+  await page.evaluate(() => window.__demo.useLayout.getState().openNewConnection({ protocol: "sftp", auth: { kind: "agent" } }));
+  await page.waitForSelector('[role="radio"]:nth-child(2)');
+  await page.click('[role="radio"]:nth-child(2)');
+  const certificateSelect = await page.evaluateHandle(() => [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'cloudflarecert')));
+  await certificateSelect.asElement().select('cloudflarecert');
+  await page.waitForSelector('[aria-label="Cloudflare identity help"]');
+  assert.equal(await page.evaluate(() => document.body.textContent.includes("short-lived SSH certificate")), false);
+  assert.ok(await page.evaluate(() => document.body.textContent.includes("Enter the server address to sign in.")));
+  await page.click('[aria-label="Cloudflare identity help"]');
+  assert.ok(await page.evaluate(() => document.body.textContent.includes("AuthorizedPrincipalsFile")));
+  await page.click('[aria-label="Close help"]');
+  await page.screenshot({ path: path.join(os.tmpdir(), "faro-audit-cloudflare.png") });
+
   await page.evaluate(async () => {
     const d = window.__demo;
     d.useLayout.getState().closeDialog();
