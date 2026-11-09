@@ -210,6 +210,8 @@ test("settings deep links", { timeout: 120000 }, async () => {
       if (!btn) throw new Error("Faro Agent protocol missing");
       btn.click();
     });
+    await page.waitForSelector('[aria-label="Find the pairing code"]');
+    await page.click('[aria-label="Find the pairing code"]');
     await page.waitForSelector('[data-settings-link="pairingRemoteControl"]');
     await page.click('[data-settings-link="pairingRemoteControl"]');
     await page.waitForFunction(
