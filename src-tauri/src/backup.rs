@@ -63,7 +63,7 @@ const ARGON_LANES: u32 = 1;
 /// The config files carried in a backup, in the app data dir. `faro.db` is
 /// handled separately (it needs a WAL-safe snapshot on export and staging on
 /// restore).
-const CONFIG_FILES: &[&str] = &["profiles.json", "bridge.json", "foldersync.json"];
+const CONFIG_FILES: &[&str] = &["profiles.json", "bridge.json", "foldersync.json", "profile-groups.json"];
 
 /// What a backup contains — shown in the UI's "what's inside" summary and
 /// returned after an import so the caller can report what was restored.
@@ -93,6 +93,8 @@ struct Archive {
     bridge_json: Option<String>,
     #[serde(default)]
     foldersync_json: Option<String>,
+    #[serde(default)]
+    profile_groups_json: Option<String>,
     /// base64 of the `faro.db` snapshot bytes.
     faro_db_b64: String,
     #[serde(default)]
@@ -142,6 +144,7 @@ pub fn export(dir: &Path, db: &Db, password: &str, dest: &Path) -> Result<Backup
         profiles_json: read_opt("profiles.json"),
         bridge_json: read_opt("bridge.json"),
         foldersync_json: read_opt("foldersync.json"),
+        profile_groups_json: read_opt("profile-groups.json"),
         faro_db_b64: base64::engine::general_purpose::STANDARD.encode(&db_bytes),
         credentials: collect_credentials(dir, db),
     };
@@ -175,6 +178,7 @@ pub fn import(dir: &Path, password: &str, src: &Path, defer: bool) -> Result<Bac
     stage_opt(dir, "profiles.json", archive.profiles_json.as_deref())?;
     stage_opt(dir, "bridge.json", archive.bridge_json.as_deref())?;
     stage_opt(dir, "foldersync.json", archive.foldersync_json.as_deref())?;
+    stage_opt(dir, "profile-groups.json", Some(archive.profile_groups_json.as_deref().unwrap_or("{}")))?;
 
     // Stage the DB snapshot.
     let db_bytes = base64::engine::general_purpose::STANDARD

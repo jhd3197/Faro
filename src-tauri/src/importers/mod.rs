@@ -195,6 +195,9 @@ impl ProfilePreview {
             endpoint: None,
             account: None,
             agent_key: None,
+            agent_relay: None,
+            notes: None,
+            credential_ref: None,
             group: None,
             sort_order: None,
             icon: None,
@@ -210,6 +213,7 @@ impl ProfilePreview {
             jump_via: None,
             proxy_command: self.proxy_command,
             oauth_client_id: None,
+            cf_forwards: Vec::new(),
         }
     }
 }

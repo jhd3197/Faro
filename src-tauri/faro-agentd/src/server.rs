@@ -146,7 +146,7 @@ pub async fn serve(listener: TcpListener, daemon: Daemon) -> Result<()> {
 
 /// Sniff which handshake the client is opening and route it. `peek` doesn't
 /// consume, so the handshake drivers still read the stream from byte 0.
-async fn dispatch(stream: TcpStream, daemon: Daemon) -> Result<()> {
+pub(crate) async fn dispatch(stream: TcpStream, daemon: Daemon) -> Result<()> {
     let first = tokio::time::timeout(SNIFF_TIMEOUT, sniff_frame_len(&stream))
         .await
         .context("timed out waiting for a handshake")??;

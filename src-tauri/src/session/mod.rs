@@ -39,7 +39,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex, Notify};
 use uuid::Uuid;
 
 // ---- Host-key verification plumbing ----
@@ -473,6 +473,8 @@ pub struct ClientHandler {
     host: String,
     port: u16,
     verifier: Arc<dyn HostKeyVerifier>,
+    /// Signalled once the server's key arrives. See `connect_stream_bounded`.
+    key_check_reached: Arc<Notify>,
 }
 
 /// An SSH session opened the way the GUI opens one (keys accepted once are
@@ -494,7 +496,7 @@ pub(crate) async fn ssh_session_for_tests(
 #[cfg(test)]
 impl ClientHandler {
     pub(crate) fn for_tests(host: &str, port: u16, verifier: Arc<dyn HostKeyVerifier>) -> Self {
-        Self { host: host.into(), port, verifier }
+        Self { host: host.into(), port, verifier, key_check_reached: Arc::new(Notify::new()) }
     }
 }
 
@@ -506,6 +508,7 @@ impl client::Handler for ClientHandler {
         &mut self,
         server_public_key: &key::PublicKey,
     ) -> Result<bool, Self::Error> {
+        self.key_check_reached.notify_one();
         let status = known_hosts::check(&self.host, self.port, server_public_key);
         let fingerprint = known_hosts::fingerprint(server_public_key);
         let key_type = server_public_key.name().to_string();
@@ -1438,6 +1441,8 @@ pub async fn open_session(
     profile: &ConnectionProfile,
     verifier: Arc<dyn HostKeyVerifier>,
 ) -> Result<Session> {
+    let resolved = crate::credential_refs::resolve_profile(profile.clone()).await?;
+    let profile = &resolved;
     match profile.protocol.as_str() {
         "sftp" | "ssh" | "" => {
             // The CLI has no interactive prompt UI, so forced-change/KBI servers
@@ -1597,6 +1602,44 @@ pub struct SshConnection {
     pub jump_handles: Vec<client::Handle<ClientHandler>>,
 }
 
+/// How long a server gets to start the SSH handshake. A hung host can accept
+/// TCP from the kernel's backlog and then never send a banner; without a limit
+/// the connect waits forever.
+const SSH_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `client::connect_stream` with a limit on the unattended part of the
+/// handshake. The limit stops once the server's key arrives: from there the
+/// verifier may be waiting on a person answering a host-key prompt.
+async fn connect_stream_bounded<S>(
+    config: Arc<client::Config>,
+    stream: S,
+    handler: ClientHandler,
+) -> Result<client::Handle<ClientHandler>, russh::Error>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let key_check = handler.key_check_reached.clone();
+    until_key_check_or_timeout(
+        client::connect_stream(config, stream, handler),
+        &key_check,
+        SSH_HANDSHAKE_TIMEOUT,
+    )
+    .await
+}
+
+async fn until_key_check_or_timeout<T>(
+    connect: impl std::future::Future<Output = Result<T, russh::Error>>,
+    key_check: &Notify,
+    limit: Duration,
+) -> Result<T, russh::Error> {
+    tokio::pin!(connect);
+    tokio::select! {
+        res = &mut connect => res,
+        _ = key_check.notified() => connect.await,
+        _ = tokio::time::sleep(limit) => Err(russh::Error::ConnectionTimeout),
+    }
+}
+
 pub async fn ssh_connect(
     profile: &ConnectionProfile,
     verifier: Arc<dyn HostKeyVerifier>,
@@ -1647,8 +1690,9 @@ pub async fn ssh_connect(
                 host: profile.host.clone(),
                 port: profile.port,
                 verifier,
+                key_check_reached: Arc::new(Notify::new()),
             };
-            let mut session = client::connect_stream(config, channel.into_stream(), handler)
+            let mut session = connect_stream_bounded(config, channel.into_stream(), handler)
                 .await
                 .with_context(|| {
                     format!(
@@ -1682,11 +1726,12 @@ pub async fn ssh_connect(
             host: jump_host.clone(),
             port: jump_port,
             verifier: verifier.clone(),
+            key_check_reached: Arc::new(Notify::new()),
         };
         let (stream, diag) = dial_first_hop(profile, &jump_host, jump_port, &jump_username, &prompter)
             .await
             .with_context(|| format!("connect to jump host {jump_host}:{jump_port}"))?;
-        let mut jump = match client::connect_stream(config.clone(), stream, jump_handler).await {
+        let mut jump = match connect_stream_bounded(config.clone(), stream, jump_handler).await {
             Ok(jump) => jump,
             Err(e) => return Err(explain(diag, e, format!("connect to jump host {jump_host}:{jump_port}")).await),
         };
@@ -1713,8 +1758,9 @@ pub async fn ssh_connect(
             host: profile.host.clone(),
             port: profile.port,
             verifier,
+            key_check_reached: Arc::new(Notify::new()),
         };
-        let mut session = client::connect_stream(config, channel.into_stream(), handler)
+        let mut session = connect_stream_bounded(config, channel.into_stream(), handler)
             .await
             .with_context(|| {
                 format!(
@@ -1733,10 +1779,11 @@ pub async fn ssh_connect(
         host: profile.host.clone(),
         port: profile.port,
         verifier,
+        key_check_reached: Arc::new(Notify::new()),
     };
     let (stream, diag) =
         dial_first_hop(profile, &profile.host, profile.port, &profile.username, &prompter).await?;
-    let mut session = match client::connect_stream(config, stream, handler).await {
+    let mut session = match connect_stream_bounded(config, stream, handler).await {
         Ok(session) => session,
         Err(e) => return Err(explain(diag, e, format!("connect to {}:{}", profile.host, profile.port)).await),
     };
@@ -2110,6 +2157,7 @@ impl SessionManager {
         prompter: Arc<dyn AuthPrompter>,
     ) -> Result<String> {
         let _ = app;
+        let profile = crate::credential_refs::resolve_profile(profile).await?;
         let session = match profile.protocol.as_str() {
             "sftp" | "ssh" | "" => {
                 let accepted = AcceptedKeys::default();
@@ -2406,5 +2454,31 @@ mod sudo_live_tests {
             .await
             .unwrap();
         assert_eq!(left.stdout.trim(), "gone", "sudo'd sleep survived the timeout");
+    }
+}
+
+#[cfg(test)]
+mod handshake_timeout_tests {
+    use super::*;
+
+    const LIMIT: Duration = Duration::from_millis(50);
+
+    #[tokio::test]
+    async fn silent_server_times_out() {
+        let res: Result<(), _> =
+            until_key_check_or_timeout(std::future::pending(), &Notify::new(), LIMIT).await;
+        assert!(matches!(res, Err(russh::Error::ConnectionTimeout)));
+    }
+
+    #[tokio::test]
+    async fn host_key_prompt_can_outlast_the_limit() {
+        let key_check = Notify::new();
+        key_check.notify_one();
+        let slow_prompt = async {
+            tokio::time::sleep(LIMIT * 4).await;
+            Ok(7)
+        };
+        let res = until_key_check_or_timeout(slow_prompt, &key_check, LIMIT).await;
+        assert!(matches!(res, Ok(7)));
     }
 }

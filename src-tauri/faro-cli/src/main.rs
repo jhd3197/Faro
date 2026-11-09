@@ -299,6 +299,29 @@ enum CfCmd {
     Login { host: String },
     /// Install or update Faro's own copy of the official cloudflared.
     Install,
+    /// Start or stop a named Access TCP forward saved on a connection.
+    ///
+    /// Uses the same cloudflared, Access credentials and forward definitions
+    /// as the app. `name` is the forward's name, or `connection/name` when
+    /// more than one connection uses it.
+    Forward {
+        #[command(subcommand)]
+        action: CfForwardCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CfForwardCmd {
+    /// Listen on the forward's local port (`cloudflared access tcp`).
+    Start {
+        /// Forward name, or `connection/name` when it isn't unique.
+        name: String,
+    },
+    /// Stop a forward started from the app or from `start`.
+    Stop {
+        /// Forward name, or `connection/name` when it isn't unique.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -810,6 +833,7 @@ async fn cmd_cf(store: &ProfileStore, action: CfCmd) -> Result<()> {
             println!("{host}: {}", describe_access(&s));
             Ok(())
         }
+        CfCmd::Forward { action } => cmd_cf_forward(store, action).await,
         CfCmd::Install => {
             let dest = cloudflared::managed_path(&dir);
             eprintln!("Downloading the official cloudflared release…");
@@ -820,6 +844,32 @@ async fn cmd_cf(store: &ProfileStore, action: CfCmd) -> Result<()> {
                 std::fs::write(dir.join("cloudflared.json"), serde_json::to_vec_pretty(&cfg)?)?;
             }
             println!("Installed cloudflared {version} to {} (checksum verified)", dest.display());
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_cf_forward(store: &ProfileStore, action: CfForwardCmd) -> Result<()> {
+    let dir = default_data_dir()?;
+    let profiles = store.list().await?;
+    match action {
+        CfForwardCmd::Start { name } => {
+            let (profile, forward) = faro_lib::cf_forward::resolve(&profiles, &name)?;
+            let running = faro_lib::cf_forward::start(&dir, profile, forward, "cli", None)?;
+            if running.already {
+                println!("{} is already listening on 127.0.0.1:{}", running.name, running.local_port);
+            } else {
+                println!(
+                    "{} listening on 127.0.0.1:{} → {}",
+                    running.name, running.local_port, running.hostname
+                );
+            }
+            Ok(())
+        }
+        CfForwardCmd::Stop { name } => {
+            let (profile, forward) = faro_lib::cf_forward::resolve(&profiles, &name)?;
+            faro_lib::cf_forward::stop(&dir, &profile.id, &forward.name)?;
+            println!("stopped {}", forward.name);
             Ok(())
         }
     }
@@ -1206,6 +1256,10 @@ async fn cmd_sync(
         faro_lib::sync::SyncStrategy::Additive
     };
 
+    if !dry_run {
+        faro_lib::sync::journal::recover(local_fs.as_ref(), "local", &local_path).await?;
+        faro_lib::sync::journal::recover(remote_fs.as_ref(), &faro_lib::sync::recovery::destination_key(&profile, false), &remote_path).await?;
+    }
     let plan = faro_lib::sync::plan(
         local_fs.as_ref(),
         remote_fs.as_ref(),
@@ -1255,6 +1309,13 @@ async fn cmd_sync(
         return Ok(());
     }
 
+    let destination_fs: &dyn RemoteFs = match direction {
+        Dir::Push => remote_fs.as_ref(),
+        Dir::Pull => local_fs.as_ref(),
+    };
+    faro_lib::sync::recovery::validate_plan(destination_fs, &plan).await?;
+    let recovery_root = faro_lib::sync::recovery::destination_root(&plan);
+    let recovery_batch = faro_lib::sync::recovery::new_batch();
     for directory in &plan.directories {
         match direction {
             Dir::Push => remote_fs.create_dir(directory).await?,
@@ -1268,17 +1329,33 @@ async fn cmd_sync(
     );
     for c in &plan.copies {
         bar.set_message(c.relative.clone());
+        let stage = c.destination_state.as_ref().map(|previous| faro_lib::sync::recovery::StagedReplacement {
+            destination_key: Some(faro_lib::sync::recovery::destination_key(&profile, matches!(direction, Dir::Pull))),
+            root: recovery_root.to_string(), batch: faro_lib::sync::recovery::new_batch(),
+            relative: c.relative.clone(), expected: previous.clone(), size: c.size,
+        });
+        let guard = if let Some(stage) = &stage { faro_lib::sync::journal::begin(stage)? } else { None };
+        let destination = if let Some(stage) = &stage {
+            stage.prepare(destination_fs).await?;
+            stage.path()
+        } else {
+            faro_lib::sync::recovery::check_missing(destination_fs, recovery_root, &c.relative).await?;
+            c.destination_path.clone()
+        };
         match direction {
             Dir::Push => {
-                let dest_parent = parent_of(&c.destination_path);
+                let dest_parent = parent_of(&destination);
                 upload_file(&session, &c.source_path, &dest_parent, &basename(&c.source_path))
                     .await?;
             }
             Dir::Pull => {
-                let dest_parent = parent_of(&c.destination_path);
+                let dest_parent = parent_of(&destination);
                 tokio::fs::create_dir_all(&dest_parent).await.ok();
                 download_file(&session, &c.source_path, &dest_parent).await?;
             }
+        }
+        if let Some(stage) = &stage {
+            stage.publish_guarded(destination_fs, guard).await?;
         }
         bar.inc(1);
     }
@@ -1289,9 +1366,10 @@ async fn cmd_sync(
             Dir::Push => remote_fs.as_ref(),
             Dir::Pull => local_fs.as_ref(),
         };
-        fs.delete(&d.path, false).await.with_context(|| format!("sync deletion failed: {}", d.path))?;
+        faro_lib::sync::recovery::preserve(fs, recovery_root, &recovery_batch, &d.relative,
+            d.destination_state.as_ref().ok_or_else(|| anyhow!("Missing sync preview; re-plan"))?).await?;
     }
-    eprintln!("Sync complete.");
+    eprintln!("Sync complete. Previous versions are kept under {recovery_root}/.faro-sync-recovery/; restore them through Faro’s Sync dialog or move them back manually.");
     Ok(())
 }
 
@@ -2448,9 +2526,18 @@ fn print_exec_output_and_exit(body: &serde_json::Value) -> Result<()> {
     if body.get("timedOut").and_then(|v| v.as_bool()).unwrap_or(false) {
         eprintln!("{}", warn("command timed out before finishing"));
     }
+    std::process::exit(exec_exit_code(body))
+}
+
+/// Exit code for an exec result. A timeout is always a failure, reported as
+/// 124 like coreutils `timeout`: the wire carries a null exitCode for it, and
+/// exiting 0 would tell scripts the command succeeded.
+fn exec_exit_code(body: &serde_json::Value) -> i32 {
+    if body.get("timedOut").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return 124;
+    }
     // exitCode is a number or null on the wire; null => 0, like cmd_exec.
-    let code = body.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
-    std::process::exit(code as i32)
+    body.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0) as i32
 }
 
 fn cmd_agent(action: AgentCmd) -> Result<()> {
@@ -3600,9 +3687,18 @@ fn fmt_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_url, check_mangled_remote_path, is_windows_drive_path, parse_semver, swap_binary_at,
-        wp_route,
+        asset_url, check_mangled_remote_path, exec_exit_code, is_windows_drive_path, parse_semver,
+        swap_binary_at, wp_route,
     };
+
+    #[test]
+    fn timed_out_exec_is_a_failure() {
+        let timed_out = serde_json::json!({"timedOut": true, "exitCode": null});
+        assert_eq!(exec_exit_code(&timed_out), 124);
+        let finished = serde_json::json!({"timedOut": false, "exitCode": 3});
+        assert_eq!(exec_exit_code(&finished), 3);
+        assert_eq!(exec_exit_code(&serde_json::json!({"exitCode": null})), 0);
+    }
 
     #[test]
     fn asset_url_points_at_the_release() {

@@ -9,6 +9,8 @@ use tauri::Manager;
 // secrets directly — credentials live in profiles::ConnectionProfile, which
 // the CLI deliberately redacts in `profiles show`.
 pub mod backup;
+pub mod diagnostics;
+pub mod credential_refs;
 pub mod faro_file;
 pub mod bridge;
 pub mod commands;
@@ -18,6 +20,7 @@ mod archive_ops;
 pub mod cli_updater;
 pub mod cloudflared;
 pub mod cloudflare_api;
+pub mod cf_forward;
 pub mod cf_setup;
 pub mod credentials;
 pub mod db;
@@ -66,6 +69,8 @@ pub struct AppState {
     pub cli_updater: Arc<cli_updater::CliUpdater>,
     /// Which cloudflared Faro runs, and its managed copy (Plan 29).
     pub cloudflared: Arc<cloudflared::Manager>,
+    /// Access TCP forwards (`cloudflared access tcp`) started with a session.
+    pub cf_forwards: Arc<cf_forward::Manager>,
     pub foldersync: Arc<foldersync::FolderSync>,
     /// On-demand virtual folders (Plan 9) — OneDrive-style placeholders. Owns
     /// the OS sync-root registrations; inert on non-Windows / non-`virtualfs`
@@ -331,6 +336,9 @@ pub fn run() {
                 cloudflared: Arc::new(
                     cloudflared::Manager::load(&handle).expect("failed to initialise cloudflared settings"),
                 ),
+                cf_forwards: Arc::new(cf_forward::Manager::new(
+                    handle.path().app_data_dir().expect("resolving app_data_dir for Access forwards"),
+                )),
                 foldersync: Arc::new(
                     foldersync::FolderSync::load(&handle)
                         .expect("failed to initialise folder sync settings"),
@@ -462,6 +470,10 @@ pub fn run() {
             commands::set_profile_password_keychain,
             commands::profile_keychain_warnings,
             commands::reorder_profiles,
+            commands::organize_profiles,
+            commands::group_gateways,
+            commands::credential_providers,
+            commands::set_group_gateway,
             commands::delete_profile,
             commands::ssh_key_defaults,
             commands::generate_ssh_key,
@@ -469,6 +481,7 @@ pub fn run() {
             commands::connect,
             commands::disconnect,
             commands::test_connection,
+            commands::diagnose_connection,
             commands::discover_agents,
             commands::agent_public_key,
             commands::pair_agent,
@@ -479,6 +492,7 @@ pub fn run() {
             commands::box_authorize,
             commands::dynamics_authorize,
             agent_host::agent_host_status,
+            agent_host::agent_host_set_relay,
             agent_host::agent_host_set_enabled,
             agent_host::agent_host_open_pairing,
             agent_host::agent_host_close_pairing,
@@ -509,10 +523,16 @@ pub fn run() {
             cf_setup::cf_setup_undo,
             cf_setup::check_open_ports,
             cloudflare_api::cf_account_zones,
+            cf_forward::cf_forwards_status,
+            cf_forward::cf_forward_start,
+            cf_forward::cf_forward_stop,
+            cf_forward::cf_forward_open,
             path_integration::path_status,
             path_integration::path_add,
             path_integration::path_remove,
             foldersync::foldersync_list,
+            foldersync::twoway_runtime::folder_sync_conflicts,
+            foldersync::twoway_runtime::folder_sync_resolve,
             foldersync::foldersync_upsert,
             foldersync::foldersync_remove,
             foldersync::foldersync_set_enabled,
@@ -550,6 +570,9 @@ pub fn run() {
             commands::save_imported_profiles,
             commands::sync_plan,
             commands::sync_execute,
+            commands::sync_recovery_list,
+            commands::sync_recovery_purge,
+            commands::sync_recovery_restore,
             commands::start_edit,
             commands::stop_edit,
             commands::list_directory,
@@ -638,6 +661,9 @@ pub fn run() {
         .run(|app, event| {
             // Unregister from Vela on the way out, so it shows Faro as closed.
             if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.cf_forwards.shutdown();
+                }
                 vela::stop(app);
             }
         });

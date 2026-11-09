@@ -93,6 +93,9 @@ export interface ConnectionProfile {
   // Faro Agent (protocol === "faro-agent"): the paired daemon's pinned public
   // key (base64). Present === paired; absent === still needs a pairing code.
   agentKey?: string;
+  notes?: string;
+  credentialRef?: { provider: string; item: string };
+  agentRelay?: { address: string; publicKey: string };
   /** Rail folder this server lives in. Absent = ungrouped (top of the rail). */
   group?: string;
   /** Manual drag-and-drop position in the rail. Absent = sorted after ordered
@@ -128,6 +131,32 @@ export interface ConnectionProfile {
   /** Cloud drives: client id of the user's own registered OAuth app. Absent =
    *  the app built into this release, when there is one. */
   oauthClientId?: string;
+  /** Named Cloudflare Access TCP forwards for this connection. */
+  cfForwards?: CfForward[];
+}
+
+/** An Access-protected service exposed on a local port (`cloudflared access tcp`). */
+export interface CfForward {
+  /** Unique on this connection. The CLI addresses it by this name. */
+  name: string;
+  /** Access hostname. Absent = the connection's Cloudflare hostname. */
+  hostname?: string;
+  localPort: number;
+  /** Web panel: the rail offers Open in browser for the local port. */
+  web?: boolean;
+}
+
+/** A forward plus whether it is listening right now. */
+export interface CfForwardStatus {
+  profileId: string;
+  profileName: string;
+  name: string;
+  hostname: string;
+  localPort: number;
+  web: boolean;
+  running: boolean;
+  pid?: number;
+  error?: string;
 }
 
 export type ProxyKind = "socks5" | "http";
@@ -245,6 +274,9 @@ export interface AgentHostPairing {
 
 /** State of the in-app agent host (Settings → Remote control). */
 export interface AgentHostStatus {
+  relayOnline?: boolean;
+  relay?: { address: string; publicKey: string } | null;
+  publicKey?: string;
   enabled: boolean;
   running: boolean;
   port: number;
@@ -510,7 +542,18 @@ export interface CfSshHostname {
   tunnelId?: string;
   /** "healthy" | "degraded" | "down" | "inactive". */
   tunnelStatus?: string;
+  /** When the connector was last seen (ISO-8601). */
+  connectorLastSeen?: string;
+  /** cloudflared version on the server. */
+  connectorVersion?: string;
   appId?: string;
+}
+
+/** Tunnel status plus connector last-seen and the server's cloudflared. */
+export interface CfTunnelHealth {
+  status: string;
+  connectorLastSeen?: string;
+  connectorVersion?: string;
 }
 
 /** What an export wrote (mirrors `faro_file::ExportSummary`). */
@@ -543,12 +586,26 @@ export type SyncReason = "missing" | "newer" | "sizeChanged" | "edited";
  *  (Plan 9 — Windows-only, inert elsewhere). */
 export type SyncMode = "mirror" | "onDemand";
 
+export interface SyncFileState {
+  size: number;
+  modified: number;
+  etag: string | null;
+}
+
+export interface SyncRecoveryEntry {
+  batch: string;
+  relative: string;
+  size: number;
+  state: SyncFileState;
+}
+
 export interface SyncFile {
   relative: string;
   sourcePath: string;
   destinationPath: string;
   size: number;
   reason: SyncReason;
+  destinationState?: SyncFileState | null;
 }
 
 export interface SyncDelete {
@@ -556,6 +613,7 @@ export interface SyncDelete {
   path: string;
   kind: FileKind;
   size: number;
+  destinationState?: SyncFileState | null;
 }
 
 export interface SyncPlan {
@@ -575,6 +633,7 @@ export type PairState = "idle" | "scanning" | "syncing" | "error";
 
 /** A configured, persisted sync pair (the user-editable half). */
 export interface SyncPair {
+  twoWay?: boolean;
   id: string; // "" when creating; backend assigns a uuid
   name: string;
   localRoot: string;
@@ -1393,3 +1452,12 @@ export interface BackupSummary {
   hasSync: boolean;
   dbBytes: number;
 }
+
+export interface DiagnosticReport {
+  ok: boolean;
+  steps: { label: string; ok: boolean; detail: string; elapsedMs: number }[];
+}
+
+export interface ProfileOrganization { id: string; group?: string; sortOrder?: number }
+
+export interface TwoWayConflict { identity: string; relative: string; revision: number; state: { local: SyncRecoveryEntry["state"] | null; remote: SyncRecoveryEntry["state"] | null } }

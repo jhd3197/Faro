@@ -191,7 +191,7 @@ try {
 
   // ---- 2. The editor --------------------------------------------------------
   await page.evaluate(() => document.querySelector('[aria-label="New connection"]')?.click());
-  await clickText("Through Cloudflare", '[role="dialog"] [role="radiogroup"]');
+  await page.click('[aria-label="Connect via"] button:nth-child(2)');
   const form = (await waitFor(async () => {
     const t = await dialogText();
     return t.includes("Log in as") ? t : null;
@@ -200,19 +200,19 @@ try {
     const d = document.querySelector('[role="dialog"]');
     for (const el of d.querySelectorAll("label, div.mb-3")) {
       const cap = el.firstElementChild;
-      if (cap?.tagName === "DIV" && cap.textContent.trim() === "Auth") return el.querySelector("select")?.value;
+      if (cap?.tagName === "DIV" && cap.textContent.trim() === "Authentication") return el.querySelector("select")?.value;
     }
   });
   check(
     "Through Cloudflare asks for the server and who to log in as",
-    form.includes("Server") && form.includes("Log in as") && form.includes("How do you reach this server?"),
+    form.includes("Server") && form.includes("Log in as") && form.includes("Connect via"),
   );
   check("it defaults to the Cloudflare identity login", auth === "cloudflarecert", auth);
   check("no form asks for a service token", !/service token id|service token secret/i.test(form));
   await shot("editor-through-cloudflare");
   // Back to Direct: the Cloudflare login isn't offered at all, and the
   // chosen login moves off it.
-  await clickText("Direct", '[role="dialog"] [role="radiogroup"]');
+  await page.click('[aria-label="Connect via"] button:nth-child(1)');
   const direct = await waitFor(() =>
     page.evaluate(() => {
       const d = document.querySelector('[role="dialog"]');
@@ -270,9 +270,9 @@ try {
   }, 20000);
   check("its editor shows sign-in, tunnel health and the certificate login", !!status, status ?? "");
   const reachChecked = await page.evaluate(
-    () => document.querySelector('[role="radio"][aria-checked="true"]')?.textContent ?? ""
+    () => document.querySelector('[aria-label="Connect via"] [aria-checked="true"]')?.textContent ?? ""
   );
-  check("and opens on Through Cloudflare", reachChecked.startsWith("Through Cloudflare"), reachChecked);
+  check("and opens on Through Cloudflare", reachChecked.startsWith("Cloudflare"), reachChecked);
   await shot("editor-new-connection");
   await closeDialog();
 

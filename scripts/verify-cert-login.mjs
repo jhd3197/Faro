@@ -127,10 +127,10 @@ try {
   await type("Username", "jane.doe");
   const before = await authOption();
   check("a direct connection doesn't offer the certificate login", before === null, JSON.stringify(before));
-  await clickButton("Through Cloudflare", '[role="dialog"] [role="radiogroup"]');
+  await page.click('[aria-label="Connect via"] button:nth-child(2)');
   const after = await waitFor(authOption, 5000);
   check("through Cloudflare it's offered", after && !after.disabled, JSON.stringify(after));
-  await (await field("Auth", "select")).select("cloudflarecert");
+  await (await field("Authentication", "select")).select("cloudflarecert");
   const principal = await waitFor(async () => {
     const t = await text('[data-testid="cf-cert-principal"]');
     return t || null;

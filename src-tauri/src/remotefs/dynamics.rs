@@ -592,6 +592,9 @@ mod tests {
             endpoint: None,
             account: None,
             agent_key: None,
+            agent_relay: None,
+            notes: None,
+            credential_ref: None,
             group: None,
             sort_order: None,
             jump_host: None,
@@ -606,6 +609,7 @@ mod tests {
             jump_via: None,
             proxy_command: None,
             oauth_client_id: None,
+            cf_forwards: Vec::new(),
         };
 
         // Client-credentials blob: tenant:client_id:client_secret.

@@ -24,6 +24,8 @@ import {
   type ProxyCommandConfig,
   type ProxyCommandKind,
   type AccessStatus,
+  type DiagnosticReport,
+  type CfForward,
 } from "@/lib/types";
 import {
   ShieldOff,
@@ -38,10 +40,11 @@ import {
   Radar,
   Loader2,
   Link2,
+  Settings2,
+  FolderOpen,
   KeyRound,
   Copy,
   Sparkles,
-  FolderOpen,
   X,
   ChevronRight,
 } from "lucide-react";
@@ -57,6 +60,7 @@ import { IconPicker } from "./IconPicker";
 import { generatePassword } from "@/lib/password";
 import { ipc, type OAuthApp } from "@/lib/ipc";
 import { messageOf } from "@/lib/errors";
+import { ConnectionHelp } from "@/components/ui/ConnectionHelp";
 import { CopyTextButton } from "@/components/ui/CopyText";
 import { toast } from "@/stores/toastStore";
 
@@ -193,6 +197,15 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [name, setName] = useState(seed?.name ?? "");
   const [protocol, setProtocol] = useState<Protocol>(seed?.protocol ?? "sftp");
   // Faro Agent: the pinned daemon key. Set by pairing; carried through Save.
+  const [agentRelayAddress, setAgentRelayAddress] = useState(seed?.agentRelay?.address ?? "");
+  const [agentRelayKey, setAgentRelayKey] = useState(seed?.agentRelay?.publicKey ?? "");
+  const [groupGateways, setGroupGateways] = useState<Record<string, string>>({});
+  useEffect(() => { void ipc.groupGateways().then(setGroupGateways).catch(() => {}); }, []);
+  const [credentialProvider, setCredentialProvider] = useState(seed?.credentialRef?.provider ?? "");
+  const [credentialItem, setCredentialItem] = useState(seed?.credentialRef?.item ?? "");
+  const [credentialProviders, setCredentialProviders] = useState<string[]>([]);
+  useEffect(() => { void ipc.credentialProviders().then(setCredentialProviders).catch(() => {}); }, []);
+  const [notes, setNotes] = useState(seed?.notes ?? "");
   const [agentKey, setAgentKey] = useState<string | undefined>(seed?.agentKey);
   const [host, setHost] = useState(seed?.host ?? "");
   const [port, setPort] = useState(seed?.port ?? defaultPort);
@@ -235,6 +248,14 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [proxyUser, setProxyUser] = useState(seed?.proxy?.username ?? "");
   const [proxyPass, setProxyPass] = useState(seed?.proxy?.password ?? "");
   const [proxyCmd, setProxyCmd] = useState(() => proxyCmdDraft(seed?.proxyCommand, seed?.host));
+  const [forwards, setForwards] = useState<ForwardDraft[]>(() =>
+    (seed?.cfForwards ?? []).map((f) => ({
+      name: f.name,
+      hostname: f.hostname ?? "",
+      localPort: String(f.localPort || ""),
+      web: !!f.web,
+    }))
+  );
   const [jumpProfile, setJumpProfile] = useState(seed?.jumpProfile ?? "");
   // "How do you reach this server?" (SFTP). A layout over the same data:
   // `jumpProfile` for a jump host, a Cloudflare `proxyCommand` for Cloudflare.
@@ -476,18 +497,19 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   /// Build the profile from the current form state. Shared by Save and by the
   /// pairing flow (which must persist the profile before it can pair by id).
+  const useCredentialRef = !!credentialProvider && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && (authKind === "password" || authKind === "key");
   const buildProfile = (): ConnectionProfile => {
     let auth: AuthMethod;
     if (profile?.auth.kind === "keyref") {
       // Grant-managed key: lives in the OS keychain, never edited here.
       auth = profile.auth;
     } else if (authKind === "password") {
-      auth = { kind: "password", password };
+      auth = { kind: "password", password: useCredentialRef ? "" : password };
     } else if (authKind === "key") {
       auth = {
         kind: "key",
         path: keyPath,
-        passphrase: passphrase || undefined,
+        passphrase: useCredentialRef ? undefined : passphrase || undefined,
         certPath: certPath.trim() || undefined,
       };
     } else if (authKind === "cloudflarecert") {
@@ -571,7 +593,10 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           : isDynamics && dynamicsMode === "delegated"
             ? dynamicsAccount || undefined
             : undefined,
+      notes: notes.trim() || undefined,
+      credentialRef: useCredentialRef ? { provider: credentialProvider, item: credentialItem } : undefined,
       agentKey: isAgent ? agentKey : undefined,
+      agentRelay: isAgent && agentRelayAddress.trim() ? { address: agentRelayAddress.trim(), publicKey: agentRelayKey.trim() } : undefined,
       group: group.trim() || undefined,
       icon: icon.trim() || undefined,
       sortOrder: profile?.sortOrder,
@@ -586,6 +611,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       // A jump host brings its own proxy settings.
       proxy: protocol === "sftp" && (jumpProfile || reach === "cloudflare") ? undefined : buildProxy(),
       proxyCommand: buildProxyCommand(),
+      cfForwards:
+        protocol === "sftp" && reach === "cloudflare" ? cleanForwards(forwards) : undefined,
       jumpProfile: protocol === "sftp" && jumpProfile ? jumpProfile : undefined,
       oauthClientId: isCloudOAuth ? oauthClientId.trim() || undefined : undefined,
     };
@@ -655,16 +682,19 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   // Test connection: connect with the form as it stands, then disconnect.
   const [testing, setTesting] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<DiagnosticReport | null>(null);
   const [testResult, setTestResult] = useState<
     { ok: true } | { ok: false; title: string; message: string } | null
   >(null);
   const testConnection = async () => {
     setTesting(true);
     setTestResult(null);
+    setDiagnostic(null);
     try {
       await persistSecrets();
-      await ipc.testConnection(buildProfile());
-      setTestResult({ ok: true });
+      const report = await ipc.diagnoseConnection(buildProfile());
+      setDiagnostic(report);
+      setTestResult(report.ok ? { ok: true } : { ok: false, title: "Connection check stopped", message: report.steps.find(step => !step.ok)?.detail ?? "No destination was verified." });
     } catch (e) {
       setTestResult({ ok: false, title: "Couldn't connect", message: messageOf(e) });
     } finally {
@@ -829,6 +859,98 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                     ]
   ).filter(Boolean);
 
+  const isSftp = protocol === "sftp";
+  const iconField = <>
+          <Field group label="Icon">
+            <IconPicker
+              compact
+              value={icon}
+              onChange={setIcon}
+              fallback={monogram(name || "?")}
+            />
+          </Field>
+  </>;
+  const authenticationField = <>
+            <Field label={isSftp ? "Authentication" : "Auth"}>
+              <select
+                value={authKind}
+                onChange={(e) => setAuthKind(e.target.value as AuthMethod["kind"])}
+                className={inputCls}
+              >
+                <option value="password">Password</option>
+                <option value="key" disabled={isFtp}>
+                  Private key file{isFtp ? " — SFTP only" : ""}
+                </option>
+                <option value="agent" disabled={isFtp}>
+                  SSH agent{isFtp ? " — SFTP only" : ""}
+                </option>
+                {/* Only through Cloudflare (or a saved one that lost its route,
+                    so the select still shows what it has). */}
+                {!isFtp && (cfRoute || authKind === "cloudflarecert") && (
+                  <option
+                    value="cloudflarecert"
+                    disabled={cfServiceToken && authKind !== "cloudflarecert"}
+                  >
+                    Cloudflare identity
+                    {cfServiceToken ? " — not with a service token" : ""}
+                  </option>
+                )}
+              </select>
+            </Field>
+
+  </>;
+  const localFolderField = (
+        <Field label="Local starting folder">
+          <div className="relative">
+            <input aria-label="Default local folder" value={defaultLocalPath}
+              onChange={(e) => setDefaultLocalPath(e.target.value)} className={cn(inputCls, "pr-10")} placeholder="Choose a folder…" />
+            <button type="button" aria-label="Choose local starting folder" title="Choose local starting folder" className="absolute inset-y-0 right-0 flex items-center px-3 text-text-dim hover:text-text"
+              onClick={async () => {
+                try {
+                  const folder = await open({ directory: true, multiple: false, defaultPath: defaultLocalPath || undefined });
+                  if (typeof folder === "string") setDefaultLocalPath(folder);
+                } catch (e) { toast.error("Couldn't choose folder", String(e)); }
+              }}><FolderOpen size={15} /></button>
+          </div>
+        </Field>
+  );
+  const startingFolders = <>
+        <Field label={isObject ? "Default key prefix" : isSftp ? "Starting folder on server" : "Default remote path"}>
+          <input
+            value={defaultRemotePath}
+            onChange={(e) => setDefaultRemotePath(e.target.value)}
+            placeholder={isObject ? "" : isFtp ? "/" : "."}
+            className={inputCls}
+          />
+        </Field>
+
+
+
+  </>;
+  const organizationFields = <>
+          <div>
+          <Field label="Group">
+            <input
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder="e.g. Production"
+              list="profile-editor-groups"
+              className={inputCls}
+            />
+            <datalist id="profile-editor-groups">
+              {knownGroups.map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+          </Field>
+          </div>
+  </>;
+  const notesField = <>
+        <Field label="Notes" help={<>Use notes for context or a runbook link. Keep passwords and other secrets in credential fields.</>}>
+          <textarea className={inputCls} rows={2} maxLength={20000} placeholder="Purpose or runbook link" value={notes} onChange={e => setNotes(e.target.value)} />
+        </Field>
+  </>;
+
   return (
     <div className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div
@@ -836,11 +958,11 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="anim-modal flex max-h-[88vh] w-[52rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
+        className="anim-modal flex h-[min(42rem,88vh)] w-[48rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
       >
         {/* Left rail — grouped protocol picker. Scrolls as the list grows so the
             dialog stays wide-and-short instead of tall-and-narrow. */}
-        <nav className="flex w-52 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-bg-subtle/50 p-2">
+        <nav className="flex w-48 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-bg-subtle/50 p-2">
           <div
             id={titleId}
             className="px-2 pb-0.5 pt-1 text-[15px] font-semibold tracking-tight"
@@ -893,35 +1015,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               className={inputCls}
             />
           </Field>
-          <Field group label="Icon (optional)" className="w-40">
-            <IconPicker
-              value={icon}
-              onChange={setIcon}
-              fallback={monogram(name || "?")}
-            />
-          </Field>
-          <Field label="Group (optional)" className="w-40">
-            <input
-              value={group}
-              onChange={(e) => setGroup(e.target.value)}
-              placeholder="e.g. Production"
-              list="profile-editor-groups"
-              className={inputCls}
-            />
-            <datalist id="profile-editor-groups">
-              {knownGroups.map((g) => (
-                <option key={g} value={g} />
-              ))}
-            </datalist>
-          </Field>
+          <div className="w-20 shrink-0">{iconField}</div>
         </div>
-
-        {iconUnknown && (
-          <Hint tone="warn">
-            Unknown icon key — the bubble falls back to the name monogram.
-            Bundled keys look like <code>mdi:rocket-launch</code>.
-          </Hint>
-        )}
 
         {isS3 ? (
           <S3Section
@@ -1074,7 +1169,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             secretSaved={oauthSecretSaved}
           />
         ) : isAgent ? (
-          <AgentSection
+          <><AgentSection
             profileId={id}
             host={host}
             setHost={setHost}
@@ -1085,6 +1180,13 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             onPair={pair}
             onUnpair={() => setAgentKey(undefined)}
           />
+          {agentKey && <div className="mt-3 space-y-2 rounded-md border border-border p-3">
+            <div className="flex items-center gap-2 text-xs font-medium">Internet relay
+              <ConnectionHelp label="Internet relay help">Pair the devices first, then enter your self-hosted relay address and public key. Leave the address empty for a direct connection.</ConnectionHelp>
+            </div>
+            <input className={inputCls} aria-label="Relay address" placeholder="relay.example.com:8723" value={agentRelayAddress} onChange={e => setAgentRelayAddress(e.target.value)} />
+            <input className={inputCls} aria-label="Relay public key" placeholder="Relay public key (base64)" value={agentRelayKey} onChange={e => setAgentRelayKey(e.target.value)} />
+          </div>}</>
         ) : (
           <>
             {protocol === "sftp" && (
@@ -1115,6 +1217,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 certLogin={authKind === "cloudflarecert"}
                 serviceTokenId={proxyCmd.serviceTokenId}
                 onRemoveToken={() => setProxyCmd({ ...proxyCmd, serviceTokenId: "", serviceTokenSecret: "" })}
+                forwards={forwards}
+                setForwards={setForwards}
               />
             ) : (
             <div className="flex gap-2">
@@ -1142,6 +1246,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             </div>
             )}
 
+            <div className={isSftp ? "grid grid-cols-2 gap-3" : undefined}>
             <Field label={cfRoute ? "Log in as" : "Username"}>
               <input
                 value={username}
@@ -1151,8 +1256,11 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               />
             </Field>
 
+            {isSftp && profile?.auth.kind !== "keyref" && authenticationField}
+            </div>
+
             {profile?.jumpHost && (
-              <Hint>
+              <Hint always>
                 via bastion{" "}
                 <span className="font-mono text-text-dim">
                   {profile.jumpUsername ? `${profile.jumpUsername}@` : ""}
@@ -1162,37 +1270,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             )}
 
             {profile?.auth.kind === "keyref" ? (
-              <Hint>
+              <Hint always>
                 Managed key (access grant) — stored in your OS keychain.
               </Hint>
             ) : (
               <>
-            <Field label="Auth">
-              <select
-                value={authKind}
-                onChange={(e) => setAuthKind(e.target.value as AuthMethod["kind"])}
-                className={inputCls}
-              >
-                <option value="password">Password</option>
-                <option value="key" disabled={isFtp}>
-                  Private key file{isFtp ? " — SFTP only" : ""}
-                </option>
-                <option value="agent" disabled={isFtp}>
-                  SSH agent{isFtp ? " — SFTP only" : ""}
-                </option>
-                {/* Only through Cloudflare (or a saved one that lost its route,
-                    so the select still shows what it has). */}
-                {!isFtp && (cfRoute || authKind === "cloudflarecert") && (
-                  <option
-                    value="cloudflarecert"
-                    disabled={cfServiceToken && authKind !== "cloudflarecert"}
-                  >
-                    Cloudflare identity (short-lived certificate)
-                    {cfServiceToken ? " — not with a service token" : ""}
-                  </option>
-                )}
-              </select>
-            </Field>
+            {!isSftp && authenticationField}
 
             {authKind === "cloudflarecert" && (
               <CloudflareCertHint
@@ -1204,17 +1287,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             )}
 
             {authKind === "agent" && (
-              <Hint>
-                Uses the running SSH agent for authentication.{" "}
-                <span className="font-mono text-text-dim">
-                  {/* eslint-disable-next-line no-undef */}
-                  {navigator.platform.startsWith("Win")
-                    ? "\\\\.\\pipe\\openssh-ssh-agent (OpenSSH Authentication Agent service)"
-                    : "$SSH_AUTH_SOCK"}
-                </span>
-                . Run <span className="font-mono">ssh-add</span> first to load
-                your keys.
-              </Hint>
+              <p className="mb-3 text-xs text-text-dim">Uses keys loaded in your SSH agent.</p>
             )}
 
             {authKind === "password" && (
@@ -1240,28 +1313,46 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </>
         )}
 
-        <Field label={isObject ? "Default key prefix" : "Default remote path"}>
-          <input
-            value={defaultRemotePath}
-            onChange={(e) => setDefaultRemotePath(e.target.value)}
-            placeholder={isObject ? "" : isFtp ? "/" : "."}
-            className={inputCls}
-          />
-        </Field>
+          {isSftp && <>
+            <div className="mt-3 border-t border-border pt-3">{startingFolders}</div>
+          </>}
+        <details className="group mb-3 border-t border-border pt-3">
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-text-muted hover:text-text [&::-webkit-details-marker]:hidden">
+            <Settings2 size={13} />More options
+            <ChevronRight size={12} className="ml-auto transition-transform group-open:rotate-90" />
+          </summary>
+          <div className="pt-4">
+          {organizationFields}
+          {localFolderField}
+        {group.trim() && protocol === "sftp" && <Field label="Group gateway" help={<>Saved immediately for this group and nested groups. Explicit connection routes take precedence. Use / in group names to inherit a parent gateway.</>}>
+          <select className={inputCls} value={groupGateways[group.trim()] ?? ""} onChange={async e => {
+            const gateway = e.target.value;
+            try { await ipc.setGroupGateway(group.trim(), gateway || null); setGroupGateways(await ipc.groupGateways()); }
+            catch (e) { toast.error("Couldn't save group gateway", messageOf(e)); }
+          }}>
+            <option value="">No group gateway / inherit parent</option>
+            {profiles.filter(p => p.protocol === "sftp").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
 
-        <Field label="Default local folder (optional)">
-          <div className="flex gap-2">
-            <input aria-label="Default local folder" value={defaultLocalPath}
-              onChange={(e) => setDefaultLocalPath(e.target.value)} className={inputCls + " min-w-0 flex-1"} />
-            <button type="button" className="shrink-0 rounded-md border border-border px-3 text-sm hover:bg-bg-hover"
-              onClick={async () => {
-                try {
-                  const folder = await open({ directory: true, multiple: false, defaultPath: defaultLocalPath || undefined });
-                  if (typeof folder === "string") setDefaultLocalPath(folder);
-                } catch (e) { toast.error("Couldn't choose folder", String(e)); }
-              }}>Browse…</button>
-          </div>
-        </Field>
+        </Field>}
+        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div>
+          <Field label="Credential source" help={<>Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a connection opens.</>}>
+            <select className={inputCls} value={credentialProvider} onChange={e => setCredentialProvider(e.target.value)}>
+              <option value="">Saved credential</option>
+              {[...new Set([...credentialProviders, ...(credentialProvider ? [credentialProvider] : [])])].map(provider => <option key={provider} value={provider}>{provider}{!credentialProviders.includes(provider) ? " (not configured here)" : ""}</option>)}
+            </select>
+          </Field>
+          {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
+
+        </div>}
+        {iconUnknown && (
+          <Hint tone="warn">
+            Unknown icon key — the bubble falls back to the name monogram.
+            Bundled keys look like <code>mdi:rocket-launch</code>.
+          </Hint>
+        )}
+
+        {!isSftp && startingFolders}
 
         {isFtp && (
           <div className="flex gap-3">
@@ -1349,7 +1440,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           ftpActiveMode={isFtp && ftpActiveMode}
         />
 
-        <label className="mb-3 flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-bg-subtle px-2.5 py-2">
+        {notesField}
+
+        <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs text-text-muted">
           <input
             type="checkbox"
             checked={autoConnect}
@@ -1357,14 +1450,15 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             className="h-3.5 w-3.5 shrink-0 accent-[rgb(var(--accent))]"
           />
           <span className="min-w-0">
-            <span className="block text-xs font-medium text-text">
+            <span className="block text-xs text-text-muted">
               Auto-connect on startup
             </span>
-            <span className="block text-[11px] text-text-dim">
-              Open this server automatically when Faro launches.
-            </span>
+
           </span>
         </label>
+
+          </div>
+        </details>
 
         {isFtp && (
           <Hint tone="warn">
@@ -1411,6 +1505,20 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               )}
             </div>
           )}
+
+          {diagnostic && <details className="mx-5 my-2 max-h-40 shrink-0 overflow-auto text-[11px]">
+            <summary className="cursor-pointer text-text-muted">Connection diagnostics</summary>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-semibold">Connection diagnostics</span>
+              <CopyTextButton text={JSON.stringify(diagnostic, null, 2)} label />
+            </div>
+            {diagnostic.steps.map((step, index) => <div key={index} className="flex items-start gap-2 border-t border-border-subtle py-1.5">
+              {step.ok ? <Check size={12} className="mt-0.5 shrink-0 text-success" /> : <X size={12} className="mt-0.5 shrink-0 text-danger" />}
+              <div className="min-w-0 flex-1"><div>{step.label}</div>{!step.ok && <p className="text-text-muted">{step.detail}</p>}</div>
+              <span className="text-text-dim">{step.elapsedMs} ms</span>
+            </div>)}
+            <p className="mt-2 text-text-dim">The copied report excludes addresses, usernames, paths, and credentials.</p>
+          </details>}
 
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
             {!canSave ? (
@@ -1496,17 +1604,14 @@ function CloudflareCertHint({
   if (!routed) {
     return (
       <Hint tone="warn">
-        Cloudflare issues these certificates through Access. Choose{" "}
-        <span className="font-medium text-text">Through Cloudflare</span> above.
+        Choose Cloudflare above to use certificate authentication.
       </Hint>
     );
   }
   if (serviceToken) {
     return (
       <Hint tone="warn">
-        A service token has no person to issue a certificate for. Connections
-        that faro-cli or the Agent Bridge use unattended should log in with a
-        key or password and keep the service token.
+        Service tokens require password or key authentication.
       </Hint>
     );
   }
@@ -1523,29 +1628,18 @@ function CloudflareCertHint({
       ? status.identity.split("@")[0]
       : null;
   return (
-    <Hint>
-      Logs in with your Cloudflare identity: no key to choose or store. Each
-      connect gets a certificate valid for a few minutes, and removing you from
-      the Access policy removes your access.
-      {principal ? (
-        <span className="mt-1 block" data-testid="cf-cert-principal">
-          Certificate for <span className="font-mono text-text">{principal}</span>{" "}
-          ({status?.identity}).
-          {username && username !== principal && (
-            <>
-              {" "}
-              To log in as <span className="font-mono text-text">{username}</span>, the
-              server must accept <span className="font-mono text-text">{principal}</span>{" "}
-              for that user (its AuthorizedPrincipalsFile).
-            </>
-          )}
-        </span>
-      ) : (
-        <span className="mt-1 block">
-          Sign in above to see which user the certificate is for.
-        </span>
-      )}
-    </Hint>
+    <div className="mb-3 flex items-start gap-2 text-xs text-text-muted">
+      <span className="min-w-0 flex-1" data-testid={principal ? "cf-cert-principal" : undefined}>
+        {principal ? <>Certificate for <span className="font-mono text-text">{principal}</span> ({status?.identity}).
+          {username && username !== principal && <span className="mt-1 block">Server must allow {principal} to log in as {username}.</span>}
+        </> : hostname ? "Sign in to Cloudflare above." : "Enter the server address to sign in."}
+      </span>
+      <ConnectionHelp label="Cloudflare identity help">
+        Faro uses your Cloudflare identity to request a short-lived SSH certificate. No private key needs to be selected here.
+        Removing your identity from the Access policy removes access. If the certificate user differs from the login user,
+        the server must permit it in AuthorizedPrincipalsFile.
+      </ConnectionHelp>
+    </div>
   );
 }
 
@@ -1757,7 +1851,7 @@ function KeyAuthSection({
           </button>
         </div>
       </Field>
-      <Hint>
+      <Hint label="SSH certificate help">
         For servers that trust an SSH certificate authority. Empty uses the
         key's <span className="font-mono">-cert.pub</span> when there is one.
         Faro offers the certificate first, then the key on its own.
@@ -1887,9 +1981,7 @@ function KeyAuthSection({
             {genBusy ? "Generating…" : "Generate key"}
           </button>
           <div className="mt-1.5 text-[11px] leading-relaxed text-text-dim">
-            Faro writes the private key here (and a{" "}
-            <span className="font-mono">.pub</span> beside it) and points this
-            connection at it. Then add the public key to the server.
+            Saves a key pair here. Add the public key to the server afterward.
           </div>
         </div>
       )}
@@ -2072,9 +2164,7 @@ function AgentSection({
         </button>
         {found && found.length === 0 && !scanning && (
           <div className="mt-1.5 text-[11px] text-text-dim">
-            No devices found. Enable Faro Agent on your phone or TV, or Remote
-            control in the desktop Faro app. Keep both devices on the same
-            network, or enter the device's IP above.
+            No devices found. Enter an address or enable Remote control on the other device.
           </div>
         )}
         {found && found.length > 0 && (
@@ -2135,7 +2225,7 @@ function AgentSection({
         <div className="mb-3 flex items-center justify-between rounded-md border border-success/30 bg-success/10 px-2.5 py-2">
           <span className="flex items-center gap-1.5 text-xs text-text">
             <Check size={13} className="text-success" />
-            Paired — the daemon's key is pinned.
+            Paired
           </span>
           <button
             type="button"
@@ -2153,48 +2243,14 @@ function AgentSection({
               ? `Pair with ${selectedMachine.hostname || host}`
               : "Pair with this machine"}
           </div>
-          <div className="mb-2 text-[11px] leading-relaxed text-text-dim">
-            {selectedMachine?.os === "android" ? (
-              <>
-                On your phone or TV, open Faro Agent, grant storage access,
-                enable the agent, and select Show pairing code. Enter that
-                6-digit code here.
-              </>
-            ) : selectedMachine && selectedMachine.pairable === false ? (
-              <>
-                <span className="font-medium text-text-muted">
-                  {selectedMachine.hostname || host}
-                </span>{" "}
-                isn't accepting pairing right now. On that machine run{" "}
-                <span className="font-mono text-text-muted">faro-agentd pair</span> (or
-                open its Faro app →{" "}
-                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
-                {" "}→ Show pairing code),
-                then type the code here.
-              </>
-            ) : selectedMachine ? (
-              <>
-                Type the 6-digit code showing on{" "}
-                <span className="font-medium text-text-muted">
-                  {selectedMachine.hostname || host}
-                </span>
-                . No code there? Run{" "}
-                <span className="font-mono text-text-muted">faro-agentd pair</span> on
-                it, or open its Faro app →{" "}
-                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
-                {" "}→ Show pairing code.
-              </>
-            ) : (
-              <>
-                On the machine you want to control, run{" "}
-                <span className="font-mono text-text-muted">faro-agentd pair</span> (or
-                open its Faro app →{" "}
-                <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump>
-                {" "}→ Show pairing code) and
-                type the 6-digit code below. Pairing sets up an end-to-end encrypted
-                link and pins the machine's key — you won't need the code again.
-              </>
-            )}
+          <div className="mb-2 flex items-center gap-2 text-xs text-text-dim">
+            <span className="flex-1">{selectedMachine?.pairable === false ? "Enable pairing on the other device." : "Enter the other device’s 6-digit pairing code."}</span>
+            <ConnectionHelp label="Find the pairing code">
+              {selectedMachine?.os === "android"
+                ? "On your phone or TV, open Faro Agent, allow storage access, enable the agent, and choose Show pairing code."
+                : <>On the other computer, open <SettingsJump entry="pairingRemoteControl">Settings → Remote control</SettingsJump> → Show pairing code, or run <code>faro-agentd pair</code>.</>}
+              <p className="mt-2">Pairing pins the device’s key for an encrypted connection. You only need the code once.</p>
+            </ConnectionHelp>
           </div>
           <div className="flex gap-2">
             <input
@@ -2245,7 +2301,7 @@ function AzureSection({
 }) {
   return (
     <>
-      <Hint>
+      <Hint label="Azure connection help">
         Azure Blob Storage. Use the storage account name and an account key
         (Portal → Storage account → Access keys). Custom endpoints target
         Azurite (local emulator) or sovereign clouds.
@@ -2419,19 +2475,9 @@ function OAuthConnectSection({
 
   return (
     <>
-      <Hint>
-        Connect a {label} account. Authorizing opens your browser once; Faro
-        stores the refresh token in your OS keychain and never sees your {label}{" "}
-        password.
-      </Hint>
 
-      {builtin === false && (
-        <Hint tone="warn">
-          This build of Faro has no built-in {label} app, so you need to
-          register your own (free, about five minutes) and paste its Client ID
-          here.
-        </Hint>
-      )}
+
+      {builtin === false && <p className="mb-3 text-xs text-text-muted">Your own {label} app is required.</p>}
 
       {builtin === true && (
         <label className="mb-3 flex items-center gap-2 text-xs text-text-muted">
@@ -2449,24 +2495,11 @@ function OAuthConnectSection({
 
       {usingOwnApp && setup && (
         <>
-          <div className="mb-3 rounded-md border border-border bg-bg-subtle px-2.5 py-2 text-[11.5px] leading-relaxed text-text-muted">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="font-medium text-text">Register a {label} app</span>
-              <button
-                type="button"
-                onClick={() => ipc.openExternalUrl(setup.console).catch(() => {})}
-                className="text-[11px] text-accent underline hover:text-text"
-              >
-                Open developer console
-              </button>
-            </div>
-            <ol className="list-decimal space-y-0.5 pl-4">
-              {setup.steps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-          </div>
-          <Field label="Client ID">
+          <Field label="Client ID" help={<>
+              <button type="button" onClick={() => ipc.openExternalUrl(setup.console).catch(() => {})}
+                className="mb-2 text-accent underline hover:text-text">Open developer console</button>
+              <ol className="list-decimal space-y-1 pl-4">{setup.steps.map(step => <li key={step}>{step}</li>)}</ol>
+            </>}>
             <input
               value={clientId}
               onChange={(e) => changeClientId(e.target.value)}
@@ -2480,10 +2513,7 @@ function OAuthConnectSection({
             <PasswordInput value={clientSecret} onChange={setClientSecret} generate={false} />
           </Field>
           {secretSaved && (
-            <Hint>
-              A secret is already in your OS keychain; leave the field blank to
-              keep it.
-            </Hint>
+            <p className="mb-3 text-xs text-text-dim">Secret saved. Leave blank to keep it.</p>
           )}
         </>
       )}
@@ -2542,7 +2572,7 @@ function HttpSection({
   const [auth, setAuth] = useState<boolean>(!!username);
   return (
     <>
-      <Hint>
+      <Hint label="HTTP connection help">
         Read-only browse of any static file server. Point at a directory with an
         autoindex (nginx / Apache) to browse it, or paste a direct file URL to
         pull a single artifact. No uploads, renames, or deletes.
@@ -2750,10 +2780,7 @@ function ShopifySection({
         />
       </Field>
 
-      <Hint>
-        Browse and edit theme files like an FTP site. Prefer an
-        unpublished/duplicate theme — changes deploy instantly.
-      </Hint>
+      <Hint tone="warn">Theme edits publish immediately. Use a duplicate theme.</Hint>
 
       <Field group label="Auth">
         <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-bg-subtle p-1">
@@ -2790,12 +2817,7 @@ function ShopifySection({
         </>
       )}
 
-      <Hint>
-        Stored in your OS keychain — never in the connections file.
-        {secretSaved
-          ? " A credential is already saved; leave the fields blank to keep it."
-          : ""}
-      </Hint>
+      {secretSaved && <p className="mb-3 text-xs text-text-dim">Saved credential. Leave blank to keep it.</p>}
     </>
   );
 }
@@ -2839,7 +2861,12 @@ function WordPressSection({
 
   return (
     <>
-      <Field label="Site address">
+      <Field label="Site address" help={<>
+        Works without FTP or SSH: Faro talks to the site's REST API with an
+        Application Password (WordPress 5.6+). You'll see the media library, and
+        every plugin API the site offers (Gravity Forms, WooCommerce…) as JSON
+        files you can open, edit and save. Needs an administrator account.
+       </>}>
         <input
           value={site}
           onChange={(e) => setSite(e.target.value)}
@@ -2849,12 +2876,7 @@ function WordPressSection({
         />
       </Field>
 
-      <Hint>
-        Works without FTP or SSH: Faro talks to the site's REST API with an
-        Application Password (WordPress 5.6+). You'll see the media library, and
-        every plugin API the site offers (Gravity Forms, WooCommerce…) as JSON
-        files you can open, edit and save. Needs an administrator account.
-      </Hint>
+
 
       <button
         type="button"
@@ -2871,7 +2893,7 @@ function WordPressSection({
       </button>
 
       {link && (
-        <Hint>
+        <Hint always>
           In the browser, log in if asked and click{" "}
           <b>Yes, I approve of this connection</b>. Copy the password WordPress
           shows and paste it below with your WordPress username. Browser didn't
@@ -2900,19 +2922,19 @@ function WordPressSection({
             spellCheck={false}
           />
         </Field>
-        <Field label="Application password" className="flex-1">
-          <PasswordInput value={password} onChange={setPassword} generate={false} />
-        </Field>
-      </div>
-
-      <Hint>
+        <Field label="Application password" className="flex-1" help={<>
         Not your login password — you can revoke it any time in wp-admin → Users
         → Profile → Application Passwords. Stored in your OS keychain, never in
         the connections file.
         {secretSaved ? " One is already saved; leave the field blank to keep it." : ""}
         {" "}If the site runs Wordfence, Login Security → Settings → "Disable
         application passwords" must be off.
-      </Hint>
+       </>}>
+          <PasswordInput value={password} onChange={setPassword} generate={false} />
+        </Field>
+      </div>
+
+
     </>
   );
 }
@@ -2934,7 +2956,7 @@ function HubSpotSection({
         <PasswordInput value={token} onChange={setToken} />
       </Field>
 
-      <Hint>
+      <Hint label="HubSpot connection help">
         No URL needed — the token identifies your portal; the API base
         (api.hubapi.com) is fixed. Create a private app in your HubSpot portal
         (Settings → Integrations → Private Apps). Each scope unlocks a root:{" "}
@@ -2954,12 +2976,7 @@ function HubSpotSection({
         </Hint>
       )}
 
-      <Hint>
-        Stored in your OS keychain — never in the connections file.
-        {secretSaved
-          ? " A token is already saved; leave the field blank to keep it."
-          : ""}
-      </Hint>
+      {secretSaved && <p className="mb-3 text-xs text-text-dim">Saved credential. Leave blank to keep it.</p>}
     </>
   );
 }
@@ -3040,7 +3057,7 @@ function DynamicsSection({
 
       {mode === "client" ? (
         <>
-          <Hint>
+          <Hint label="Microsoft app setup help">
             Register an app in Microsoft Entra ID and add it as an application
             user on the environment (Power Platform admin center → Environments
             → Settings → Users + permissions → Application users).
@@ -3056,12 +3073,7 @@ function DynamicsSection({
             <PasswordInput value={clientSecret} onChange={setClientSecret} />
           </Field>
 
-          <Hint>
-            Stored in your OS keychain — never in the connections file.
-            {secretSaved
-              ? " A credential is already saved; leave the fields blank to keep it."
-              : ""}
-          </Hint>
+          {secretSaved && <p className="mb-3 text-xs text-text-dim">Saved credential. Leave blank to keep it.</p>}
         </>
       ) : urlOk ? (
         <OAuthConnectSection
@@ -3075,8 +3087,7 @@ function DynamicsSection({
         />
       ) : (
         <Hint tone="warn">
-          Enter a valid environment URL above before signing in — the delegated
-          flow is scoped to that organization.
+          Enter the environment URL to sign in.
         </Hint>
       )}
     </>
@@ -3104,7 +3115,7 @@ function GcsSection({
 }) {
   return (
     <>
-      <Hint>
+      <Hint label="Google Cloud Storage help">
         Google Cloud Storage. Create a service account with Storage access, then
         use its JSON key (Cloud console → IAM &amp; Admin → Service accounts →
         Keys). Point at the downloaded file, or paste the key directly.
@@ -3395,34 +3406,26 @@ function proxyCmdDraft(c?: ProxyCommandConfig, host?: string): ProxyCmdDraft {
 
 type Reach = "direct" | "cloudflare" | "jump";
 
-const REACH_OPTIONS: { id: Reach; label: string; hint: string }[] = [
-  { id: "direct", label: "Direct", hint: "Its SSH port is open to you" },
-  { id: "cloudflare", label: "Through Cloudflare", hint: "Port closed, Access in front" },
-  { id: "jump", label: "Through a jump host", hint: "Via another SSH server" },
-];
+const REACH_OPTIONS = [
+  { id: "direct", label: "Direct", hint: "SSH port is open to you", Icon: Globe },
+  { id: "cloudflare", label: "Cloudflare", hint: "Access protects this server", Icon: Cloud },
+  { id: "jump", label: "Jump host", hint: "Via another SSH server", Icon: Link2 },
+] as const;
 
-/// "How do you reach this server?" at the top of an SFTP form.
 function ReachPicker({ value, onChange }: { value: Reach; onChange: (r: Reach) => void }) {
   return (
     <div className="mb-3">
-      <div className="mb-1 text-[11px] font-medium text-text-muted">How do you reach this server?</div>
-      <div role="radiogroup" aria-label="How do you reach this server?" className="grid grid-cols-3 gap-1.5">
-        {REACH_OPTIONS.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            role="radio"
-            aria-checked={value === o.id}
-            onClick={() => onChange(o.id)}
-            className={cn(
-              "rounded-md border px-2.5 py-1.5 text-left",
-              value === o.id ? "border-accent bg-accent-soft" : "border-border bg-bg-subtle hover:bg-bg-hover"
-            )}
-          >
-            <span className="block text-[12px] font-medium text-text">{o.label}</span>
-            <span className="block truncate text-[10.5px] text-text-dim">{o.hint}</span>
-          </button>
-        ))}
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs text-text-muted">Connect via
+        <ConnectionHelp label="Connection routes"><dl className="space-y-2">{REACH_OPTIONS.map(option => <div key={option.id}><dt className="font-medium text-text">{option.label}</dt><dd>{option.hint}</dd></div>)}</dl></ConnectionHelp>
+      </div>
+      <div role="radiogroup" aria-label="Connect via" className="grid grid-cols-3 gap-2">
+        {REACH_OPTIONS.map(({ id, label, Icon }) => <button key={id} type="button" role="radio"
+          aria-checked={value === id} onClick={() => onChange(id)}
+          className={cn("rounded-md border px-2.5 py-1.5 text-left transition-colors", value === id
+            ? "border-accent bg-accent-soft" : "border-border bg-bg-subtle hover:bg-bg-hover")}>
+          <span className="flex items-center gap-1.5 text-xs font-medium"><Icon size={13} className={value === id ? "text-accent" : "text-text-dim"} />{label}</span>
+
+        </button>)}
       </div>
     </div>
   );
@@ -3470,7 +3473,7 @@ function JumpHostField({
       {candidates.length === 0 && !jumpProfile ? (
         <Hint tone="warn">Save the jump host as an SSH connection first, then pick it here.</Hint>
       ) : (
-        <Hint>
+        <Hint label="Jump host help">
           Faro signs in to the jump host with its own login, then opens this server through it. A
           proxy, if needed, goes on the jump host's connection.
         </Hint>
@@ -3491,6 +3494,8 @@ function CloudflareServerFields({
   certLogin,
   serviceTokenId,
   onRemoveToken,
+  forwards,
+  setForwards,
 }: {
   server: string;
   setServer: (v: string) => void;
@@ -3501,6 +3506,8 @@ function CloudflareServerFields({
   certLogin: boolean;
   serviceTokenId: string;
   onRemoveToken: () => void;
+  forwards: ForwardDraft[];
+  setForwards: (next: ForwardDraft[]) => void;
 }) {
   const hostnames = useCloudflareHostnames();
   const listId = useId();
@@ -3538,7 +3545,11 @@ function CloudflareServerFields({
                 {known?.tunnelStatus && (
                   <span data-testid="cf-tunnel-status">
                     {" · "}
-                    <TunnelHealth status={known.tunnelStatus} />
+                    <TunnelHealth
+                      status={known.tunnelStatus}
+                      lastSeen={known.connectorLastSeen}
+                      version={known.connectorVersion}
+                    />
                   </span>
                 )}
                 {certLogin && signedIn && <span> · certificate login ready</span>}
@@ -3549,11 +3560,9 @@ function CloudflareServerFields({
       )}
       {serviceTokenId.trim() && (
         <Hint tone="warn">
-          This connection still carries its own service token (
-          <span className="font-mono">{serviceTokenId}</span>). Faro now keeps one service token
-          for the whole Cloudflare account, in{" "}
+          This connection uses a legacy service token. Account tokens are in{" "}
           <SettingsJump entry="profileCloudflareAccount">Settings › Cloudflare</SettingsJump>
-          , for faro-cli and the Agent Bridge.{" "}
+          .{" "}
           <button type="button" onClick={onRemoveToken} className="font-medium text-accent hover:underline">
             Remove it from this connection
           </button>
@@ -3588,7 +3597,118 @@ function CloudflareServerFields({
           </Field>
         </div>
       )}
+      <ForwardsEditor server={server.trim()} forwards={forwards} setForwards={setForwards} />
     </>
+  );
+}
+
+interface ForwardDraft {
+  name: string;
+  hostname: string;
+  localPort: string;
+  web: boolean;
+}
+
+/** Drop blank rows. A name with no port, or a port with no name, is left out. */
+function cleanForwards(rows: ForwardDraft[]): CfForward[] | undefined {
+  const out: CfForward[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const name = row.name.trim();
+    const localPort = parseInt(row.localPort, 10);
+    if (!name || !localPort || localPort > 65535 || name.includes("/")) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push({
+      name,
+      hostname: row.hostname.trim() || undefined,
+      localPort,
+      web: row.web || undefined,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+/// Databases, RDP, internal APIs and web panels behind Access. Each one is a
+/// `cloudflared access tcp` listener on a local port, started with the session.
+function ForwardsEditor({
+  server,
+  forwards,
+  setForwards,
+}: {
+  server: string;
+  forwards: ForwardDraft[];
+  setForwards: (next: ForwardDraft[]) => void;
+}) {
+  const update = (i: number, patch: Partial<ForwardDraft>) =>
+    setForwards(forwards.map((row, n) => (n === i ? { ...row, ...patch } : row)));
+  const ports = forwards.map((r) => r.localPort.trim()).filter(Boolean);
+  const clash = ports.find((p, i) => ports.indexOf(p) !== i);
+  return (
+    <div className="mb-3" data-testid="cf-forward-editor">
+      <div className="mb-1 text-[11px] font-medium text-text">TCP forwards</div>
+      <p className="mb-2 text-[11px] leading-relaxed text-text-muted">
+        A database, remote desktop, internal API or web panel behind Access. Faro runs{" "}
+        <span className="font-mono">cloudflared access tcp</span> on the local port while this
+        connection is open, and closes it when you disconnect.
+        {server ? ` Leave the hostname empty to use ${server}.` : ""}
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {forwards.map((row, i) => (
+          <div key={i} className="flex flex-wrap items-center gap-1.5">
+            <input
+              aria-label="Forward name"
+              value={row.name}
+              onChange={(e) => update(i, { name: e.target.value })}
+              placeholder="Name"
+              className={inputCls + " w-28"}
+            />
+            <input
+              aria-label="Access hostname"
+              value={row.hostname}
+              onChange={(e) => update(i, { hostname: e.target.value })}
+              placeholder={server || "hostname"}
+              spellCheck={false}
+              className={inputCls + " min-w-0 flex-1"}
+            />
+            <input
+              aria-label="Local port"
+              value={row.localPort}
+              onChange={(e) => update(i, { localPort: e.target.value.replace(/[^\d]/g, "") })}
+              placeholder="5433"
+              inputMode="numeric"
+              className={inputCls + " w-20"}
+            />
+            <label className="flex items-center gap-1 text-[11px] text-text-muted">
+              <input
+                type="checkbox"
+                checked={row.web}
+                onChange={(e) => update(i, { web: e.target.checked })}
+              />
+              Web panel
+            </label>
+            <button
+              type="button"
+              aria-label={`Remove ${row.name || "forward"}`}
+              onClick={() => setForwards(forwards.filter((_, n) => n !== i))}
+              className="rounded p-1 text-text-dim hover:bg-bg-hover hover:text-text"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+      {clash && (
+        <p className="mt-1 text-[11px] text-warning">Local port {clash} is used by more than one forward.</p>
+      )}
+      <button
+        type="button"
+        onClick={() => setForwards([...forwards, { name: "", hostname: "", localPort: "", web: false }])}
+        className="mt-1.5 text-[11px] font-medium text-accent hover:underline"
+      >
+        Add a forward
+      </button>
+    </div>
   );
 }
 
@@ -3678,12 +3798,12 @@ function NetworkSection({
   const setCmd = (patch: Partial<ProxyCmdDraft>) => setProxyCmd({ ...proxyCmd, ...patch });
 
   return (
-    <div className="mb-3 rounded-md border border-border">
+    <div className="mb-3 border-y border-border">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 px-2.5 py-2 text-left text-xs font-medium text-text hover:bg-bg-hover"
+        className="flex w-full items-center gap-1.5 py-2.5 text-left text-xs text-text-muted hover:text-text"
       >
         <ChevronRight
           size={12}
@@ -3695,7 +3815,7 @@ function NetworkSection({
         </span>
       </button>
       {open && (
-        <div className="border-t border-border px-2.5 pt-3">
+        <div className="pt-2">
           <div className="flex gap-3">
             <Field label="Proxy" className={cn("shrink-0", isSsh ? "w-40" : "w-32")}>
               <select
@@ -3759,7 +3879,7 @@ function NetworkSection({
                   className={cn(inputCls, "font-mono text-[11.5px]")}
                 />
               </Field>
-              <Hint>
+              <Hint label="Proxy command help">
                 Faro runs this command and speaks SSH over its input and output,
                 like OpenSSH's <code>ProxyCommand</code>. <code>%h</code>,{" "}
                 <code>%p</code> and <code>%r</code> become the host, port and
@@ -3779,13 +3899,13 @@ function NetworkSection({
   );
 }
 
-function Hint({
-  children,
-  tone,
-}: {
+function Hint({ children, tone, always = false, label = "Connection help" }: {
   children: React.ReactNode;
   tone?: "warn";
+  always?: boolean;
+  label?: string;
 }) {
+  if (!tone && !always) return <div className="mb-2"><ConnectionHelp label={label}>{children}</ConnectionHelp></div>;
   return (
     <div
       className={
@@ -3835,8 +3955,10 @@ function Field({
   className,
   group,
   children,
+  help,
 }: {
   label: string;
+  help?: ReactNode;
   className?: string;
   /** Wraps buttons, not one input: render a <div>, since a <label> turns any
    *  click on its caption or padding into a click on its first button. */
@@ -3845,10 +3967,13 @@ function Field({
 }) {
   const Tag = group ? "div" : "label";
   return (
-    <Tag className={`mb-3 block ${className ?? ""}`}>
-      <div className="mb-1 text-xs text-text-muted">{label}</div>
-      {children}
-    </Tag>
+    <div className={`relative mb-3 ${className ?? ""}`}>
+      <Tag className="block">
+        {label && <div className={cn("mb-1 text-xs text-text-muted", help && "pr-6")}>{label}</div>}
+        {children}
+      </Tag>
+      {help && <div className="absolute right-0 top-0"><ConnectionHelp label={`${label} help`}>{help}</ConnectionHelp></div>}
+    </div>
   );
 }
 
@@ -3891,7 +4016,7 @@ function PasswordInput({
           type={reveal ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className={cn(inputCls, "pr-9")}
+          className={cn(inputCls, canGenerate ? "pr-16" : "pr-9")}
           autoComplete="off"
           spellCheck={false}
         />
@@ -3904,21 +4029,22 @@ function PasswordInput({
         >
           {reveal ? <EyeOff size={13} /> : <Eye size={13} />}
         </button>
-      </div>
       {canGenerate && (
         <button
           type="button"
           onClick={generate}
-          className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-border bg-bg-subtle px-2 py-1 text-[11.5px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
+          title={copied ? "Generated & copied" : "Generate strong password"}
+          aria-label={copied ? "Generated & copied" : "Generate strong password"}
+          className="absolute inset-y-0 right-8 flex items-center px-2 text-text-dim hover:text-text"
         >
           {copied ? (
             <Check size={11} className="text-accent" />
           ) : (
             <Wand2 size={11} />
           )}
-          {copied ? "Generated & copied" : "Generate strong password"}
         </button>
       )}
+      </div>
     </div>
   );
 }

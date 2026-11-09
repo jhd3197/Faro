@@ -1,5 +1,6 @@
 [package]
 name = "faro-agentd"
+default-run = "faro-agentd"
 version = "1.4.6"
 edition = "2021"
 license = "MIT"

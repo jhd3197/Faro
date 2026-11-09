@@ -140,6 +140,8 @@ const MIGRATIONS: &[&str] = &[
         parts_done          TEXT,
         updated_at          INTEGER NOT NULL
     );",
+    // v8 — durable two-way baselines, conflicts and version choices.
+    "CREATE TABLE sync_reconcile (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;",
 ];
 
 /// A saved unfinished transfer (Plan 24 Phase 4), as stored in
@@ -287,6 +289,7 @@ impl Db {
     pub fn clear_pair(&self, pair_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM sync_state WHERE pair_id = ?1", [pair_id])?;
+        conn.execute("DELETE FROM sync_reconcile WHERE substr(key,1,length(?1)) = ?1", [format!("two-way:{pair_id}:")])?;
         Ok(())
     }
 
@@ -397,6 +400,15 @@ impl Db {
     }
 
     // ---- Settings (Plan 12 Phase 2) ----
+
+    pub fn sync_reconcile_get(&self, key: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        Ok(self.conn.lock().unwrap().query_row("SELECT value FROM sync_reconcile WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+    pub fn sync_reconcile_set(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("INSERT INTO sync_reconcile(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", rusqlite::params![key,value])?;
+        Ok(())
+    }
 
     /// Every setting as `key -> raw JSON value`. Seeds the frontend store on boot.
     pub fn settings_get_all(&self) -> Result<HashMap<String, String>> {

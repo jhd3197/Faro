@@ -430,6 +430,9 @@ mod tests {
             endpoint: Some(url),
             account: None,
             agent_key: None,
+            agent_relay: None,
+            notes: None,
+            credential_ref: None,
             group: None,
             sort_order: None,
             jump_host: None,
@@ -444,6 +447,7 @@ mod tests {
             jump_via: None,
             proxy_command: None,
             oauth_client_id: None,
+            cf_forwards: Vec::new(),
         };
         let sess = Arc::new(http_connect(&profile).await.expect("connect"));
         let fs = HttpFs::new(sess.clone());

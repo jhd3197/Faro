@@ -26,3 +26,5 @@ pub fn agent_name() -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string())
 }
+
+pub mod relay;

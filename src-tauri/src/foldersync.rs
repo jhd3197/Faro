@@ -35,6 +35,8 @@ use tokio::sync::{mpsc, Mutex};
 use crate::sync::{SyncDirection, SyncPlan, SyncStrategy};
 use crate::transfer::TransferStatus;
 use crate::AppState;
+#[path = "foldersync_twoway.rs"]
+pub(crate) mod twoway_runtime;
 
 /// Backstop poll cadence when a pair doesn't specify one.
 const DEFAULT_POLL_SECS: u64 = 60;
@@ -68,6 +70,8 @@ pub struct SyncPair {
     pub profile_id: String,
     pub remote_root: String,
     pub direction: SyncDirection,
+    #[serde(default)]
+    pub two_way: bool,
     pub strategy: SyncStrategy,
     /// How the pair materializes files locally. `Mirror` (default) moves whole
     /// files eagerly, today's behavior. `OnDemand` registers OS placeholders
@@ -485,6 +489,11 @@ async fn reconcile_inner(
         Box::new(crate::remotefs::local::LocalFs);
     let remote_fs = crate::commands::fs_for_session(&session);
 
+    crate::sync::journal::recover(local_fs.as_ref(), "local", &pair.local_root).await?;
+    crate::sync::journal::recover(remote_fs.as_ref(), &crate::sync::recovery::destination_key(session.profile(), false), &pair.remote_root).await?;
+
+    if pair.two_way { return twoway_runtime::reconcile(app, state, pair, session).await; }
+
     // The index tracks the *source* side (authoritative for one-way sync); its
     // change signal comes from that backend's capabilities.
     let source_signal = match pair.direction {
@@ -688,7 +697,7 @@ async fn wait_for_transfers(state: &AppState, ids: &[String]) -> HashSet<String>
                         unfinished.insert(id.clone());
                     }
                 }
-            }
+            } else { unfinished.insert(id.clone()); }
         }
         if remaining == 0 || start.elapsed() > TRANSFER_WAIT_CAP {
             return unfinished;
@@ -925,6 +934,7 @@ mod tests {
             profile_id: String::new(),
             remote_root: String::new(),
             direction: SyncDirection::LocalToRemote,
+            two_way: false,
             strategy: SyncStrategy::Mirror,
             mode: SyncMode::Mirror,
             enabled: true,

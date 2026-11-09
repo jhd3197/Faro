@@ -32,7 +32,9 @@ import type {
   ImporterPaths,
   FaroImport,
   CfAccountStatus,
+  CfForwardStatus,
   CfSshHostname,
+  CfTunnelHealth,
   CfInvitePlan,
   CfZone,
   CfCreated,
@@ -45,6 +47,8 @@ import type {
   SessionId,
   SyncDirection,
   SyncPlan,
+  DiagnosticReport,
+  SyncRecoveryEntry,
   SyncStrategy,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -113,6 +117,10 @@ export const ipc = {
     invoke<void>("save_profile", { profile }),
 
   /** Persist a manual rail order: every profile id, in display order. */
+  credentialProviders: () => invoke<string[]>("credential_providers"),
+  groupGateways: () => invoke<Record<string, string>>("group_gateways"),
+  setGroupGateway: (group: string, gateway: string | null) => invoke<void>("set_group_gateway", { group, gateway }),
+  organizeProfiles: (changes: import("./types").ProfileOrganization[], expected?: import("./types").ProfileOrganization[]) => invoke<import("./types").ProfileOrganization[]>("organize_profiles", { changes, expected }),
   reorderProfiles: (ids: string[]) =>
     invoke<void>("reorder_profiles", { ids }),
 
@@ -140,6 +148,9 @@ export const ipc = {
 
   /** Connect with a profile as it stands in the editor (saved or not), then
    *  disconnect. Keychain-held secrets must be set first. */
+  diagnoseConnection: (profile: ConnectionProfile) =>
+    invoke<DiagnosticReport>("diagnose_connection", { profile }),
+
   testConnection: (profile: ConnectionProfile) =>
     invoke<void>("test_connection", { profile }),
 
@@ -196,6 +207,7 @@ export const ipc = {
 
   /** Current state of the in-app agent host (enabled, running, policy, peers,
    *  open pairing window). */
+  agentHostSetRelay: (relay: { address: string; publicKey: string } | null) => invoke<AgentHostStatus>("agent_host_set_relay", { relay }),
   agentHostStatus: () => invoke<AgentHostStatus>("agent_host_status"),
 
   /** Turn the host on/off; optionally set the listen port. */
@@ -476,10 +488,19 @@ export const ipc = {
   cfAccountCreateServiceToken: () => invoke<CfAccountStatus>("cf_account_create_service_token"),
   cfAccountDeleteServiceToken: () => invoke<CfAccountStatus>("cf_account_delete_service_token"),
   cfAccountZones: () => invoke<CfZone[]>("cf_account_zones"),
+  /** Named Access TCP forwards and whether each is listening. */
+  cfForwardsStatus: () => invoke<CfForwardStatus[]>("cf_forwards_status"),
+  cfForwardStart: (profileId: string, name: string) =>
+    invoke<CfForwardStatus>("cf_forward_start", { profileId, name }),
+  cfForwardStop: (profileId: string, name: string) =>
+    invoke<void>("cf_forward_stop", { profileId, name }),
+  /** Start a web-panel forward if needed and open it in the browser. */
+  cfForwardOpen: (profileId: string, name: string) =>
+    invoke<void>("cf_forward_open", { profileId, name }),
   /** The Cloudflare side of moving a server behind Cloudflare. */
   cfSetupCloudflare: (profileId: string, request: CfSetupRequest) =>
     invoke<CfSetupState>("cf_setup_cloudflare", { profileId, request }),
-  cfTunnelStatus: (tunnelId: string) => invoke<string>("cf_tunnel_status", { tunnelId }),
+  cfTunnelStatus: (tunnelId: string) => invoke<CfTunnelHealth>("cf_tunnel_status", { tunnelId }),
   /** Delete what a setup created; returns what couldn't be deleted. */
   cfSetupUndo: (created: CfCreated[]) => invoke<string[]>("cf_setup_undo", { created }),
   /** Which of `ports` on `host` answer from this machine. */
@@ -534,6 +555,14 @@ export const ipc = {
 
   syncExecute: (sessionId: SessionId, plan: SyncPlan) =>
     invoke<string[]>("sync_execute", { sessionId, plan }),
+
+  folderSyncConflicts: (pairId: string) => invoke<import("./types").TwoWayConflict[]>("folder_sync_conflicts", { pairId }),
+  folderSyncResolve: (pairId: string, conflict: import("./types").TwoWayConflict, local: boolean) => invoke<void>("folder_sync_resolve", { pairId, conflict, local }),
+  syncRecoveryPurge: (sessionId: SessionId, root: string, local: boolean, staging: boolean, days: number, entries: SyncRecoveryEntry[]) => invoke<number>("sync_recovery_purge", { sessionId, root, local, staging, days, entries }),
+  syncRecoveryList: (sessionId: SessionId, root: string, local: boolean, staging = false) =>
+    invoke<SyncRecoveryEntry[]>("sync_recovery_list", { sessionId, root, local, staging }),
+  syncRecoveryRestore: (sessionId: SessionId, root: string, local: boolean, entry: SyncRecoveryEntry) =>
+    invoke<string>("sync_recovery_restore", { sessionId, root, local, entry }),
 
   startEdit: (sessionId: SessionId, remotePath: string, editor?: string) =>
     invoke<EditStartedEvent>("start_edit", { sessionId, remotePath, editor }),
@@ -804,6 +833,11 @@ export async function onAgentHostPaired(
 }
 
 /** CLI version-drift status changed (startup check, or an update finished). */
+/** Access TCP forwards changed (a session connected, or one was started or stopped). */
+export async function onCfForwardsChanged(cb: () => void): Promise<UnlistenFn> {
+  return listen("cf-forward://status", () => cb());
+}
+
 export async function onCloudflaredStatus(
   cb: (status: CloudflaredStatus) => void
 ): Promise<UnlistenFn> {

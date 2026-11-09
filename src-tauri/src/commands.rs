@@ -9,7 +9,7 @@ use base64::Engine as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 pub const LOCAL_SESSION: &str = "local";
@@ -64,9 +64,10 @@ pub async fn list_profiles(
 
 #[tauri::command]
 pub async fn save_profile(
-    profile: ConnectionProfile,
+    mut profile: ConnectionProfile,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    crate::credential_refs::clear_embedded_secret(&mut profile);
     if state.profiles.keychain_enabled() {
         let keep = state.profiles.is_unresolved(&profile.id);
         crate::profiles::sync_profile_secret(&profile, &state.db, keep).map_err(err)?;
@@ -219,11 +220,19 @@ pub async fn connect(
         .ok_or_else(|| {
             FaroError::new(ErrorKind::NotFound, format!("profile {profile_id} not found"))
         })?;
+    let forwards = profile.clone();
     let session_id = state
         .sessions
-        .connect(profile, app)
+        .connect(profile, app.clone())
         .await
         .map_err(FaroError::from)?;
+    // Named Access TCP forwards come up with the session. A port conflict
+    // is reported on the forward; it does not fail the connection.
+    if !forwards.cf_forwards.is_empty() {
+        let mgr = state.cf_forwards.clone();
+        let _ = tokio::task::spawn_blocking(move || mgr.start_profile(&forwards)).await;
+        let _ = app.emit("cf-forward://status", ());
+    }
     // Re-apply a previously-granted Agent Bridge access for this profile (session
     // ids are per-connect, so the bridge tracks the persistent grant by profile).
     state
@@ -254,11 +263,28 @@ pub async fn test_connection(
 }
 
 #[tauri::command]
+pub async fn diagnose_connection(profile: ConnectionProfile, app: AppHandle, state: State<'_, AppState>) -> Result<crate::diagnostics::DiagnosticReport, String> {
+    Ok(crate::diagnostics::run(profile, app, &state).await)
+}
+
+#[tauri::command]
 pub async fn disconnect(
     session_id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.sessions.disconnect(&session_id).await.map_err(err)
+    let profile_id = state.sessions.get(&session_id).await.map(|s| s.profile().id.clone());
+    state.sessions.disconnect(&session_id).await.map_err(err)?;
+    // Stop this connection's forwards once nothing is using the session.
+    // A forward started from faro-cli is left running.
+    if let Some(id) = profile_id {
+        if state.sessions.ids_for_profile(&id).await.is_empty() {
+            let mgr = state.cf_forwards.clone();
+            let _ = tokio::task::spawn_blocking(move || mgr.stop_profile(&id)).await;
+            let _ = app.emit("cf-forward://status", ());
+        }
+    }
+    Ok(())
 }
 
 // ---------- Faro Agent (Faro-to-Faro remote control) ----------
@@ -447,6 +473,9 @@ pub async fn dropbox_authorize(
         endpoint: None,
         account: None,
         agent_key: None,
+        agent_relay: None,
+        notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -462,6 +491,7 @@ pub async fn dropbox_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::dropbox_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -506,6 +536,9 @@ pub async fn onedrive_authorize(
         endpoint: None,
         account: None,
         agent_key: None,
+        agent_relay: None,
+        notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -521,6 +554,7 @@ pub async fn onedrive_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::onedrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -570,6 +604,9 @@ pub async fn dynamics_authorize(
         endpoint: None,
         account: None,
         agent_key: None,
+        agent_relay: None,
+        notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -585,6 +622,7 @@ pub async fn dynamics_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: None,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::dynamics_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -624,6 +662,9 @@ pub async fn gdrive_authorize(
         endpoint: None,
         account: None,
         agent_key: None,
+        agent_relay: None,
+        notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -639,6 +680,7 @@ pub async fn gdrive_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::gdrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -678,6 +720,9 @@ pub async fn box_authorize(
         endpoint: None,
         account: None,
         agent_key: None,
+        agent_relay: None,
+        notes: None,
+        credential_ref: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -693,6 +738,7 @@ pub async fn box_authorize(
         jump_via: None,
         proxy_command: None,
         oauth_client_id: client_id,
+        cf_forwards: Vec::new(),
     };
     let account_label = match crate::session::box_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -1439,7 +1485,18 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn duplicate_local(path: &str) -> Result<(), String> {
+/// `cp` line for `duplicate_ssh`. A symlink to a directory is copied as the
+/// folder it points at (`cp -aH` follows the command-line link and keeps links
+/// inside the tree). A file link or a broken link is copied as itself.
+fn duplicate_remote_command(src: &str, dst: &str) -> String {
+    let src_q = sh_quote(src);
+    let dst_q = sh_quote(dst);
+    format!(
+        "if test -L {src_q} && test -d {src_q}; then cp -aH -- {src_q} {dst_q}; else cp -a -- {src_q} {dst_q}; fi"
+    )
+}
+
+pub(crate) fn duplicate_local(path: &str) -> Result<(), String> {
     let src = Path::new(path);
     if !src.exists() {
         return Err(format!("{path} does not exist"));
@@ -1470,7 +1527,7 @@ fn duplicate_local(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn duplicate_ssh(ssh: &Arc<SshSession>, path: &str) -> Result<(), String> {
+pub(crate) async fn duplicate_ssh(ssh: &Arc<SshSession>, path: &str) -> Result<(), String> {
     let path = path.trim_end_matches('/');
     let (parent, name) = split_remote(path);
     let mut n = 1;
@@ -1489,11 +1546,7 @@ async fn duplicate_ssh(ssh: &Arc<SshSession>, path: &str) -> Result<(), String> 
         }
     };
     let out = ssh
-        .exec(&format!(
-            "cp -a -- {} {}",
-            sh_quote(path),
-            sh_quote(&dst)
-        ))
+        .exec(&duplicate_remote_command(path, &dst))
         .await
         .map_err(err)?;
     if out.exit_code != Some(0) {
@@ -1998,7 +2051,7 @@ pub async fn export_connections(
     passphrase: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<crate::faro_file::ExportSummary, String> {
-    let all = state.profiles.list().await.map_err(err)?;
+    let all = state.profiles.exportable().await.map_err(err)?;
     let path = std::path::PathBuf::from(path);
     let (bytes, summary) = match format.as_str() {
         "openssh" => {
@@ -2041,6 +2094,9 @@ pub async fn sync_plan(
 ) -> Result<SyncPlan, String> {
     let local_fs: Box<dyn RemoteFs> = Box::new(crate::remotefs::local::LocalFs);
     let remote_fs = fs_for(&session_id, &state).await?;
+    let session = state.sessions.get(&session_id).await.ok_or("Session not found")?;
+    sync::journal::recover(local_fs.as_ref(), "local", &local_path).await.map_err(err)?;
+    sync::journal::recover(remote_fs.as_ref(), &sync::recovery::destination_key(session.profile(), false), &remote_path).await.map_err(err)?;
     sync::plan(
         local_fs.as_ref(),
         remote_fs.as_ref(),
@@ -2083,6 +2139,14 @@ pub(crate) async fn execute_sync_plan(
     let local_fs: Box<dyn RemoteFs> = Box::new(crate::remotefs::local::LocalFs);
     let remote_fs = fs_for_session(&session);
 
+    let destination_fs: &dyn RemoteFs = match plan.direction {
+        SyncDirection::LocalToRemote => remote_fs.as_ref(),
+        SyncDirection::RemoteToLocal => local_fs.as_ref(),
+    };
+    crate::sync::journal::recover(destination_fs, &crate::sync::recovery::destination_key(session.profile(), matches!(plan.direction, SyncDirection::RemoteToLocal)), crate::sync::recovery::destination_root(&plan)).await?;
+    crate::sync::recovery::validate_plan(destination_fs, &plan).await?;
+    let recovery_root = crate::sync::recovery::destination_root(&plan).to_string();
+    let recovery_batch = crate::sync::recovery::new_batch();
     let mut ids = Vec::new();
     let policy = crate::transfer::OverwritePolicy::Overwrite;
 
@@ -2094,6 +2158,18 @@ pub(crate) async fn execute_sync_plan(
     }
 
     for copy in plan.copies {
+        if let Some(previous) = &copy.destination_state {
+            let stage = crate::sync::recovery::StagedReplacement {
+                destination_key: Some(crate::sync::recovery::destination_key(session.profile(), matches!(plan.direction, SyncDirection::RemoteToLocal))),
+                root: recovery_root.clone(), batch: crate::sync::recovery::new_batch(),
+                relative: copy.relative.clone(), expected: previous.clone(), size: copy.size,
+            };
+            ids.push(transfers.start_sync_replacement(session.clone(), copy.source_path, plan.direction,
+                stage, copy.destination_path, app.clone()).await?);
+            continue;
+        } else {
+            crate::sync::recovery::check_missing(destination_fs, &recovery_root, &copy.relative).await?;
+        }
         let dest_parent = parent_of(&copy.destination_path);
         let id = match plan.direction {
             SyncDirection::LocalToRemote => {
@@ -2142,10 +2218,26 @@ pub(crate) async fn execute_sync_plan(
             SyncDirection::LocalToRemote => remote_fs.as_ref(),
             SyncDirection::RemoteToLocal => local_fs.as_ref(),
         };
-        fs.delete(&d.path, false).await?;
+        crate::sync::recovery::preserve(fs, &recovery_root, &recovery_batch, &d.relative,
+            d.destination_state.as_ref().ok_or_else(|| anyhow::anyhow!("Missing sync preview; re-plan"))?).await?;
     }
 
     Ok(ids)
+}
+
+#[tauri::command]
+pub async fn sync_recovery_list(session_id: String, root: String, local: bool, staging: Option<bool>, state: State<'_, AppState>) -> Result<Vec<crate::sync::recovery::RecoveryEntry>, String> {
+    let session = state.sessions.get(&session_id).await.ok_or_else(|| "Session not found".to_string())?;
+    let fs: Box<dyn RemoteFs> = if local { Box::new(crate::remotefs::local::LocalFs) } else { fs_for_session(&session) };
+    crate::sync::journal::recover(fs.as_ref(), &crate::sync::recovery::destination_key(session.profile(), local), &root).await.map_err(err)?;
+    crate::sync::recovery::list_area(fs.as_ref(), &root, staging.unwrap_or(false)).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn sync_recovery_restore(session_id: String, root: String, local: bool, entry: crate::sync::recovery::RecoveryEntry, state: State<'_, AppState>) -> Result<String, String> {
+    let session = state.sessions.get(&session_id).await.ok_or_else(|| "Session not found".to_string())?;
+    let fs: Box<dyn RemoteFs> = if local { Box::new(crate::remotefs::local::LocalFs) } else { fs_for_session(&session) };
+    crate::sync::recovery::restore(fs.as_ref(), &root, &entry).await.map_err(err)
 }
 
 fn parent_of(p: &str) -> String {
@@ -2672,4 +2764,32 @@ mod upload_inventory_tests {
         assert!(inspect_upload_paths(collision).await.unwrap_err().contains("conflicting"));
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn directory_link_copy_follows_only_the_command_line_link() {
+        let cmd = super::duplicate_remote_command("/srv/linked", "/srv/linked copy");
+        assert!(cmd.contains("test -L '/srv/linked' && test -d '/srv/linked'"));
+        assert!(cmd.contains("cp -aH -- '/srv/linked' '/srv/linked copy'"));
+        assert!(cmd.contains("cp -a -- '/srv/linked' '/srv/linked copy'"));
+    }
+}
+
+#[tauri::command]
+pub async fn organize_profiles(changes: Vec<crate::profiles::Organization>, expected: Option<Vec<crate::profiles::Organization>>, state: State<'_, AppState>) -> Result<Vec<crate::profiles::Organization>, String> {
+    state.profiles.organize(&changes, expected.as_deref()).await.map_err(err)
+}
+
+#[tauri::command]
+pub fn group_gateways(state: State<'_, AppState>) -> Result<std::collections::BTreeMap<String, String>, String> { state.profiles.group_gateways().map_err(err) }
+#[tauri::command]
+pub async fn set_group_gateway(group: String, gateway: Option<String>, state: State<'_, AppState>) -> Result<(), String> { state.profiles.set_group_gateway(group, gateway).await.map_err(err) }
+
+#[tauri::command]
+pub fn credential_providers() -> Result<Vec<String>, String> { Ok(crate::credential_refs::providers().map_err(err)?.into_keys().collect()) }
+
+#[tauri::command]
+pub async fn sync_recovery_purge(session_id: String, root: String, local: bool, staging: bool, days: u32, entries: Vec<crate::sync::recovery::RecoveryEntry>, state: State<'_, AppState>) -> Result<usize, String> {
+    let session = state.sessions.get(&session_id).await.ok_or("Session not found")?;
+    let fs: Box<dyn RemoteFs> = if local { Box::new(crate::remotefs::local::LocalFs) } else { fs_for_session(&session) };
+    crate::sync::recovery::purge(fs.as_ref(), &root, staging, days, &entries).await.map_err(err)
 }

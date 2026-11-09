@@ -153,6 +153,12 @@ pub struct ConnectionProfile {
     // profile is paired; absence means the user still needs to pair with a code.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<crate::credential_refs::CredentialRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_relay: Option<faro_agent_proto::relay::RelayConfig>,
     // Rail organisation. `group` is a free-form folder name (absent = ungrouped);
     // `sort_order` is the manual drag-and-drop position. Profiles without one
     // sort after ordered ones, by protocol/name.
@@ -213,6 +219,31 @@ pub struct ConnectionProfile {
     // the release has one. Its optional client secret lives in the keychain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_client_id: Option<String>,
+    /// Named Cloudflare Access TCP forwards (`cloudflared access tcp`) for
+    /// this connection: a database, RDP, an internal API, or a web panel.
+    /// Started and stopped with the session. Absent on profiles saved before
+    /// this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cf_forwards: Vec<CfForward>,
+}
+
+/// One Access-protected service a connection exposes on a local port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CfForward {
+    /// Name unique on this connection. `faro-cli cf forward` addresses it by
+    /// this name (or `connection/name` when another connection uses it too).
+    pub name: String,
+    /// Access hostname of the service. Absent = the connection's Cloudflare
+    /// hostname, then its host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Local port `cloudflared access tcp` listens on.
+    pub local_port: u16,
+    /// A web panel: the server rail offers Open in browser for
+    /// `http://127.0.0.1:<localPort>`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub web: bool,
 }
 
 /// Longest bastion chain a profile may connect through.
@@ -407,13 +438,46 @@ impl ProfileStore {
 
     pub async fn get(&self, id: &str) -> Result<Option<ConnectionProfile>> {
         let g = self.inner.lock().await;
-        Ok(g.iter().find(|p| p.id == id).cloned().map(|p| resolve_jump(&g, p)))
+        Ok(g.iter().find(|p| p.id == id).cloned().map(|p| self.resolve_group_jump(&g, p)))
     }
 
     /// `profile` (e.g. an unsaved one from the editor) with its jump host
     /// resolved against the saved profiles.
     pub async fn with_jump_resolved(&self, profile: ConnectionProfile) -> ConnectionProfile {
-        resolve_jump(&self.inner.lock().await, profile)
+        self.resolve_group_jump(&self.inner.lock().await, profile)
+    }
+
+    pub fn group_gateways(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let path = self.path.with_file_name("profile-groups.json");
+        if !path.exists() { return Ok(Default::default()); }
+        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+    }
+
+    pub async fn set_group_gateway(&self, group: String, gateway: Option<String>) -> Result<()> {
+        anyhow::ensure!(!group.trim().is_empty(), "Choose a group first");
+        let g = self.inner.lock().await;
+        let mut groups = self.group_gateways()?;
+        if let Some(id) = gateway {
+            anyhow::ensure!(g.iter().any(|p| p.id == id && matches!(p.protocol.as_str(), "sftp" | "ssh" | "")), "Choose an existing SSH gateway");
+            groups.insert(group, id);
+        } else { groups.remove(&group); }
+        Ok(crate::fsutil::write_atomic(&self.path.with_file_name("profile-groups.json"), &serde_json::to_vec_pretty(&groups)?)?)
+    }
+
+    fn resolve_group_jump(&self, all: &[ConnectionProfile], mut original: ConnectionProfile) -> ConnectionProfile {
+        match self.group_gateways() {
+            Ok(groups) => {
+                let all: Vec<_> = all.iter().cloned().map(|p| inherit_gateway(p, &groups)).collect();
+                original.jump_via = resolve_jump(&all, inherit_gateway(original.clone(), &groups)).jump_via;
+            }
+            Err(_) => original.jump_via = Some(JumpVia::Broken("Group settings could not be read; repair profile-groups.json before connecting".into())),
+        }
+        original
+    }
+
+    pub async fn exportable(&self) -> Result<Vec<ConnectionProfile>> {
+        let groups = self.group_gateways()?;
+        Ok(self.inner.lock().await.iter().cloned().map(|p| inherit_gateway(p, &groups)).collect())
     }
 
     pub async fn upsert(&self, profile: ConnectionProfile) -> Result<()> {
@@ -429,6 +493,27 @@ impl ProfileStore {
 
     /// Persist a manual rail order: each listed profile gets `sort_order` =
     /// its index. Ids not in the store are skipped; one write for the batch.
+    /// Apply organization as one durable write, preserving credentials and edits.
+    pub async fn organize(&self, changes: &[Organization], expected: Option<&[Organization]>) -> Result<Vec<Organization>> {
+        let mut g = self.inner.lock().await;
+        if let Some(expected) = expected {
+            for old in expected {
+                anyhow::ensure!(g.iter().find(|p| p.id == old.id).map(Organization::from).as_ref() == Some(old), "Organization changed since this action; reload before undoing");
+            }
+        }
+        let mut next = g.clone();
+        let mut before = Vec::new();
+        for change in changes {
+            let p = next.iter_mut().find(|p| p.id == change.id).context("Profile was removed; reload organization")?;
+            before.push(Organization::from(&*p));
+            p.group = change.group.clone();
+            p.sort_order = change.sort_order;
+        }
+        self.write(&next)?;
+        *g = next;
+        Ok(before)
+    }
+
     pub async fn reorder(&self, ids: &[String]) -> Result<()> {
         let mut g = self.inner.lock().await;
         for (i, id) in ids.iter().enumerate() {
@@ -564,6 +649,7 @@ fn for_disk(profiles: &[ConnectionProfile], keychain: bool) -> Vec<ConnectionPro
         .iter()
         .cloned()
         .map(|mut p| {
+            crate::credential_refs::clear_embedded_secret(&mut p);
             if keychain {
                 match &mut p.auth {
                     AuthMethod::Password { password } => password.clear(),
@@ -597,6 +683,39 @@ mod tests {
             "auth": auth
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn group_gateway_inherits_nearest_parent_and_preserves_explicit_routes() {
+        let mut p = profile(serde_json::json!({"kind":"agent"}));
+        p.group = Some("Production/Europe/Web".into());
+        let groups = std::collections::BTreeMap::from([("Production".into(), "global".into()), ("Production/Europe".into(), "regional".into())]);
+        assert_eq!(inherit_gateway(p.clone(), &groups).jump_profile.as_deref(), Some("regional"));
+        p.jump_profile = Some("explicit".into());
+        assert_eq!(inherit_gateway(p.clone(), &groups).jump_profile.as_deref(), Some("explicit"));
+        p.jump_profile = None; p.id = "regional".into();
+        assert!(inherit_gateway(p, &groups).jump_profile.is_none());
+    }
+
+    #[tokio::test]
+    async fn organization_undo_preserves_profile_edits_and_refuses_stale_state() {
+        let dir = std::env::temp_dir().join(format!("faro-organization-{}", uuid::Uuid::new_v4()));
+        let store = ProfileStore::from_dir(&dir, false).unwrap();
+        let mut p = profile(serde_json::json!({"kind": "agent"}));
+        store.upsert(p.clone()).await.unwrap();
+        let after = Organization { id: p.id.clone(), group: Some("Production".into()), sort_order: Some(1) };
+        let before = store.organize(&[after.clone()], None).await.unwrap();
+        p.group = after.group.clone(); p.sort_order = after.sort_order;
+        p.notes = Some("Updated runbook".into());
+        store.upsert(p.clone()).await.unwrap();
+        store.organize(&before, Some(&[after.clone()])).await.unwrap();
+        let restored = store.get(&p.id).await.unwrap().unwrap();
+        assert_eq!(restored.notes.as_deref(), Some("Updated runbook"));
+        assert_eq!(restored.group, None);
+        assert!(store.organize(&before, Some(&[after])).await.is_err());
+        assert_eq!(ProfileStore::from_dir(&dir, false).unwrap().get(&p.id).await.unwrap().unwrap().notes, restored.notes);
+        std::fs::remove_file(dir.join("profiles.json")).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]
@@ -829,4 +948,29 @@ mod tests {
 
         credentials::delete_secret(&pp_purpose);
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Organization {
+    pub id: String,
+    pub group: Option<String>,
+    pub sort_order: Option<u32>,
+}
+impl From<&ConnectionProfile> for Organization {
+    fn from(p: &ConnectionProfile) -> Self { Self { id: p.id.clone(), group: p.group.clone(), sort_order: p.sort_order } }
+}
+
+fn inherit_gateway(mut p: ConnectionProfile, groups: &std::collections::BTreeMap<String, String>) -> ConnectionProfile {
+    if !matches!(p.protocol.as_str(), "sftp" | "ssh" | "") || p.jump_profile.is_some() || p.jump_host.is_some() || p.proxy.is_some() || p.proxy_command.is_some() { return p; }
+    let mut group = p.group.as_deref().unwrap_or("");
+    while !group.is_empty() {
+        if let Some(id) = groups.get(group) {
+            // The gateway itself may live in the group it serves.
+            if id != &p.id { p.jump_profile = Some(id.clone()); }
+            break;
+        }
+        group = group.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+    }
+    p
 }
