@@ -153,6 +153,8 @@ pub struct ConnectionProfile {
     // profile is paired; absence means the user still needs to pair with a code.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_relay: Option<faro_agent_proto::relay::RelayConfig>,
     // Rail organisation. `group` is a free-form folder name (absent = ungrouped);
     // `sort_order` is the manual drag-and-drop position. Profiles without one
     // sort after ordered ones, by protocol/name.

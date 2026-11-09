@@ -132,9 +132,19 @@ impl AgentHost {
             }
         };
 
+        let relay_path = daemon.config_dir.join("relay.json");
+        let relay: Option<faro_agent_proto::relay::RelayConfig> = if relay_path.exists() {
+            Some(serde_json::from_slice(&std::fs::read(relay_path)?)?)
+        } else { None };
         let serve_daemon = daemon.clone();
         let accept_task = tauri::async_runtime::spawn(async move {
-            if let Err(e) = faro_agentd::serve(listener, serve_daemon).await {
+            let result = if let Some(relay) = relay {
+                tokio::select! {
+                    result = faro_agentd::serve(listener, serve_daemon.clone()) => result,
+                    _ = faro_agentd::relay::listen(relay, serve_daemon) => Ok(()),
+                }
+            } else { faro_agentd::serve(listener, serve_daemon).await };
+            if let Err(e) = result {
                 tracing::warn!("agent host stopped serving: {e:#}");
             }
         });
@@ -179,6 +189,8 @@ impl AgentHost {
         };
 
         Ok(HostStatus {
+            relay: read_relay(&dir)?,
+            public_key: identity.public_b64().to_string(),
             enabled: settings.enabled,
             running: is_running,
             port,
@@ -223,6 +235,8 @@ pub struct PeerView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostStatus {
+    pub relay: Option<faro_agent_proto::relay::RelayConfig>,
+    pub public_key: String,
     pub enabled: bool,
     pub running: bool,
     pub port: u16,
@@ -380,5 +394,29 @@ pub async fn agent_host_revoke_peer(
         }
     }
     drop(running);
+    host.status().await.map_err(err)
+}
+
+fn read_relay(dir: &std::path::Path) -> Result<Option<faro_agent_proto::relay::RelayConfig>> {
+    let path = dir.join("relay.json");
+    if path.exists() { Ok(Some(serde_json::from_slice(&std::fs::read(path)?)?)) } else { Ok(None) }
+}
+
+#[tauri::command]
+pub async fn agent_host_set_relay(app: AppHandle, state: State<'_, AppState>, relay: Option<faro_agent_proto::relay::RelayConfig>) -> Result<HostStatus, String> {
+    if let Some(config) = &relay {
+        let key = faro_agent_proto::decode_public(&config.public_key).map_err(err)?;
+        if key.len() != 32 || config.address.trim().is_empty() { return Err("Enter a relay address and a 32-byte base64 public key".into()); }
+    }
+    let dir = AgentHost::agent_dir().map_err(err)?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let path = dir.join("relay.json");
+    if let Some(config) = relay {
+        crate::fsutil::write_atomic(&path, &serde_json::to_vec_pretty(&config).map_err(err)?).map_err(err)?;
+    } else if path.exists() { std::fs::remove_file(&path).map_err(err)?; }
+    let host = &state.agent_host;
+    host.stop().await;
+    let enabled = host.settings.lock().await.enabled;
+    if enabled { host.start(&app).await.map_err(err)?; }
     host.status().await.map_err(err)
 }

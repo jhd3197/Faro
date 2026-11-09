@@ -199,7 +199,14 @@ async fn run(args: Args, dir: PathBuf, identity: Identity, config: Config) -> Re
         }
     };
 
-    server::serve(listener, daemon).await
+    let relay_path = daemon.config_dir.join("relay.json");
+    if relay_path.exists() {
+        let relay = serde_json::from_slice(&std::fs::read(relay_path)?)?;
+        tokio::select! {
+            result = server::serve(listener, daemon.clone()) => result,
+            _ = faro_agentd::relay::listen(relay, daemon) => Ok(()),
+        }
+    } else { server::serve(listener, daemon).await }
 }
 
 /// `run` + an open pairing window: serves already-paired controllers while new
@@ -287,7 +294,14 @@ async fn pair(args: Args, dir: PathBuf, identity: Identity, config: Config) -> R
         });
     }
 
-    server::serve(listener, daemon).await
+    let relay_path = daemon.config_dir.join("relay.json");
+    if relay_path.exists() {
+        let relay = serde_json::from_slice(&std::fs::read(relay_path)?)?;
+        tokio::select! {
+            result = server::serve(listener, daemon.clone()) => result,
+            _ = faro_agentd::relay::listen(relay, daemon) => Ok(()),
+        }
+    } else { server::serve(listener, daemon).await }
 }
 
 fn info(dir: PathBuf, identity: Identity, config: Config) -> Result<()> {

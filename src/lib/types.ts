@@ -93,6 +93,7 @@ export interface ConnectionProfile {
   // Faro Agent (protocol === "faro-agent"): the paired daemon's pinned public
   // key (base64). Present === paired; absent === still needs a pairing code.
   agentKey?: string;
+  agentRelay?: { address: string; publicKey: string };
   /** Rail folder this server lives in. Absent = ungrouped (top of the rail). */
   group?: string;
   /** Manual drag-and-drop position in the rail. Absent = sorted after ordered
@@ -245,6 +246,8 @@ export interface AgentHostPairing {
 
 /** State of the in-app agent host (Settings → Remote control). */
 export interface AgentHostStatus {
+  relay?: { address: string; publicKey: string } | null;
+  publicKey?: string;
   enabled: boolean;
   running: boolean;
   port: number;

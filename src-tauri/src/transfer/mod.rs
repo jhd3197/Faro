@@ -4636,6 +4636,7 @@ mod tests {
             endpoint: None,
             account: None,
             agent_key: None,
+            agent_relay: None,
             group: None,
             sort_order: None,
             icon: None,

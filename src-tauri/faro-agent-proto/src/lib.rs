@@ -26,3 +26,5 @@ pub use msg::{
 };
 pub use pairing::{generate_code, is_valid_code, psk_from_code, CODE_LEN};
 pub use secure::{Auth, Role, SecureChannel};
+
+pub mod relay;

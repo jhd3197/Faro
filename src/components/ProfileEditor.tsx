@@ -194,6 +194,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [name, setName] = useState(seed?.name ?? "");
   const [protocol, setProtocol] = useState<Protocol>(seed?.protocol ?? "sftp");
   // Faro Agent: the pinned daemon key. Set by pairing; carried through Save.
+  const [agentRelayAddress, setAgentRelayAddress] = useState(seed?.agentRelay?.address ?? "");
+  const [agentRelayKey, setAgentRelayKey] = useState(seed?.agentRelay?.publicKey ?? "");
   const [agentKey, setAgentKey] = useState<string | undefined>(seed?.agentKey);
   const [host, setHost] = useState(seed?.host ?? "");
   const [port, setPort] = useState(seed?.port ?? defaultPort);
@@ -573,6 +575,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             ? dynamicsAccount || undefined
             : undefined,
       agentKey: isAgent ? agentKey : undefined,
+      agentRelay: isAgent && agentRelayAddress.trim() ? { address: agentRelayAddress.trim(), publicKey: agentRelayKey.trim() } : undefined,
       group: group.trim() || undefined,
       icon: icon.trim() || undefined,
       sortOrder: profile?.sortOrder,
@@ -1078,7 +1081,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             secretSaved={oauthSecretSaved}
           />
         ) : isAgent ? (
-          <AgentSection
+          <><AgentSection
             profileId={id}
             host={host}
             setHost={setHost}
@@ -1089,6 +1092,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             onPair={pair}
             onUnpair={() => setAgentKey(undefined)}
           />
+          {agentKey && <div className="mt-3 space-y-2 rounded-md border border-border p-3">
+            <div className="text-xs font-medium">Internet relay (optional)</div>
+            <p className="text-[11px] text-text-muted">Use a self-hosted relay after pairing these devices. Leave the address empty for a direct connection.</p>
+            <input className="input w-full" aria-label="Relay address" placeholder="relay.example.com:8723" value={agentRelayAddress} onChange={e => setAgentRelayAddress(e.target.value)} />
+            <input className="input w-full" aria-label="Relay public key" placeholder="Relay public key (base64)" value={agentRelayKey} onChange={e => setAgentRelayKey(e.target.value)} />
+          </div>}</>
         ) : (
           <>
             {protocol === "sftp" && (

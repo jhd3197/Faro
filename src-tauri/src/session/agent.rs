@@ -138,8 +138,11 @@ impl AgentSession {
         let identity = controller_identity()?;
         let sk = identity.private_bytes()?;
         let expect = faro_agent_proto::decode_public(server_key)?;
-        let stream =
-            crate::proxy::dial_async(profile.proxy.as_ref(), &profile.host, profile.port).await?;
+        let stream = if let Some(relay) = &profile.agent_relay {
+            faro_agent_proto::relay::connect(relay, &identity, faro_agent_proto::relay::Registration::Connect { target: server_key.to_string() }).await?
+        } else {
+            crate::proxy::dial_async(profile.proxy.as_ref(), &profile.host, profile.port).await?
+        };
         let mut channel = SecureChannel::establish(
             stream,
             Role::Initiator,
@@ -225,6 +228,7 @@ impl AgentSession {
                 endpoint: None,
                 account: None,
                 agent_key: None,
+                agent_relay: None,
                 group: None,
                 sort_order: None,
                 icon: None,

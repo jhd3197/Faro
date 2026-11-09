@@ -481,6 +481,7 @@ pub fn run() {
             commands::box_authorize,
             commands::dynamics_authorize,
             agent_host::agent_host_status,
+            agent_host::agent_host_set_relay,
             agent_host::agent_host_set_enabled,
             agent_host::agent_host_open_pairing,
             agent_host::agent_host_close_pairing,

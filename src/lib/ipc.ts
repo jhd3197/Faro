@@ -201,6 +201,7 @@ export const ipc = {
 
   /** Current state of the in-app agent host (enabled, running, policy, peers,
    *  open pairing window). */
+  agentHostSetRelay: (relay: { address: string; publicKey: string } | null) => invoke<AgentHostStatus>("agent_host_set_relay", { relay }),
   agentHostStatus: () => invoke<AgentHostStatus>("agent_host_status"),
 
   /** Turn the host on/off; optionally set the listen port. */

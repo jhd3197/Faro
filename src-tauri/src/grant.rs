@@ -459,6 +459,7 @@ async fn import_connection(
         endpoint: None,
         account: None,
         agent_key: None,
+        agent_relay: None,
         group: Some(group.to_string()),
         sort_order: None,
         icon: None,

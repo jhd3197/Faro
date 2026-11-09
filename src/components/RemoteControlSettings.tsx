@@ -21,12 +21,17 @@ import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 /// same faro-agentd stack in-process.
 export function RemoteControlSettings() {
   const [status, setStatus] = useState<AgentHostStatus | null>(null);
+  const [relayAddress, setRelayAddress] = useState("");
+  const [relayKey, setRelayKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await ipc.agentHostStatus());
+      const next = await ipc.agentHostStatus();
+      setStatus(next);
+      setRelayAddress(next.relay?.address ?? "");
+      setRelayKey(next.relay?.publicKey ?? "");
     } catch (e) {
       toast.error("Remote control unavailable", String(e));
     }
@@ -111,7 +116,15 @@ export function RemoteControlSettings() {
           <div className="mt-1 text-xs text-text-dim">
             Runs a tiny encrypted agent so another Faro on your network can browse,
             transfer files, and (if you allow it) run commands here. Off by default.
-            {status.running && (
+            <div className="space-y-2 rounded-lg border border-border p-3">
+        <div className="text-xs font-medium">Self-hosted internet relay</div>
+        <p className="text-[11px] text-text-muted">Pair your devices first. Add this machine and its controllers to the relay allowlist. Saving restarts remote control and disconnects active sessions.</p>
+        <input className="input w-full" aria-label="Host relay address" placeholder="relay.example.com:8723" value={relayAddress} onChange={e => setRelayAddress(e.target.value)} />
+        <input className="input w-full" aria-label="Host relay public key" placeholder="Relay public key (base64)" value={relayKey} onChange={e => setRelayKey(e.target.value)} />
+        {status.publicKey && <div className="break-all text-[11px] text-text-muted">This machine's public key: <span className="select-all font-mono">{status.publicKey}</span></div>}
+        <button disabled={busy || (!!relayAddress.trim() && !relayKey.trim())} className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50" onClick={() => run(() => ipc.agentHostSetRelay(relayAddress.trim() ? { address: relayAddress.trim(), publicKey: relayKey.trim() } : null))}>Save relay settings</button>
+      </div>
+      {status.running && (
               <>
                 {" "}
                 Listening on port{" "}

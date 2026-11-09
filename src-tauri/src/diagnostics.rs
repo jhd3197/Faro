@@ -115,7 +115,7 @@ pub async fn run(
     let first = hops.first().unwrap_or(&profile);
     // Probe only endpoints whose first hop is direct. A direct probe of a
     // proxied/private destination would produce a misleading failure.
-    if first.proxy.is_none()
+    if first.agent_relay.is_none() && first.proxy.is_none()
         && first.proxy_command.is_none()
         && matches!(
             first.protocol.as_str(),

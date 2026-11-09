@@ -539,6 +539,7 @@ mod tests {
             endpoint: Some(url),
             account: None,
             agent_key: None,
+            agent_relay: None,
             group: None,
             sort_order: None,
             jump_host: None,
