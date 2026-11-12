@@ -157,6 +157,20 @@ export function useCommands(): Command[] {
       run: () => toggleConsole(),
     },
     {
+      id: "welcome",
+      title: "Welcome & Walkthrough",
+      group: "General",
+      icon: <Info size={14} />,
+      run: () => openDialog("welcome"),
+    },
+    {
+      id: "whats-new",
+      title: "What's New",
+      group: "General",
+      icon: <Info size={14} />,
+      run: () => openDialog("whatsNew"),
+    },
+    {
       id: "about",
       title: "About Faro",
       group: "General",

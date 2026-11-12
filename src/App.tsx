@@ -1,4 +1,6 @@
 import { UploadReports } from "./components/UploadReports";
+import { DiscoveryDialog } from "./components/DiscoveryDialog";
+import { useDiscovery } from "./stores/discoveryStore";
 import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -106,6 +108,8 @@ export default function App() {
 
   useShortcuts();
 
+  useEffect(() => { void useDiscovery.getState().init(); }, []);
+
   // Boot the Folder Sync store: fetch the current pairs and attach the
   // "foldersync://changed" listener so background syncs keep the UI live.
   useEffect(() => {
@@ -158,6 +162,7 @@ export default function App() {
     <div className="flex h-screen w-screen flex-col">
       {zen ? <ZenExit /> : <TitleBar />}
       <DeepLinkListener />
+      {(dialog === "welcome" || dialog === "whatsNew") && <DiscoveryDialog key={dialog} mode={dialog} />}
       {dialog === "settings" && <Settings onClose={closeDialog} />}
       {dialog === "newConnection" && (
         <ProfileEditor
