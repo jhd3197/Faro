@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FilePane } from "@faro/file-ui";
 import { SyncDialog } from "./SyncDialog";
 import { useConnections } from "@/stores/connectionsStore";
@@ -12,6 +12,10 @@ import { useRememberedLocalPath } from "@/hooks/useRememberedLocalPath";
 import { useSyncedPanes } from "@/hooks/useSyncedPanes";
 
 export function DualPaneBrowser() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragOffset = useRef<number | null>(null);
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  const resize = (ratio: number) => setSplitRatio(Math.min(0.8, Math.max(0.2, ratio)));
   const activeSessionId = useConnections((s) => s.activeSessionId);
   const activeProfileId = useConnections((s) => s.activeProfileId);
   const profiles = useConnections((s) => s.profiles);
@@ -64,19 +68,67 @@ export function DualPaneBrowser() {
   };
 
   return (
-    <div className="relative flex h-full flex-1">
-      <FilePane
-        paneId="local"
-        title="Local"
-        sessionId={LOCAL_SESSION}
-        path={localPath}
-        onPathChange={sync.onLocalNavigate}
-        onTransfer={uploadAll}
-        onDrop={downloadAll}
-        transferLabel="Upload"
-        toolbarActions={sync.toolbar}
-      />
-      <div className="relative w-px bg-border">
+    <div ref={containerRef} className="relative flex h-full min-w-0 flex-1">
+      <div className="flex min-w-0 overflow-hidden" style={{ flex: `${splitRatio} 1 0%` }}>
+        <FilePane
+          paneId="local"
+          title="Local"
+          sessionId={LOCAL_SESSION}
+          path={localPath}
+          onPathChange={sync.onLocalNavigate}
+          onTransfer={uploadAll}
+          onDrop={downloadAll}
+          transferLabel="Upload"
+          toolbarActions={sync.toolbar}
+        />
+      </div>
+      <div className="relative w-px shrink-0 bg-border">
+        <div
+          role="separator"
+          aria-label="Resize file browser panes"
+          aria-orientation="vertical"
+          aria-valuemin={20}
+          aria-valuemax={80}
+          aria-valuenow={Math.round(splitRatio * 100)}
+          tabIndex={0}
+          title="Drag to resize panes; double-click to reset"
+          className="absolute inset-y-0 -left-1 z-20 w-[9px] touch-none cursor-col-resize select-none hover:bg-accent/30 focus-visible:bg-accent/30 focus-visible:outline-none"
+          onPointerDown={(e) => {
+            if (e.button !== 0 || !e.isPrimary) return;
+            e.preventDefault();
+            const bounds = containerRef.current?.getBoundingClientRect();
+            if (!bounds) return;
+            dragOffset.current = e.clientX - bounds.left - splitRatio * (bounds.width - 1);
+            e.currentTarget.focus();
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (dragOffset.current === null || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+            const bounds = containerRef.current?.getBoundingClientRect();
+            if (bounds && bounds.width > 1) {
+              resize((e.clientX - bounds.left - dragOffset.current) / (bounds.width - 1));
+            }
+          }}
+          onPointerUp={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }
+            dragOffset.current = null;
+          }}
+          onPointerCancel={() => { dragOffset.current = null; }}
+          onLostPointerCapture={() => { dragOffset.current = null; }}
+          onDoubleClick={() => setSplitRatio(0.5)}
+          onKeyDown={(e) => {
+            const ratio = e.key === "ArrowLeft" ? splitRatio - 0.05
+              : e.key === "ArrowRight" ? splitRatio + 0.05
+              : e.key === "Home" ? 0.2
+              : e.key === "End" ? 0.8
+              : e.key === "Enter" ? 0.5 : null;
+            if (ratio === null) return;
+            e.preventDefault();
+            resize(ratio);
+          }}
+        />
         {activeSessionId && (
           // Centering lives on the wrapper so the button keeps its own
           // transform for the press-scale (button:active scale would otherwise
@@ -93,19 +145,21 @@ export function DualPaneBrowser() {
           </div>
         )}
       </div>
-      <FilePane
-        paneId="remote"
-        key={`${activeSessionId}:${siteBrowser.site?.id ?? "server"}`}
-        title={siteBrowser.site?.name ?? (profile ? `Remote — ${profile.name}` : "Remote")}
-        sessionId={activeSessionId}
-        path={remotePath}
-        onPathChange={sync.onRemoteNavigate}
-        onTransfer={downloadAll}
-        onDrop={uploadAll}
-        transferLabel="Download"
-        onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
-        toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
-      />
+      <div className="flex min-w-0 overflow-hidden" style={{ flex: `${1 - splitRatio} 1 0%` }}>
+        <FilePane
+          paneId="remote"
+          key={`${activeSessionId}:${siteBrowser.site?.id ?? "server"}`}
+          title={siteBrowser.site?.name ?? (profile ? `Remote — ${profile.name}` : "Remote")}
+          sessionId={activeSessionId}
+          path={remotePath}
+          onPathChange={sync.onRemoteNavigate}
+          onTransfer={downloadAll}
+          onDrop={uploadAll}
+          transferLabel="Download"
+          onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
+          toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
+        />
+      </div>
       {siteBrowser.dialog}
 
       {sync.hint && (
