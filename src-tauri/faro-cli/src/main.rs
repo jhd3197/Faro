@@ -38,7 +38,9 @@ use std::sync::Arc;
         'Allow direct CLI access' must be on in Agent Bridge settings, and the server's\n  \
         access matrix applies (Off refuses, Ask prompts in Faro, Auto runs). Every call\n  \
         is logged in the Bridge. With Faro closed they are refused. At an interactive\n  \
-        terminal you can confirm a refused call by hand. AI agents: use `faro-cli agent`."
+        terminal you can confirm a refused call by hand. `cf forward start` is checked\n  \
+        the same way (as a command), `cf status` only lists granted servers, and\n  \
+        `backup` only runs at an interactive terminal. AI agents: use `faro-cli agent`."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -762,8 +764,12 @@ async fn run(cli: Cli) -> Result<()> {
 /// The Access hostname of each saved Cloudflare connection, deduplicated.
 async fn access_hostnames(store: &ProfileStore) -> Result<Vec<(String, String)>> {
     use faro_lib::profiles::ProxyCommandKind;
+    let visible = visible_profile_ids()?;
     let mut out: Vec<(String, String)> = Vec::new();
     for p in store.list().await? {
+        if visible.as_ref().is_some_and(|ids| !ids.contains(&p.id)) {
+            continue;
+        }
         let Some(cmd) = p.proxy_command.as_ref().filter(|c| c.kind == ProxyCommandKind::Cloudflare) else {
             continue;
         };
@@ -866,6 +872,9 @@ async fn cmd_cf_forward(store: &ProfileStore, action: CfForwardCmd) -> Result<()
     match action {
         CfForwardCmd::Start { name } => {
             let (profile, forward) = faro_lib::cf_forward::resolve(&profiles, &name)?;
+            // A forward puts the server's port on localhost for anything to
+            // reach, so it counts as a command on that server.
+            authorize_direct(profile, Access::Exec, "forward", &format!("cf forward start {}", forward.name))?;
             let running = faro_lib::cf_forward::start(&dir, profile, forward, "cli", None)?;
             if running.already {
                 println!("{} is already listening on 127.0.0.1:{}", running.name, running.local_port);
@@ -903,6 +912,15 @@ fn resolve_backup_password(flag: Option<String>) -> Result<String> {
 }
 
 fn cmd_backup(action: BackupCmd) -> Result<()> {
+    // Export writes every saved credential to a file under a password the
+    // caller picks; import overwrites them all. Neither is something a
+    // headless caller (an AI agent's shell) may do, whatever the Bridge says.
+    if !interactive() {
+        bail!(
+            "`faro-cli backup` needs a person at an interactive terminal: it exports or \
+             replaces every saved credential. Run it yourself, or use Faro → Settings → Backup."
+        );
+    }
     let dir = default_data_dir()?;
     match action {
         BackupCmd::Export { path, password } => {
