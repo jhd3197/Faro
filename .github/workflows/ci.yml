@@ -60,7 +60,7 @@ jobs:
         run: node --test scripts/folder-links.test.mjs
 
       - name: Synchronized browsing and local folder memory
-        run: node --test scripts/sync-browse.test.mjs
+        run: node --test scripts/sync-browse.test.mjs scripts/site-pairing.test.mjs
 
       - name: Settings section routing
         run: node --test scripts/settings-nav.test.mjs scripts/settings-deep-link.test.mjs

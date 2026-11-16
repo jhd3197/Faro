@@ -27,12 +27,13 @@ export function DualPaneBrowser() {
   const siteBrowser = useSiteBrowser(profile);
   const [syncOpen, setSyncOpen] = useState(false);
   const sync = useSyncedPanes({
+    profileId: profile?.id,
+    siteId: siteBrowser.site?.id,
     sessionId: activeSessionId,
     localPath,
     remotePath: siteBrowser.path,
     setLocalPath,
     setRemotePath: siteBrowser.setPath,
-    defaultLocalPath: profile?.defaultLocalPath,
   });
 
   const remotePath = siteBrowser.path;

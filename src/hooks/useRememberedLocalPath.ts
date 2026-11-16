@@ -2,131 +2,112 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ipc } from "@/lib/ipc";
 import { LOCAL_SESSION, type ConnectionProfile } from "@/lib/types";
+import { browserLocationKey, useSites } from "@/stores/sitesStore";
 import {
-  LAST_LOCAL_PATH_KEY,
-  createLocalPathMemory,
-  initialLocalPath,
-  injectedLastLocalPath,
-  osRoot,
-  parseStoredLocalPath,
-  peekSessionLocalPath,
-  rememberSessionLocalPath,
-  resolveLaunchLocalPath,
+  LAST_LOCAL_PATH_KEY, createLocalPathMemory, initialLocalPath, injectedLastLocalPath,
+  osRoot, parseStoredLocalPath, peekSessionLocalPath, rememberSessionLocalPath,
 } from "@/lib/localFolder";
 
-const PERSIST_MS = 300;
-
-/**
- * Local pane path that survives a restart.
- *
- * Precedence: a connection's Default local path, then the remembered folder
- * when it can be listed, then the OS root. An unreadable remembered folder
- * falls back silently — no dialog, no toast. Site shortcuts are not local
- * paths and are left to the remote pane.
- */
+/** Each site (and the server view) owns its last local folder. Profile defaults
+ * seed new pairs only. The global folder remains the fallback for local view
+ * and for installations upgrading from before per-site navigation existed. */
 export function useRememberedLocalPath(
   profile: ConnectionProfile | null,
   activeSessionId: string | null
 ): readonly [string, (path: string) => void] {
-  const [path, setPath] = useState(() => initialLocalPath());
+  const [fallback, setFallback] = useState(() => initialLocalPath());
+  const [legacyReady, setLegacyReady] = useState(false);
   const navEpoch = useRef(0);
-  const readyToPersist = useRef(false);
-  const memory = useRef(createLocalPathMemory((next) => {
-    return ipc.settingsSet(LAST_LOCAL_PATH_KEY, JSON.stringify(next)).catch(() => {});
-  }, PERSIST_MS));
+  const loaded = useSites(s => s.loaded);
+  const selectionVersion = useSites(s => s.selectionVersion);
+  const siteId = useSites(s => profile ? s.activeByProfile[profile.id] : undefined);
+  const key = profile ? browserLocationKey(profile.id, siteId) : null;
+  const saved = useSites(s => key ? s.localPaths[key] : undefined);
+  const path = saved ?? profile?.defaultLocalPath ?? fallback;
+  const current = useRef({ key, activeSessionId, path });
+  current.current = { key, activeSessionId, path };
+  const memory = useRef(createLocalPathMemory(next =>
+    ipc.settingsSet(LAST_LOCAL_PATH_KEY, JSON.stringify(next)).catch(() => {}), 300));
 
-  const profileRef = useRef(profile);
-  profileRef.current = profile;
-
-  const setLocalPath = useCallback((next: string) => {
-    navEpoch.current += 1;
-    readyToPersist.current = true;
-    rememberSessionLocalPath(next);
-    setPath(next);
-  }, []);
-
-  // Default local path wins whenever that connection is the one in front,
-  // including on the launch that also restored a remembered folder.
-  useEffect(() => {
-    if (profile?.defaultLocalPath) setLocalPath(profile.defaultLocalPath);
-  }, [activeSessionId, profile?.id, profile?.defaultLocalPath, setLocalPath]);
-
-  // Once per mount. A later navigation (or a Default local path) bumps
-  // navEpoch and this probe will not overwrite it. Re-running on profile
-  // changes would pull the pane back to the remembered folder.
+  useEffect(() => { void useSites.getState().load().catch(() => {}); }, []);
   useEffect(() => {
     let cancelled = false;
     const epoch = navEpoch.current;
-    (async () => {
-      if (profileRef.current?.defaultLocalPath) {
-        readyToPersist.current = true;
-        return;
-      }
+    void (async () => {
       let remembered = peekSessionLocalPath() ?? injectedLastLocalPath();
       if (!remembered) {
         const stored = await ipc.settingsGetAll().catch(() => ({}) as Record<string, string>);
         remembered = parseStoredLocalPath(stored[LAST_LOCAL_PATH_KEY]);
       }
-      if (cancelled || navEpoch.current !== epoch || profileRef.current?.defaultLocalPath) {
-        readyToPersist.current = true;
-        return;
+      if (!cancelled && epoch === navEpoch.current) {
+        if (remembered) setFallback(remembered);
+        setLegacyReady(true);
       }
-      if (!remembered) {
-        readyToPersist.current = true;
-        return;
-      }
-      let accessible = false;
-      try {
-        await ipc.listDirectory(LOCAL_SESSION, remembered);
-        accessible = true;
-      } catch {
-        accessible = false;
-      }
-      if (cancelled || navEpoch.current !== epoch || profileRef.current?.defaultLocalPath) return;
-      const next = resolveLaunchLocalPath({
-        remembered,
-        rememberedAccessible: accessible,
-        osRoot: osRoot(),
-      });
-      readyToPersist.current = true;
-      rememberSessionLocalPath(next);
-      setPath(next);
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
+  const profileId = profile?.id;
+  const setLocalPath = useCallback((next: string) => {
+    const sites = useSites.getState();
+    if (sites.selectionVersion !== selectionVersion || (profileId && sites.activeByProfile[profileId] !== siteId)) return;
+    navEpoch.current++;
+    setLegacyReady(true);
+    rememberSessionLocalPath(next);
+    memory.current.update(next);
+    if (profileId) useSites.getState().navigateLocal(profileId, siteId, next);
+    else setFallback(next);
+  }, [profileId, siteId, selectionVersion]);
+
+  // Validate only on restoration, not on every user navigation. A late probe
+  // cannot move a different site, nor overwrite navigation made while it ran.
   useEffect(() => {
-    if (!readyToPersist.current) return;
-    memory.current.update(path);
-  }, [path]);
+    if (!loaded || !legacyReady) return;
+    let cancelled = false;
+    const epoch = navEpoch.current;
+    const candidate = current.current.path;
+    void (async () => {
+      let next = candidate;
+      try { await ipc.listDirectory(LOCAL_SESSION, candidate); }
+      catch { next = osRoot(); }
+      const sites = useSites.getState();
+      if (cancelled || epoch !== navEpoch.current || current.current.key !== key ||
+        current.current.activeSessionId !== activeSessionId || current.current.path !== candidate ||
+        sites.selectionVersion !== selectionVersion || (profileId && sites.activeByProfile[profileId] !== siteId)) return;
+      if (profileId) {
+        // Don't continue mirroring an unrelated fallback after a missing root.
+        if (next !== candidate) useSites.getState().setBrowseSync(profileId, siteId, { enabled: false, base: null });
+        useSites.getState().navigateLocal(profileId, siteId, next);
+      } else setFallback(next);
+      rememberSessionLocalPath(next);
+      memory.current.update(next);
+    })();
+    return () => { cancelled = true; };
+  }, [key, activeSessionId, loaded, legacyReady, selectionVersion]);
 
   useEffect(() => {
-    const flush = () => {
-      void memory.current.flush();
+    const flush = async () => {
+      await memory.current.flush();
+      await useSites.getState().flushNavigation();
     };
-    window.addEventListener("beforeunload", flush);
-    // Wait for the write on a real window close. The mock window has no
-    // close listener; beforeunload still covers that build.
+    const unload = () => { void flush(); };
+    window.addEventListener("beforeunload", unload);
     const win = getCurrentWindow() as {
       onCloseRequested?: (handler: () => Promise<void>) => Promise<() => void>;
     };
     let unlisten = () => {};
     let cancelled = false;
     if (win.onCloseRequested) {
-      win.onCloseRequested(() => memory.current.flush()).then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
+      win.onCloseRequested(flush).then(fn => {
+        if (cancelled) fn(); else unlisten = fn;
       }).catch(() => {});
     }
     return () => {
       cancelled = true;
-      window.removeEventListener("beforeunload", flush);
+      window.removeEventListener("beforeunload", unload);
       unlisten();
-      flush();
+      void flush();
     };
   }, []);
-
   return [path, setLocalPath] as const;
 }

@@ -1,4 +1,5 @@
 import { ipc } from "../../src/lib/ipc";
+import { getVersion } from "@tauri-apps/api/app";
 import { useSites } from "../../src/stores/sitesStore";
 import { useConnections } from "../../src/stores/connectionsStore";
 import { useSettings } from "../../src/stores/settingsStore";
@@ -8,6 +9,8 @@ import { useLayout } from "../../src/stores/layoutStore";
 // database persistence and fault/delay injection are replaced for these tests.
 const originalConnect = ipc.connect;
 const settings: Record<string, string> = JSON.parse(sessionStorage.getItem("site-test-settings") ?? "{}");
+// This suite exercises navigation, not the first-run introduction.
+settings.discoverySeenVersion = await getVersion();
 const control = {
   useSites, useConnections, useSettings, useLayout,
   settings,
