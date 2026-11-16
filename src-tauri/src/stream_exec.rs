@@ -33,6 +33,8 @@ use crate::session::SshSession;
 pub enum StreamKind {
     /// The Server view's metrics loop.
     Sampler,
+    /// A live log (`docker logs -f`, `journalctl -f`): one at a time.
+    Follow,
 }
 
 /// How a stream finished.
@@ -65,11 +67,14 @@ impl StreamManager {
     /// Run `command` on a new exec channel and call `on_line` for each line of
     /// its stdout until it ends or is stopped; `on_end` then runs once.
     /// Replaces any running stream of the same `kind` on this session.
+    /// `elevated` says the command runs under `sudo -n`, so stopping it has
+    /// to go through sudo too.
     pub async fn start<L, E>(
         &self,
         ssh: Arc<SshSession>,
         kind: StreamKind,
         command: &str,
+        elevated: bool,
         mut on_line: L,
         on_end: E,
     ) -> Result<String>
@@ -126,7 +131,7 @@ impl StreamManager {
             drop(channel);
             if stopped {
                 if let Some(pgid) = err.pgid {
-                    kill_group(&ssh, pgid).await;
+                    kill_group(&ssh, pgid, elevated).await;
                 }
             }
             streams.lock().await.remove(&task_id);
@@ -188,11 +193,19 @@ async fn next_msg(
 /// Best-effort, and skipped when the transport is already gone: reconnecting
 /// just to kill a process the dead connection already orphaned is not worth it
 /// (and that process exits on its next write to the closed pipe anyway).
-async fn kill_group(ssh: &SshSession, pgid: i32) {
+///
+/// A command started under sudo runs as root, which the login user may not
+/// signal; `elevated` repeats the kill through `sudo -n` (the same
+/// passwordless sudo that started it).
+async fn kill_group(ssh: &SshSession, pgid: i32, elevated: bool) {
     if ssh.handle.lock().await.is_closed() {
         return;
     }
-    let cmd = format!("kill -TERM -{pgid} 2>/dev/null || kill -TERM {pgid} 2>/dev/null; true");
+    let mut cmd = format!("kill -TERM -{pgid} 2>/dev/null || kill -TERM {pgid} 2>/dev/null; ");
+    if elevated {
+        cmd.push_str(&format!("sudo -n kill -TERM -{pgid} 2>/dev/null; "));
+    }
+    cmd.push_str("true");
     if let Err(e) = ssh.exec_bounded(&cmd, 256, Duration::from_secs(5), None).await {
         tracing::warn!(session = %ssh.id, pgid, "failed to stop stream process group: {e:#}");
     }

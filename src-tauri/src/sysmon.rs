@@ -417,19 +417,30 @@ pub enum Elevate {
 }
 
 /// Run `script` under `sh`, as root when asked.
-async fn run_as(ssh: &SshSession, script: &str, elevate: Elevate) -> Result<ExecOutput> {
+pub(crate) async fn run_as(ssh: &SshSession, script: &str, elevate: Elevate) -> Result<ExecOutput> {
+    run_as_for(ssh, script, elevate, SHORT).await
+}
+
+/// [`run_as`] with its own deadline, for commands that can take a while
+/// (stopping a container waits out its grace period).
+pub(crate) async fn run_as_for(
+    ssh: &SshSession,
+    script: &str,
+    elevate: Elevate,
+    timeout: Duration,
+) -> Result<ExecOutput> {
     let quoted = sh_quote(&format!("{PATH_PREFIX}{script}"));
     match elevate {
-        Elevate::None => ssh.exec_bounded(&format!("sh -c {quoted}"), OUTPUT_CAP, SHORT, None).await,
+        Elevate::None => ssh.exec_bounded(&format!("sh -c {quoted}"), OUTPUT_CAP, timeout, None).await,
         Elevate::Sudo => {
-            ssh.exec_bounded(&format!("sudo -n sh -c {quoted}"), OUTPUT_CAP, SHORT, None).await
+            ssh.exec_bounded(&format!("sudo -n sh -c {quoted}"), OUTPUT_CAP, timeout, None).await
         }
         Elevate::Password => {
             let pw = crate::bridge::connection_password(ssh)
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| anyhow!("sudo needs a password and this connection has none saved"))?;
             let mut out = ssh
-                .exec_sudo(&format!("sudo sh -c {quoted}"), &pw, OUTPUT_CAP, SHORT, None)
+                .exec_sudo(&format!("sudo sh -c {quoted}"), &pw, OUTPUT_CAP, timeout, None)
                 .await?;
             // A PTY turns every newline into CRLF.
             out.stdout = out.stdout.replace("\r\n", "\n");
@@ -441,7 +452,7 @@ async fn run_as(ssh: &SshSession, script: &str, elevate: Elevate) -> Result<Exec
 /// Run a read as root when asked, but fall back to the plain user if that
 /// fails (not in sudoers, wrong password), so a refused sudo shows less
 /// instead of nothing. The note says why the result is the unprivileged one.
-async fn run_read(ssh: &SshSession, script: &str, elevate: Elevate) -> Result<(ExecOutput, Option<String>)> {
+pub(crate) async fn run_read(ssh: &SshSession, script: &str, elevate: Elevate) -> Result<(ExecOutput, Option<String>)> {
     let out = run_as(ssh, script, elevate).await?;
     if elevate == Elevate::None || out.exit_code == Some(0) {
         return Ok((out, None));
@@ -451,7 +462,7 @@ async fn run_read(ssh: &SshSession, script: &str, elevate: Elevate) -> Result<(E
     Ok((plain, Some(format!("sudo did not run this ({why}); showing what this user can see."))))
 }
 
-fn merged(out: &ExecOutput) -> String {
+pub(crate) fn merged(out: &ExecOutput) -> String {
     [out.stdout.trim_end(), out.stderr.trim_end()]
         .iter()
         .filter(|s| !s.is_empty())
@@ -460,7 +471,7 @@ fn merged(out: &ExecOutput) -> String {
         .join("\n")
 }
 
-async fn ssh_for(state: &State<'_, AppState>, session_id: &str) -> Result<std::sync::Arc<SshSession>, String> {
+pub(crate) async fn ssh_for(state: &State<'_, AppState>, session_id: &str) -> Result<std::sync::Arc<SshSession>, String> {
     state
         .sessions
         .get_ssh(session_id)
@@ -468,7 +479,7 @@ async fn ssh_for(state: &State<'_, AppState>, session_id: &str) -> Result<std::s
         .ok_or_else(|| "Server view needs an SSH connection".to_string())
 }
 
-fn err(e: anyhow::Error) -> String {
+pub(crate) fn err(e: anyhow::Error) -> String {
     format!("{e:#}")
 }
 
@@ -896,7 +907,7 @@ pub async fn sysmon_start(
 
     state
         .streams
-        .start(ssh, StreamKind::Sampler, &sampler_script(secs), on_line, on_end)
+        .start(ssh, StreamKind::Sampler, &sampler_script(secs), false, on_line, on_end)
         .await
         .map(|_| ())
         .map_err(|e| {
@@ -981,6 +992,32 @@ pub async fn sysmon_service_logs(
     let ssh = ssh_for(&state, &session_id).await?;
     let n = lines.unwrap_or(200).clamp(1, 5000);
     read_unit_logs(&ssh, &unit, n, elevate).await.map_err(err)
+}
+
+/// Follow one unit's journal. Lines arrive as `stream://lines` with the key
+/// `unit:<name>`. Errors when root is only reachable through a sudo
+/// password, which a stream can't type: the drawer shows a tail instead.
+#[tauri::command]
+pub async fn sysmon_service_logs_follow(
+    session_id: String,
+    unit: String,
+    elevate: Elevate,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !valid_unit(&unit) {
+        return Err(format!("not a valid unit name: {unit}"));
+    }
+    let prefix = match elevate {
+        Elevate::Password => return Err("a live log can't answer sudo's password prompt".into()),
+        Elevate::Sudo => "exec sudo -n ",
+        Elevate::None => "exec ",
+    };
+    let command = format!("{prefix}journalctl -u {} -n 200 -f --no-pager -o short-iso 2>&1", sh_quote(&unit));
+    let ssh = ssh_for(&state, &session_id).await?;
+    crate::logfollow::start(&state.streams, app, ssh, format!("unit:{unit}"), &command, elevate == Elevate::Sudo)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -1359,6 +1396,7 @@ mod live_tests {
                 ssh.clone(),
                 StreamKind::Sampler,
                 &sampler_script(1),
+                false,
                 move |line| {
                     if let Some(raw) = parser.feed(line) {
                         sink.lock().unwrap().push(derive("live", now_ms(), prev.as_ref(), &raw));

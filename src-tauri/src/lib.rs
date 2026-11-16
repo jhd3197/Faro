@@ -30,6 +30,7 @@ pub mod diff;
 pub mod error;
 pub mod fsutil;
 mod diskscan;
+mod docker;
 mod editor;
 mod foldersync;
 pub mod grant;
@@ -50,6 +51,7 @@ pub mod search;
 pub mod session;
 pub mod ssh_cert;
 pub mod sync;
+mod logfollow;
 mod stream_exec;
 mod sysmon;
 mod terminal;
@@ -558,6 +560,21 @@ pub fn run() {
             sysmon::sysmon_service_logs,
             sysmon::sysmon_ports,
             sysmon::sysmon_firewall,
+            sysmon::sysmon_service_logs_follow,
+            logfollow::follow_stop,
+            docker::docker_access,
+            docker::docker_containers,
+            docker::docker_stats,
+            docker::docker_inspect,
+            docker::docker_container_action,
+            docker::docker_logs_start,
+            docker::docker_logs_tail,
+            docker::docker_images,
+            docker::docker_volumes,
+            docker::docker_networks,
+            docker::docker_disk_use,
+            docker::docker_remove,
+            docker::docker_prune,
             diff::diff_start,
             diff::diff_result,
             diff::diff_cancel,
