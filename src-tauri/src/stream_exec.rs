@@ -26,7 +26,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::cf_setup::sh_quote;
-use crate::session::SshSession;
+use crate::session::{signal_group_cmd, SshSession};
 
 /// What a stream is for. A session runs at most one stream of each kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,17 +198,32 @@ async fn next_msg(
 /// signal; `elevated` repeats the kill through `sudo -n` (the same
 /// passwordless sudo that started it).
 async fn kill_group(ssh: &SshSession, pgid: i32, elevated: bool) {
+    let Some(cmd) = kill_group_command(pgid, elevated) else { return };
     if ssh.handle.lock().await.is_closed() {
         return;
     }
-    let mut cmd = format!("kill -TERM -{pgid} 2>/dev/null || kill -TERM {pgid} 2>/dev/null; ");
-    if elevated {
-        cmd.push_str(&format!("sudo -n kill -TERM -{pgid} 2>/dev/null; "));
-    }
-    cmd.push_str("true");
     if let Err(e) = ssh.exec_bounded(&cmd, 256, Duration::from_secs(5), None).await {
         tracing::warn!(session = %ssh.id, pgid, "failed to stop stream process group: {e:#}");
     }
+}
+
+/// The command that stops a stream's process group, or `None` for a pgid that
+/// must never be signalled (0 is our own group, 1 is init's).
+///
+/// The group kill is spelled by [`signal_group_cmd`]: under sudo this runs the
+/// `kill` binary, where the shorter `kill -TERM -<pgid>` signals every process
+/// on the host.
+fn kill_group_command(pgid: i32, elevated: bool) -> Option<String> {
+    if pgid <= 1 {
+        return None;
+    }
+    let group = signal_group_cmd("TERM", pgid);
+    let mut cmd = format!("{group} 2>/dev/null || kill -s TERM {pgid} 2>/dev/null; ");
+    if elevated {
+        cmd.push_str(&format!("sudo -n {group} 2>/dev/null; "));
+    }
+    cmd.push_str("true");
+    Some(cmd)
 }
 
 /// Longest line handed to a callback; a longer run is cut at this length.
@@ -340,6 +355,32 @@ mod tests {
         e.push(b"7\nsh: nope: not found\n");
         assert_eq!(e.pgid, Some(417));
         assert_eq!(e.text(), "sh: nope: not found");
+    }
+
+    #[test]
+    fn group_kill_never_uses_the_form_that_signals_everything() {
+        // `kill -TERM -12693` run by the procps binary (sudo, fish) is read as
+        // pid -1. Every negative pid must follow `-s SIG --`.
+        for elevated in [false, true] {
+            let cmd = kill_group_command(12693, elevated).unwrap();
+            for part in cmd.split(';') {
+                if let Some(at) = part.find(" -12693") {
+                    assert!(part[..at].ends_with("-s TERM --"), "unsafe group kill in: {part}");
+                }
+            }
+            assert!(cmd.contains("kill -s TERM -- -12693"), "{cmd}");
+            assert!(!cmd.contains("kill -TERM"), "{cmd}");
+        }
+        assert_eq!(
+            kill_group_command(4242, true).unwrap(),
+            "kill -s TERM -- -4242 2>/dev/null || kill -s TERM 4242 2>/dev/null; \
+             sudo -n kill -s TERM -- -4242 2>/dev/null; true"
+        );
+        assert!(!kill_group_command(4242, false).unwrap().contains("sudo"));
+        // Never our own group, never init's.
+        for bad in [-5, 0, 1] {
+            assert_eq!(kill_group_command(bad, true), None);
+        }
     }
 
     #[test]

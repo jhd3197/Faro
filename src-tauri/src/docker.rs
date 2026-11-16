@@ -1176,4 +1176,52 @@ mod live_tests {
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert_eq!(lines.lock().unwrap().len(), frozen, "lines kept arriving after stop");
     }
+
+    /// Regression: stopping a follow that runs under sudo once ran
+    /// `sudo kill -TERM -<pgid>`, which the procps `kill` binary reads as pid
+    /// -1 — it took down every process on the host. The container here is
+    /// quiet, so the follower can only end by being signalled, and the Docker
+    /// daemon plus an unrelated canary process must come through untouched.
+    #[tokio::test]
+    #[ignore = "needs FARO_LIVE_SFTP pointing at the Docker lab host"]
+    async fn live_stopping_a_follow_signals_only_the_follower() {
+        let ssh = ssh().await;
+        let (a, e) = reach(&ssh).await;
+        let Some(command) = logs_command("lab-idle", 5, e, true).unwrap() else {
+            println!("no follow on this host ({}): nothing to stop", a.mode);
+            return;
+        };
+        let one = |ssh: Arc<SshSession>, script: &'static str| async move {
+            run_as(&ssh, script, Elevate::None).await.unwrap().stdout.trim().to_string()
+        };
+        // An unrelated process of the same user, in its own session.
+        one(ssh.clone(), "setsid sleep 7654 >/dev/null 2>&1 &").await;
+        let canary = "pgrep -fc 'sleep 765[4]' || true";
+        let daemon = "pidof dockerd; systemctl show -p ActiveEnterTimestamp --value docker";
+        let followers = "pgrep -fc 'docker logs --follo[w]' || true";
+        assert_eq!(one(ssh.clone(), canary).await, "1");
+        let daemon_before = one(ssh.clone(), daemon).await;
+        assert!(!daemon_before.is_empty());
+
+        let streams = StreamManager::new();
+        let id = streams
+            .start(ssh.clone(), StreamKind::Follow, &command, e == Elevate::Sudo, |_| {}, |_| {})
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert_ne!(one(ssh.clone(), followers).await, "0", "the follower should be running");
+
+        streams.stop(&id).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert_eq!(one(ssh.clone(), followers).await, "0", "a quiet follower must be killed, not left to linger");
+        assert_eq!(one(ssh.clone(), canary).await, "1", "stopping the follow signalled an unrelated process");
+        assert_eq!(one(ssh.clone(), daemon).await, daemon_before, "stopping the follow disturbed the Docker daemon");
+        assert_eq!(state_of(&ssh, e, "lab-logger").await, "running", "other containers must keep running");
+
+        one(ssh.clone(), "pkill -f 'sleep 765[4]' || true").await;
+    }
+
+    async fn state_of(ssh: &SshSession, e: Elevate, name: &str) -> String {
+        containers(ssh, e).await.iter().find(|c| c.name == name).map(|c| c.state.clone()).unwrap_or_default()
+    }
 }
