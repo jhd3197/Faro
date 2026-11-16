@@ -19,6 +19,7 @@ import { useLayout } from "@/stores/layoutStore";
 import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useUpdater } from "@/stores/updaterStore";
 import { ReleaseNotesText } from "./DiscoveryDialog";
+import { releaseChanges } from "@/lib/releaseNotes";
 import { UpdateProgress } from "./UpdateProgress";
 import type { PathStatus } from "@/lib/types";
 import { getVersion } from "@tauri-apps/api/app";
@@ -130,7 +131,7 @@ function UpdaterCard() {
             Check again
           </button>}
         </div>}
-        {notes && ["available", "manual", "ready"].includes(status) && <section aria-label="Release notes" className="mt-3 max-h-52 overflow-auto"><h3 className="mb-2 text-sm font-medium">What's new</h3><ReleaseNotesText notes={notes} /></section>}
+        {releaseChanges(notes) && ["available", "manual", "ready"].includes(status) && <section aria-label="Release notes" className="mt-3 max-h-52 overflow-auto"><h3 className="mb-2 text-sm font-medium">What's new</h3><ReleaseNotesText notes={notes} /></section>}
         {errorDetail && <details className="mt-3 text-xs text-text-muted">
           <summary className="cursor-pointer hover:text-text">Technical details</summary>
           <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words">{errorDetail}</p>

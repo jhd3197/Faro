@@ -6,6 +6,7 @@ import { NOTES_KEY, useDiscovery } from "@/stores/discoveryStore";
 import { ipc } from "@/lib/ipc";
 import { openExternal } from "@/lib/openExternal";
 import { cn } from "@/lib/cn";
+import { releaseChanges } from "@/lib/releaseNotes";
 
 const steps = [
   { title: "Welcome to Faro", text: "Connect to your servers and cloud storage, move files, and keep a terminal close by.", icon: Server },
@@ -107,12 +108,23 @@ function ToolsPractice() {
   return <div className="rounded-lg border border-border bg-bg-subtle p-4"><div className="flex flex-wrap gap-2">{tools.map((item, i) => <button key={item.name} aria-pressed={tool === i} onClick={() => setTool(i)} className={cn(secondary, "flex items-center gap-2", tool === i && "border-accent text-accent")}><item.icon size={14} />{item.name}</button>)}</div><p role="status" className="mt-4 min-h-16 text-sm leading-relaxed text-text-muted">{tools[tool].detail}</p></div>;
 }
 
-export function ReleaseNotesText({ notes }: { notes: string }) {
-  // Text-only rendering keeps release content inert while making headings and lists readable.
-  return <div className="space-y-2 break-words text-sm leading-relaxed text-text-muted">{notes.split(/\r?\n/).filter(line => line.trim()).map((line, i) => /^#{1,6}\s/.test(line)
-    ? <h3 key={i} className="pt-2 font-semibold text-text">{line.replace(/^#{1,6}\s+/, "")}</h3>
-    : /^[-*]\s/.test(line) ? <p key={i} className="flex gap-2"><span aria-hidden="true">•</span><span>{line.replace(/^[-*]\s+/, "")}</span></p>
-    : <p key={i}>{line}</p>)}</div>;
+// Bold, inline code and link text only; a link's target is dropped, never followed.
+function inline(text: string) {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]*\))/).map((part, i) =>
+    /^`[^`]+`$/.test(part) ? <code key={i} className="rounded bg-bg-subtle px-1 font-mono text-[0.92em] text-text">{part.slice(1, -1)}</code>
+    : /^\*\*[^*]+\*\*$/.test(part) ? <strong key={i} className="font-semibold text-text">{part.slice(2, -2)}</strong>
+    : /^\[[^\]]+\]\([^)]*\)$/.test(part) ? part.slice(1, part.indexOf("]"))
+    : part);
+}
+
+/** A release body's marked summary as inert text, or a pointer to the full notes when it has none. */
+export function ReleaseNotesText({ notes }: { notes: string | null }) {
+  const changes = releaseChanges(notes);
+  if (!changes) return <p className="text-sm text-text-muted">This release has no summary in Faro. Open the full release notes to see what changed.</p>;
+  return <div className="space-y-2 break-words text-sm leading-relaxed text-text-muted">{changes.split(/\r?\n/).filter(line => line.trim()).map((line, i) => /^#{1,6}\s/.test(line)
+    ? <h3 key={i} className="pt-2 font-semibold text-text">{inline(line.replace(/^#{1,6}\s+/, ""))}</h3>
+    : /^\s*[-*]\s/.test(line) ? <p key={i} className="flex gap-2"><span aria-hidden="true">•</span><span>{inline(line.replace(/^\s*[-*]\s+/, ""))}</span></p>
+    : <p key={i}>{inline(line)}</p>)}</div>;
 }
 
 function InstalledNotes({ version }: { version: string | null }) {
@@ -134,7 +146,7 @@ function InstalledNotes({ version }: { version: string | null }) {
     return () => { cancelled = true; };
   }, [version, cached]);
   return <div className="mt-5">
-    {loading ? <p role="status" className="text-sm text-text-muted">Loading release notes…</p> : notes ? <ReleaseNotesText notes={notes} /> : <p className="text-sm text-text-muted">Release notes for this version aren't available here. Open the full release notes to see its changes.</p>}
+    {loading ? <p role="status" className="text-sm text-text-muted">Loading release notes…</p> : <ReleaseNotesText notes={notes} />}
     <button className={cn(secondary, "mt-5")} onClick={() => openExternal(version ? `https://github.com/jhd3197/Faro/releases/tag/v${encodeURIComponent(version)}` : "https://github.com/jhd3197/Faro/releases")}>Full release notes</button>
   </div>;
 }

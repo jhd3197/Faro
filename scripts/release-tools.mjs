@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 // Keep failed attempts off stdout so redirected JSON contains only a complete response.
@@ -53,6 +53,46 @@ export function verifyAssets(release, version) {
   if (missing.length) throw new Error(`Release is incomplete: ${missing.join(', ')}`);
 }
 
+// The app shows only the text between these markers, never the download tables.
+export const CHANGES_START = '<!-- faro:changes -->';
+export const CHANGES_END = '<!-- /faro:changes -->';
+
+/** Pick the merged PR into main from `GET /commits/{sha}/pulls`, newest first. */
+export function mergedPull(pulls) {
+  if (!Array.isArray(pulls)) return null;
+  return pulls
+    .filter(pr => pr?.merged_at && pr.base?.ref === 'main')
+    .sort((a, b) => Date.parse(b.merged_at) - Date.parse(a.merged_at))[0] ?? null;
+}
+
+/** The `Highlights` list of a PR body, or null when the PR has none. */
+export function highlights(body) {
+  if (typeof body !== 'string') return null;
+  const lines = body.replace(/\r\n?/g, '\n').split('\n');
+  const start = lines.findIndex(line => /^#{2,4}\s+Highlights\s*$/i.test(line.trim()));
+  if (start < 0) return null;
+  const section = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^#{1,4}\s/.test(line.trim()) || /^<details/i.test(line.trim()) || /^(---+|\*\*\*+)$/.test(line.trim())) break;
+    section.push(line.replace(/<!--|-->/g, ''));
+  }
+  const text = section.join('\n').trim();
+  return text || null;
+}
+
+/** The marked "what changed" block for a release, or '' when there is nothing to say. */
+export function changesSection(pull) {
+  const list = highlights(pull?.body);
+  if (!list) return '';
+  const title = typeof pull.title === 'string' ? pull.title.replace(/<!--|-->/g, '').trim() : '';
+  return [CHANGES_START, ...(title ? [`### ${title}`, ''] : []), list, CHANGES_END, ''].join('\n');
+}
+
+/** latest.json with its `notes` replaced; the signatures cover artifacts, not this field. */
+export function withNotes(manifest, changes) {
+  return { ...manifest, notes: changes.trim() };
+}
+
 function main() {
   const [mode, ...args] = process.argv.slice(2);
   if (mode === 'gh') {
@@ -62,8 +102,14 @@ function main() {
   } else if (mode === 'verify-assets' && args.length === 2) {
     verifyAssets(JSON.parse(readFileSync(args[0], 'utf8')), args[1]);
     console.log('All required release downloads are present and nonempty.');
+  } else if (mode === 'changes' && args.length === 1) {
+    process.stdout.write(changesSection(mergedPull(JSON.parse(readFileSync(args[0], 'utf8')))));
+  } else if (mode === 'set-notes' && args.length === 2) {
+    const manifest = JSON.parse(readFileSync(args[0], 'utf8'));
+    writeFileSync(args[0], JSON.stringify(withNotes(manifest, readFileSync(args[1], 'utf8')), null, 2) + '\n');
   } else {
-    throw new Error('Usage: release-tools.mjs gh <args...> | verify-assets <release.json> <version>');
+    throw new Error('Usage: release-tools.mjs gh <args...> | verify-assets <release.json> <version>'
+      + ' | changes <commit-pulls.json> | set-notes <latest.json> <changes.md>');
   }
 }
 
