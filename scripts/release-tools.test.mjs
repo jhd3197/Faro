@@ -75,3 +75,32 @@ test('wrong versions, empty assets, duplicates and malformed listings are reject
   assert.throws(() => verifyAssets(release, version), /Duplicate/);
   assert.throws(() => verifyAssets({ tagName: `v${version}` }, version), /listing/);
 });
+
+test('release changes come from the merged PR highlights, not the whole body', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { mergedPull, changesSection, CHANGES_START, CHANGES_END } = await import('./release-tools.mjs');
+  const body = readFileSync(new URL('./fixtures/release-highlights.md', import.meta.url), 'utf8');
+  const pulls = [
+    { title: 'Old', body: '### Highlights\n- old', merged_at: '2026-10-01T00:00:00Z', base: { ref: 'main' } },
+    { title: 'Server view with Docker manager', body, merged_at: '2026-11-15T00:00:00Z', base: { ref: 'main' } },
+    { title: 'Open', body, merged_at: null, base: { ref: 'main' } },
+    { title: 'Elsewhere', body, merged_at: '2026-11-16T00:00:00Z', base: { ref: 'dev' } },
+  ];
+  const section = changesSection(mergedPull(pulls));
+  assert.ok(section.startsWith(`${CHANGES_START}\n### Server view with Docker manager\n\n- A Server view`));
+  assert.ok(section.trimEnd().endsWith(CHANGES_END));
+  assert.doesNotMatch(section, /Technical changes|StreamManager|could already tell you/);
+  assert.equal(section.split(CHANGES_END).length, 2);
+});
+
+test('a PR without highlights, or with smuggled markers, publishes nothing extra', async () => {
+  const { changesSection, highlights, withNotes, CHANGES_END } = await import('./release-tools.mjs');
+  assert.equal(changesSection({ title: 'x', body: 'No list here.' }), '');
+  assert.equal(changesSection(null), '');
+  assert.equal(highlights('### Highlights\n\n<details>\n- hidden'), null);
+  const sneaky = changesSection({ title: 'T -->', body: `## Highlights\n- a ${CHANGES_END} b\n## Next\n- c` });
+  assert.equal(sneaky.split(CHANGES_END).length, 2);
+  assert.match(sneaky, /^- a .* b$/m);
+  assert.doesNotMatch(sneaky, /- c/);
+  assert.deepEqual(withNotes({ version: '1.2.3', notes: 'old', platforms: {} }, 'new\n'), { version: '1.2.3', notes: 'new', platforms: {} });
+});

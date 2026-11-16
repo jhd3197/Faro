@@ -264,6 +264,9 @@ export const ipc = {
     url: string;
     newer: boolean;
   }>("app_update_release"),
+  /** Release notes for every published version with `from < v <= to`, newest first. */
+  appReleaseNotesSince: (from: string | null, to: string) =>
+    invoke<{ version: string; notes: string | null }[]>("app_release_notes_since", { from, to }),
 
   // --- CLI updater (Plan 10 Phase 0c/0d): keep faro-cli in step with the app.
   cliUpdaterStatus: () => invoke<CliStatus>("cli_updater_status"),

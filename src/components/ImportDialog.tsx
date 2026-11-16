@@ -49,7 +49,7 @@ const TABS = [
 // The Faro tab reads `.faro` files from Export (or dropped on the window).
 export function ImportDialog({ onClose }: Props) {
   const importFile = useLayout((s) => s.importFile);
-  const [tab, setTab] = useState<ImporterKind>("faro");
+  const [tab, setTab] = useState<ImporterKind>(() => useLayout.getState().importTab ?? "faro");
   const [paths, setPaths] = useState<ImporterPaths | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();

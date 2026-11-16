@@ -29,6 +29,8 @@ concurrency:
 
 permissions:
   contents: write
+  # Read the merged PR's Highlights for the release notes.
+  pull-requests: read
 
 jobs:
   # ---- 1. Decide the version, bump manifests, tag, open a draft release ----
@@ -446,6 +448,30 @@ jobs:
             --repo "${{ github.repository }}" --json tagName,assets > release-assets.json
           node scripts/release-tools.mjs verify-assets release-assets.json "${{ needs.prepare.outputs.version }}"
 
+      # The app's "What's new" shows only the marked block (Plan 32): the
+      # Highlights of the PR that merged this commit into main. latest.json is
+      # rewritten before the checksums so SHA256SUMS covers the final file;
+      # its signatures cover the artifacts, not the notes field.
+      - name: Write release highlights
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          : > changes.md
+          if node scripts/release-tools.mjs gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" > pulls.json; then
+            node scripts/release-tools.mjs changes pulls.json > changes.md
+          fi
+          if [ ! -s changes.md ]; then
+            echo "::warning::No merged PR with a Highlights section; this release has no in-app summary."
+          elif jq -e '.assets[] | select(.name == "latest.json")' release-assets.json >/dev/null; then
+            mkdir -p manifest
+            node scripts/release-tools.mjs gh release download "$tag" --repo "${{ github.repository }}"               --pattern latest.json --dir manifest --clobber
+            node scripts/release-tools.mjs set-notes manifest/latest.json changes.md
+            node scripts/release-tools.mjs gh release upload "$tag" manifest/latest.json               --repo "${{ github.repository }}" --clobber
+          fi
+
       - name: Generate SHA256 checksums for all assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -494,6 +520,7 @@ jobs:
           {
             echo "## Faro ${tag}"
             echo
+            if [ -s changes.md ]; then cat changes.md; echo; fi
             echo "Cross-platform desktop client for SFTP · FTP · S3 · plus the **Agent Bridge** (hand a live SSH session to an AI agent). Grab the installer for your OS below."
             echo
             echo "### 🖥️ Desktop app"

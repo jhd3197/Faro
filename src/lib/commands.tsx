@@ -161,7 +161,8 @@ export function useCommands(): Command[] {
     },
     {
       id: "welcome",
-      title: "Welcome & Walkthrough",
+      title: "Welcome — Get Connected",
+      keywords: "welcome onboarding get started import first connection",
       group: "General",
       icon: <Info size={14} />,
       run: () => openDialog("welcome"),

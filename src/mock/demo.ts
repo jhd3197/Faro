@@ -16,6 +16,9 @@ import { useToasts } from "@/stores/toastStore";
 import { useBindings } from "@/stores/bindingsStore";
 import { useSync } from "@/stores/syncStore";
 import { useUpdater } from "@/stores/updaterStore";
+import { useDiscovery } from "@/stores/discoveryStore";
+import { useTips } from "@/stores/tipsStore";
+import { useSites } from "@/stores/sitesStore";
 import { emit } from "./event";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
 import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
@@ -36,6 +39,9 @@ import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocke
   useBindings,
   useSync,
   useUpdater,
+  useDiscovery,
+  useTips,
+  useSites,
   // Convenience: focus a server by profile id (connects if needed).
   focusProfile: (profileId: string) =>
     useConnections.getState().connect(profileId),

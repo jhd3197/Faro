@@ -99,6 +99,12 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
   // Docker manager and live logs (Plan 31) too.
   if (cmd.startsWith("docker_") || cmd === "follow_stop") return docker.handle(cmd, a) ?? null;
   switch (cmd) {
+    case "app_release_notes_since": {
+      // Plan 32: a JSON list in sessionStorage stands in for GitHub; none = offline.
+      const list = sessionStorage.getItem("faro-mock-releases");
+      if (!list) throw { message: "Couldn't reach GitHub.", detail: "mock offline" };
+      return JSON.parse(list);
+    }
     case "app_update_release": {
       const w = window as any;
       if (w.__mockReleaseError) throw w.__mockReleaseError;
@@ -126,6 +132,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return before;
     }
     case "list_profiles":
+      // A fresh install (Plan 32 harness) has no saved connections yet.
+      if (sessionStorage.getItem("faro-mock-fresh") === "1") return [];
       return data.profiles;
     case "save_profile": {
       const p = a.profile;
@@ -313,11 +321,21 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
 
     // ---- importers ----
     case "importer_default_paths":
-      return { openssh: "~/.ssh/config", filezilla: null, putty: null, opensshExists: true, filezillaExists: false };
+      return sessionStorage.getItem("faro-mock-found") === "1"
+        ? { openssh: "C:\\Users\\demo\\.ssh\\config", filezilla: "C:\\Users\\demo\\AppData\\Roaming\\FileZilla\\sitemanager.xml", putty: "HKCU\\Software\\SimonTatham\\PuTTY\\Sessions", opensshExists: true, filezillaExists: true }
+        : { openssh: "~/.ssh/config", filezilla: null, putty: null, opensshExists: true, filezillaExists: false };
     case "import_openssh":
     case "import_filezilla":
-    case "import_putty":
-      return [];
+    case "import_putty": {
+      if (sessionStorage.getItem("faro-mock-found") !== "1") return [];
+      const hosts: Record<string, string[]> = {
+        import_openssh: ["web-1", "web-2", "db-primary", "bastion", "staging", "build-runner", "grafana", "backup-nas"],
+        import_filezilla: ["shared-host", "client-ftp", "old-cpanel"],
+        import_putty: [],
+      };
+      return hosts[cmd].map((name, i) => ({ previewId: `${cmd}-${i}`, name, protocol: cmd === "import_filezilla" ? "ftp" : "sftp",
+        host: `${name}.example.net`, port: cmd === "import_filezilla" ? 21 : 22, username: "deploy" }));
+    }
     case "save_imported_profiles":
       return 0;
     case "cf_account_status":

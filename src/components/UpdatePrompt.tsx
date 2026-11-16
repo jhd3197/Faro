@@ -41,7 +41,7 @@ export function UpdatePrompt() {
     <div className="border-t border-accent/40 bg-accent/10">
       {notesOpen && <section aria-label="Update release notes" className="max-h-56 overflow-y-auto border-b border-accent/20 px-4 py-4">
         <h2 className="mb-2 text-sm font-semibold">What's new in Faro {version}</h2>
-        {notes ? <ReleaseNotesText notes={notes} /> : <p className="text-sm text-text-muted">Release notes weren't included with this update.</p>}
+        <ReleaseNotesText notes={notes} />
         <button onClick={() => openExternal(releaseUrl)} className="mt-3 text-xs text-accent hover:underline">Full release notes</button>
       </section>}
     <div className="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">

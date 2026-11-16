@@ -506,6 +506,7 @@ pub fn run() {
             agent_host::agent_host_set_policy,
             agent_host::agent_host_revoke_peer,
             app_updater::app_update_release,
+            app_updater::app_release_notes_since,
             cli_updater::cli_updater_status,
             cli_updater::cli_updater_check,
             cli_updater::cli_updater_update,

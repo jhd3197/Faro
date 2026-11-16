@@ -1,5 +1,6 @@
 import { UploadReports } from "./components/UploadReports";
 import { DiscoveryDialog } from "./components/DiscoveryDialog";
+import { TipStrip } from "./components/TipStrip";
 import { useDiscovery } from "./stores/discoveryStore";
 import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
@@ -43,6 +44,7 @@ import {
   Radio,
   Columns2,
   FolderSync,
+  ArrowUpCircle,
 } from "lucide-react";
 import { useEditor } from "./stores/editorStore";
 import { followToastAction, toast, useToasts, type Toast, type ToastVariant } from "./stores/toastStore";
@@ -233,6 +235,7 @@ export default function App() {
           <TransferQueue />
           <UpdatePrompt />
           <CliUpdatePrompt />
+          {!zen && <TipStrip />}
           {!zen && <StatusBar
             terminalOpen={terminalOpen && supportsTerminal}
             onToggleTerminal={toggleTerminal}
@@ -326,6 +329,9 @@ function StatusBar({
   const toggleConsole = useLayout((s) => s.toggleConsole);
   const browserLayout = useSettings((s) => s.browserLayout);
   const setBrowserLayout = useSettings((s) => s.setBrowserLayout);
+  const updateNotice = useDiscovery((s) => s.updateNotice);
+  const installedVersion = useDiscovery((s) => s.version);
+  const discoveryOpen = useLayout((s) => s.dialog === "whatsNew");
 
   // Dismiss the status-bar popovers on Escape or a click outside, matching how
   // every other overlay closes (the hover-leave behavior stays as a bonus).
@@ -388,6 +394,26 @@ function StatusBar({
         </div>
       )}
       <div className="flex-1" />
+      {updateNotice && !discoveryOpen && (
+        // Patch updates land several times a week: a pill, never a dialog.
+        <div data-update-notice="" className="flex shrink-0 items-center rounded-md bg-accent-soft text-accent">
+          <button
+            onClick={() => useLayout.getState().openDialog("whatsNew")}
+            className="flex items-center gap-1.5 rounded-md px-2 py-0.5 hover:underline"
+          >
+            <ArrowUpCircle size={11} />
+            {installedVersion ? `Updated to ${installedVersion}` : "Updated"} · What's new
+          </button>
+          <button
+            onClick={() => useDiscovery.getState().acknowledge()}
+            aria-label="Dismiss update notice"
+            title="Dismiss"
+            className="rounded-md px-1 py-0.5 opacity-70 hover:bg-accent/10 hover:opacity-100"
+          >
+            <X size={10} />
+          </button>
+        </div>
+      )}
       {editList.length > 0 && (
         <div className="relative" ref={editsWrapRef}>
           <PillButton

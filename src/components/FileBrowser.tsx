@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { downloadDir } from "@tauri-apps/api/path";
 import { FilePane } from "@faro/file-ui";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
@@ -190,8 +191,12 @@ export function FileBrowser() {
 
   return (
     <div className="relative flex h-full flex-1">
-      <div className="min-w-0 flex-1">
-      <FilePane
+      <div className="flex min-w-0 flex-1 flex-col">
+      {/* No connections yet: the server view is the two ways to get one; the
+          local listing stays usable with a strip above it. */}
+      {profiles.length === 0 && browseLocal && <NoConnections variant="strip" />}
+      <div className="min-h-0 min-w-0 flex-1">
+      {profiles.length === 0 && !browseLocal ? <NoConnections /> : <FilePane
         key={browseLocal ? "local" : `${serverSid}:${siteBrowser.site?.id ?? "server"}`}
         paneId={browseLocal ? "local" : "remote"}
         title={title}
@@ -217,7 +222,8 @@ export function FileBrowser() {
               : next;
           })
         }
-      />
+      />}
+      </div>
       </div>
       {showPreview && (
         <FilePreview
