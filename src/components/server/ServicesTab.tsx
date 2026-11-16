@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Play, RotateCw, ScrollText, Square, X } from "lucide-react";
 import { ConfirmModal } from "@faro/file-ui";
 import { ipc } from "@/lib/ipc";
 import { toast } from "@/stores/toastStore";
+import { LogView } from "@/components/ui/LogView";
 import { cn } from "@/lib/cn";
 import type { Elevate, ServiceAction, ServiceUnit } from "@/lib/types";
 import {
@@ -344,43 +345,16 @@ function LogsDrawer({
   elevate: Elevate;
   onClose: () => void;
 }) {
-  const [text, setText] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const preRef = useRef<HTMLPreElement>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setText(await ipc.sysmonServiceLogs(sessionId, unit, elevate, 200));
-    } catch (e) {
-      setText(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [sessionId, unit, elevate]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  // Newest lines are at the bottom; land there.
-  useEffect(() => {
-    const el = preRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [text]);
-
   return (
     <aside
       aria-label={`Logs for ${unit}`}
-      className="flex w-[min(40rem,55%)] shrink-0 flex-col border-l border-border bg-bg-panel"
+      className="flex w-[min(42rem,55%)] shrink-0 flex-col border-l border-border bg-bg-panel"
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
         <ScrollText size={13} className="shrink-0 text-text-dim" />
         <span className="min-w-0 flex-1 truncate font-mono text-xs" title={unit}>
           {unit}
         </span>
-        <span className="shrink-0 text-[10px] text-text-dim">last 200 lines</span>
-        <RefreshButton onClick={() => void load()} busy={loading} />
         <button
           onClick={onClose}
           title="Close logs"
@@ -390,13 +364,16 @@ function LogsDrawer({
           <X size={14} />
         </button>
       </div>
-      <pre
-        ref={preRef}
-        tabIndex={0}
-        className="selectable min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-[11px] leading-relaxed text-text-muted [overflow-wrap:anywhere]"
-      >
-        {text ?? "Loading…"}
-      </pre>
+      <LogView
+        className="flex-1"
+        sessionId={sessionId}
+        streamKey={`unit:${unit}`}
+        // A stream can't type a sudo password; those hosts get the last lines.
+        follow={
+          elevate === "password" ? null : () => ipc.sysmonServiceLogsFollow(sessionId, unit, elevate)
+        }
+        tail={() => ipc.sysmonServiceLogs(sessionId, unit, elevate, 200)}
+      />
     </aside>
   );
 }

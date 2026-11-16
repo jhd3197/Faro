@@ -10,6 +10,7 @@ import { useTerminals } from "@/stores/terminalsStore";
 import { useSettings } from "@/stores/settingsStore";
 import { useDiskScan } from "@/stores/diskScanStore";
 import { useServerView } from "@/stores/serverViewStore";
+import { useDocker } from "@/stores/dockerStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import { useToasts } from "@/stores/toastStore";
 import { useBindings } from "@/stores/bindingsStore";
@@ -18,6 +19,7 @@ import { useUpdater } from "@/stores/updaterStore";
 import { emit } from "./event";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
 import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
+import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocker } from "./docker";
 
 (window as any).__demo = {
   useLayout,
@@ -28,6 +30,7 @@ import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
   useSettings,
   useDiskScan,
   useServerView,
+  useDocker,
   useSnippets,
   useToasts,
   useBindings,
@@ -46,4 +49,9 @@ import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
   // to make the next probe describe a different host.
   sysmonCalls,
   setSysmonProbe,
+  // Plan 31 test hooks: what the Docker tab asked for, how the daemon is
+  // reached, and a way to put the made-up host back.
+  dockerCalls,
+  setDockerAccess,
+  resetDocker,
 };

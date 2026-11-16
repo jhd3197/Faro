@@ -3,6 +3,7 @@
 // move and the headless tests can assert on them. Everything here is
 // fictional.
 import { emit } from "./event";
+import { startFollow } from "./docker";
 
 type Args = Record<string, any>;
 
@@ -153,6 +154,9 @@ export function handle(cmd: string, a: Args): unknown {
         `2026-11-15T09:12:02+0000 web-01 systemd[1]: Started ${a.unit}.`,
         `2026-11-15T09:40:17+0000 web-01 ${String(a.unit).split(".")[0]}[901]: reloaded configuration`,
       ].join("\n");
+    case "sysmon_service_logs_follow":
+      startFollow(a.sessionId, `unit:${a.unit}`, a.elevate, String(a.unit).split(".")[0]);
+      return null;
     case "sysmon_ports":
       calls.reads.push({ cmd, elevate: a.elevate });
       return { ports: PORTS, note: null };

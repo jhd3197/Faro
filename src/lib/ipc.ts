@@ -23,6 +23,19 @@ import type {
   FirewallReport,
   FirewallTool,
   Elevate,
+  StreamLinesEvent,
+  StreamEndedEvent,
+  DockerAccess,
+  DockerContainer,
+  DockerStats,
+  DockerContainerDetail,
+  DockerContainerAction,
+  DockerImage,
+  DockerVolume,
+  DockerNetwork,
+  DockerDiskUse,
+  DockerResourceKind,
+  DockerPruneKind,
 } from "./types";
 import type {
   ConnectionProfile,
@@ -746,6 +759,57 @@ export const ipc = {
     invoke<PortsReport>("sysmon_ports", { sessionId, tool, elevate }),
   sysmonFirewall: (sessionId: SessionId, tool: FirewallTool, elevate: Elevate) =>
     invoke<FirewallReport>("sysmon_firewall", { sessionId, tool, elevate }),
+  /** Follow a unit's journal; lines arrive as stream events keyed `unit:<name>`. */
+  sysmonServiceLogsFollow: (sessionId: SessionId, unit: string, elevate: Elevate) =>
+    invoke<void>("sysmon_service_logs_follow", { sessionId, unit, elevate }),
+
+  // ---- Live logs (Plan 31) ----
+  /** Stop the followed log `key`; a no-op if the session moved on to another. */
+  followStop: (sessionId: SessionId, key: string) =>
+    invoke<void>("follow_stop", { sessionId, key }),
+
+  // ---- Docker manager (Plan 31) ----
+  dockerAccess: (sessionId: SessionId) =>
+    invoke<DockerAccess>("docker_access", { sessionId }),
+  dockerContainers: (sessionId: SessionId, elevate: Elevate) =>
+    invoke<DockerContainer[]>("docker_containers", { sessionId, elevate }),
+  dockerStats: (sessionId: SessionId, elevate: Elevate) =>
+    invoke<DockerStats[]>("docker_stats", { sessionId, elevate }),
+  dockerInspect: (sessionId: SessionId, id: string, elevate: Elevate) =>
+    invoke<DockerContainerDetail>("docker_inspect", { sessionId, id, elevate }),
+  dockerContainerAction: (
+    sessionId: SessionId,
+    id: string,
+    action: DockerContainerAction,
+    elevate: Elevate
+  ) =>
+    invoke<ServiceActionResult>("docker_container_action", {
+      sessionId,
+      id,
+      action,
+      elevate,
+    }),
+  /** Follow a container's log; lines arrive as stream events keyed `docker:<id>`. */
+  dockerLogsStart: (sessionId: SessionId, id: string, elevate: Elevate, tail?: number) =>
+    invoke<void>("docker_logs_start", { sessionId, id, tail, elevate }),
+  dockerLogsTail: (sessionId: SessionId, id: string, elevate: Elevate, tail?: number) =>
+    invoke<string>("docker_logs_tail", { sessionId, id, tail, elevate }),
+  dockerImages: (sessionId: SessionId, elevate: Elevate) =>
+    invoke<DockerImage[]>("docker_images", { sessionId, elevate }),
+  dockerVolumes: (sessionId: SessionId, elevate: Elevate) =>
+    invoke<DockerVolume[]>("docker_volumes", { sessionId, elevate }),
+  dockerNetworks: (sessionId: SessionId, elevate: Elevate) =>
+    invoke<DockerNetwork[]>("docker_networks", { sessionId, elevate }),
+  dockerDiskUse: (sessionId: SessionId, elevate: Elevate) =>
+    invoke<DockerDiskUse[]>("docker_disk_use", { sessionId, elevate }),
+  dockerRemove: (
+    sessionId: SessionId,
+    kind: DockerResourceKind,
+    id: string,
+    elevate: Elevate
+  ) => invoke<ServiceActionResult>("docker_remove", { sessionId, kind, id, elevate }),
+  dockerPrune: (sessionId: SessionId, kind: DockerPruneKind, elevate: Elevate) =>
+    invoke<ServiceActionResult>("docker_prune", { sessionId, kind, elevate }),
 
   /** Start a two-tree directory diff; returns a diff id. Each side is a session
    *  id (or LOCAL_SESSION) + a path. `hash` confirms same-size files by content. */
@@ -913,6 +977,20 @@ export async function onDeepLink(
   cb: (link: DeepLink) => void
 ): Promise<UnlistenFn> {
   return listen<DeepLink>("deep-link://open", (e) => cb(e.payload));
+}
+
+/** A followed log: batches of lines, then one `ended`. Filter by `key`. */
+export async function onStreamEvent(
+  onLines: (e: StreamLinesEvent) => void,
+  onEnded: (e: StreamEndedEvent) => void
+): Promise<UnlistenFn> {
+  const unsubs = await Promise.all([
+    listen<StreamLinesEvent>("stream://lines", (e) => onLines(e.payload)),
+    listen<StreamEndedEvent>("stream://ended", (e) => onEnded(e.payload)),
+  ]);
+  return () => {
+    unsubs.forEach((u) => u());
+  };
 }
 
 /** Server view sampler: `sample` is one chart point, `ended` says the sampler

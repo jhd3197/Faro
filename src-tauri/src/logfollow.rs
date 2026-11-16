@@ -12,7 +12,8 @@
 //! `key` the follow was started with, so a view that has moved on to another
 //! log ignores what is left of the old one.
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -48,6 +49,14 @@ struct EndedEvent {
     /// True when Faro stopped the follow itself.
     stopped: bool,
     reason: Option<String>,
+}
+
+/// Which log each session is following right now: session id -> (key, stream
+/// id). Lets a stop name the log it means, so closing one log can't cancel
+/// the one opened right after it.
+fn current() -> &'static Mutex<HashMap<String, (String, String)>> {
+    static CURRENT: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
+    CURRENT.get_or_init(Default::default)
 }
 
 /// Lines waiting for the next flush.
@@ -96,7 +105,7 @@ pub async fn start(
     let buf: Arc<Mutex<FollowBuf>> = Arc::default();
     let (line_buf, end_buf) = (buf.clone(), buf.clone());
 
-    streams
+    let stream_id = streams
         .start(
             ssh,
             StreamKind::Follow,
@@ -106,6 +115,7 @@ pub async fn start(
             move |end| end_buf.lock().unwrap().end = Some(end),
         )
         .await?;
+    current().lock().unwrap().insert(session_id.clone(), (key.clone(), stream_id));
 
     tokio::spawn(async move {
         loop {
@@ -140,10 +150,20 @@ pub async fn start(
     Ok(())
 }
 
-/// Stop this session's live log, if one is running.
+/// Stop the live log `key` on this session. A no-op when the session has
+/// already moved on to another log.
 #[tauri::command]
-pub async fn follow_stop(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.streams.stop_kind(&session_id, StreamKind::Follow).await;
+pub async fn follow_stop(session_id: String, key: String, state: State<'_, AppState>) -> Result<(), String> {
+    let stream_id = {
+        let mut map = current().lock().unwrap();
+        match map.get(&session_id) {
+            Some((k, _)) if *k == key => map.remove(&session_id).map(|(_, id)| id),
+            _ => None,
+        }
+    };
+    if let Some(id) = stream_id {
+        state.streams.stop(&id).await;
+    }
     Ok(())
 }
 

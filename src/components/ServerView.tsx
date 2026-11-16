@@ -9,6 +9,7 @@ import { OverviewTab } from "./server/OverviewTab";
 import { ServicesTab } from "./server/ServicesTab";
 import { PortsTab } from "./server/PortsTab";
 import { FirewallTab } from "./server/FirewallTab";
+import { DockerTab } from "./docker/DockerTab";
 
 // Server view (Plan 30): what an SSH host is doing right now. An overlay in
 // the work area — the same slot as Disk Usage — so the rail and the terminal
@@ -33,6 +34,7 @@ const TABS: TabDef[] = [
     visible: (p) => p.firewall.length > 0,
     render: () => <FirewallTab />,
   },
+  { id: "docker", label: "Docker", visible: (p) => p.docker, render: () => <DockerTab /> },
 ];
 
 /** Mount point: renders the overlay only while the Server view is open. */

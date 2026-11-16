@@ -51,7 +51,7 @@ test('Server view: live charts, probe-driven tabs, sampler lifecycle, confirmed 
     await clickText('button', 'Server');
     await page.waitForSelector('[role="tablist"][aria-label="Server view"]');
     const tabs = await page.$$eval('[role="tab"]', els => els.map(e => e.textContent.trim()));
-    assert.deepEqual(tabs, ['Overview', 'Services', 'Ports', 'Firewall']);
+    assert.deepEqual(tabs, ['Overview', 'Services', 'Ports', 'Firewall', 'Docker']);
     await page.waitForFunction(() => window.__demo.useServerView.getState().samples.length >= 6);
     assert.equal((await calls()).start, 1, 'one sampler for the view');
     let text = await panelText();
@@ -85,9 +85,9 @@ test('Server view: live charts, probe-driven tabs, sampler lifecycle, confirmed 
     await page.waitForFunction(() => window.__demo.sysmonCalls.actions.length === 1);
     assert.deepEqual((await calls()).actions[0], { unit: 'nginx.service', action: 'restart', elevate: 'sudo' });
 
-    // --- Logs drawer.
+    // --- Logs drawer: the unit's journal, followed live (Plan 31).
     await page.click('button[aria-label="Logs for nginx.service"]');
-    await page.waitForFunction(() => document.querySelector('aside[aria-label="Logs for nginx.service"] pre')?.textContent.includes('Started nginx.service'));
+    await page.waitForFunction(() => document.querySelector('aside[aria-label="Logs for nginx.service"] .xterm-rows')?.innerText.includes('nginx: handled request'));
 
     // --- Ports and firewall.
     await clickText('[role="tab"]', 'Ports');
@@ -160,7 +160,7 @@ test('Server view: live charts, probe-driven tabs, sampler lifecycle, confirmed 
     await page.evaluate(sid => {
       window.__demo.useServerView.getState().close();
       window.__demo.useServerView.getState().dropSession(sid);
-      window.__demo.setSysmonProbe({ os: 'FreeBSD', proc: false, systemd: false, ports: null, firewall: [] });
+      window.__demo.setSysmonProbe({ os: 'FreeBSD', proc: false, systemd: false, docker: false, ports: null, firewall: [] });
       return window.__demo.useServerView.getState().openFor(sid);
     }, sid);
     await page.waitForFunction(() => document.body.innerText.includes('Server view needs a Linux host'));

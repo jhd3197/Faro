@@ -60,8 +60,10 @@ export function SudoPasswordModal({
 }
 
 /** Open a terminal tab on the session with `command` already typed and run. */
-export function runInTerminal(sessionId: string, command: string) {
-  useTerminals.getState().openTab(sessionId, command);
+export function runInTerminal(sessionId: string, command: string, title?: string) {
+  const terminals = useTerminals.getState();
+  const tab = terminals.openTab(sessionId, command);
+  if (title) terminals.renameTab(tab.id, title);
   useLayout.getState().setTerminalOpen(true);
 }
 

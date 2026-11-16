@@ -4,6 +4,7 @@
 import * as data from "./data";
 import * as transfers from "./transfers";
 import * as sysmon from "./sysmon";
+import * as docker from "./docker";
 import { emit } from "./event";
 
 type Args = Record<string, any>;
@@ -95,6 +96,8 @@ export async function invoke<T = unknown>(cmd: string, args: Args = {}): Promise
 async function dispatch(cmd: string, a: Args): Promise<unknown> {
   // Server view (Plan 30) lives in its own module.
   if (cmd.startsWith("sysmon_")) return sysmon.handle(cmd, a) ?? null;
+  // Docker manager and live logs (Plan 31) too.
+  if (cmd.startsWith("docker_") || cmd === "follow_stop") return docker.handle(cmd, a) ?? null;
   switch (cmd) {
     case "app_update_release": {
       const w = window as any;

@@ -17,7 +17,7 @@ import { useDiskScan } from "./diskScanStore";
 // screen: opening another tab, closing the view or dropping the session stops
 // it. The chart history survives a tab switch and is cleared per session.
 
-export type ServerTab = "overview" | "services" | "ports" | "firewall";
+export type ServerTab = "overview" | "services" | "ports" | "firewall" | "docker";
 
 /** Chart history kept: 300 samples is 10 minutes at the 2 s default. */
 export const SAMPLE_CAPACITY = 300;
@@ -67,6 +67,7 @@ export function visibleTabs(probe: HostProbe | null): ServerTab[] {
   if (probe.systemd) tabs.push("services");
   if (probe.ports) tabs.push("ports");
   if (probe.firewall.length > 0) tabs.push("firewall");
+  if (probe.docker) tabs.push("docker");
   return tabs;
 }
 
