@@ -25,6 +25,7 @@ import {
   Fullscreen,
   Focus,
   PanelRight,
+  Activity,
 } from "lucide-react";
 import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
 import { useConnections } from "@/stores/connectionsStore";
@@ -38,6 +39,7 @@ import {
 import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import { useTerminals } from "@/stores/terminalsStore";
+import { useServerView } from "@/stores/serverViewStore";
 import { TERMINAL_CHORDS } from "@/lib/terminalChords";
 import { SETTINGS_SECTIONS, settingsCommandId } from "@/lib/settingsNav";
 
@@ -83,6 +85,7 @@ export function useCommands(): Command[] {
 
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const supportsTerminal = activeProfile?.protocol === "sftp";
+  const serverViewOpen = useServerView((s) => s.open);
 
   const cmds: Command[] = [
     {
@@ -201,6 +204,20 @@ export function useCommands(): Command[] {
       combo: "mod+`",
       enabled: !!activeSessionId && supportsTerminal,
       run: toggleTerminal,
+    },
+    {
+      id: "server-view",
+      title: serverViewOpen ? "Close Server View" : "Server View",
+      group: "View",
+      icon: <Activity size={14} />,
+      keywords:
+        "server dashboard monitor cpu memory ram network load services systemd ports firewall metrics",
+      enabled: !!activeSessionId && supportsTerminal,
+      run: () => {
+        const view = useServerView.getState();
+        if (view.open) view.close();
+        else if (activeSessionId) void view.openFor(activeSessionId);
+      },
     },
     {
       id: "toggle-fullscreen",

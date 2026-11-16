@@ -1461,3 +1461,122 @@ export interface DiagnosticReport {
 export interface ProfileOrganization { id: string; group?: string; sortOrder?: number }
 
 export interface TwoWayConflict { identity: string; relative: string; revision: number; state: { local: SyncRecoveryEntry["state"] | null; remote: SyncRecoveryEntry["state"] | null } }
+
+// ---- Server view (Plan 30) ----
+
+/** What one host offers; decides which Server view tabs show. */
+export interface HostProbe {
+  os: string;
+  kernel: string;
+  hostname: string;
+  distro: string;
+  /** `/proc/stat` is readable: live metrics work. */
+  proc: boolean;
+  /** systemd is PID 1 and `systemctl` is on PATH. */
+  systemd: boolean;
+  docker: boolean;
+  /** `ss` or `netstat`, whichever lists sockets here. */
+  ports: "ss" | "netstat" | null;
+  /** Firewall front ends present, most specific first. */
+  firewall: FirewallTool[];
+  /** `root`: already root. `sudo`: passwordless. `password`: sudo asks.
+   *  `none`: no sudo. */
+  root: "root" | "sudo" | "password" | "none";
+  /** The connection logged in with a password Faro could hand to sudo. */
+  hasPassword: boolean;
+}
+
+export type FirewallTool = "ufw" | "firewalld" | "nft" | "iptables";
+
+/** How a Server view command gets root. */
+export type Elevate = "none" | "sudo" | "password";
+
+export interface IfaceRate {
+  name: string;
+  rxBps: number;
+  txBps: number;
+}
+
+/** One chart point. Rates are null on the first sample. Sizes are bytes. */
+export interface SysSample {
+  sessionId: string;
+  /** When Faro received it, Unix ms. */
+  t: number;
+  uptimeSecs: number;
+  cpuPct: number | null;
+  iowaitPct: number | null;
+  /** Per-core busy %, empty on the first sample. */
+  cores: number[];
+  memTotal: number;
+  memUsed: number;
+  memAvailable: number;
+  swapTotal: number;
+  swapUsed: number;
+  load: [number, number, number];
+  rxBps: number | null;
+  txBps: number | null;
+  ifaces: IfaceRate[];
+}
+
+export interface SysEndedEvent {
+  sessionId: string;
+  /** True when Faro stopped the sampler itself. */
+  stopped: boolean;
+  reason: string | null;
+}
+
+export interface DiskRow {
+  filesystem: string;
+  mount: string;
+  total: number;
+  used: number;
+  available: number;
+}
+
+export interface ServiceUnit {
+  unit: string;
+  load: string;
+  active: string;
+  sub: string;
+  description: string;
+}
+
+export type ServiceAction = "start" | "stop" | "restart" | "reload";
+
+export interface ServiceActionResult {
+  ok: boolean;
+  output: string;
+}
+
+export interface ListeningPort {
+  proto: string;
+  address: string;
+  port: number;
+  /** Empty when the socket belongs to another user and we aren't root. */
+  process: string;
+  pid: number | null;
+}
+
+export interface PortsReport {
+  ports: ListeningPort[];
+  /** Set when root was asked for but the list is the plain user's view. */
+  note: string | null;
+}
+
+export interface FirewallRule {
+  to: string;
+  action: string;
+  from: string;
+}
+
+export interface FirewallReport {
+  tool: string;
+  /** Whether the firewall is on, when the tool says so. */
+  active: boolean | null;
+  summary: [string, string][];
+  /** Parsed rules (ufw, firewalld). Empty for nft / iptables: read `raw`. */
+  rules: FirewallRule[];
+  raw: string;
+  /** The command failed; `raw` holds what it said. */
+  failed: boolean;
+}

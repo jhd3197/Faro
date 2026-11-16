@@ -12,6 +12,19 @@ export const inspectUploadPaths = (paths: string[]) =>
 export const verifyUploadDirectories = (sessionId: string, paths: string[]) =>
   invoke<void>("verify_upload_directories", { sessionId, paths });
 import type {
+  HostProbe,
+  SysSample,
+  SysEndedEvent,
+  DiskRow,
+  ServiceUnit,
+  ServiceAction,
+  ServiceActionResult,
+  PortsReport,
+  FirewallReport,
+  FirewallTool,
+  Elevate,
+} from "./types";
+import type {
   ConnectionProfile,
   GenerateKeyRequest,
   GeneratedKey,
@@ -697,6 +710,43 @@ export const ipc = {
   diskScanForget: (scanId: string) =>
     invoke<void>("diskscan_forget", { scanId }),
 
+  // ---- Server view (Plan 30) ----
+  /** What this host offers (Linux? systemd? which firewall?). One exec. */
+  sysmonProbe: (sessionId: SessionId) =>
+    invoke<HostProbe>("sysmon_probe", { sessionId }),
+  /** Start (or restart) the metrics sampler; samples arrive as events. */
+  sysmonStart: (sessionId: SessionId, intervalMs?: number) =>
+    invoke<void>("sysmon_start", { sessionId, intervalMs }),
+  sysmonStop: (sessionId: SessionId) =>
+    invoke<void>("sysmon_stop", { sessionId }),
+  sysmonDisks: (sessionId: SessionId) =>
+    invoke<DiskRow[]>("sysmon_disks", { sessionId }),
+  sysmonServices: (sessionId: SessionId) =>
+    invoke<ServiceUnit[]>("sysmon_services", { sessionId }),
+  sysmonServiceAction: (
+    sessionId: SessionId,
+    unit: string,
+    action: ServiceAction,
+    elevate: Elevate
+  ) =>
+    invoke<ServiceActionResult>("sysmon_service_action", {
+      sessionId,
+      unit,
+      action,
+      elevate,
+    }),
+  sysmonServiceLogs: (
+    sessionId: SessionId,
+    unit: string,
+    elevate: Elevate,
+    lines?: number
+  ) =>
+    invoke<string>("sysmon_service_logs", { sessionId, unit, lines, elevate }),
+  sysmonPorts: (sessionId: SessionId, tool: "ss" | "netstat", elevate: Elevate) =>
+    invoke<PortsReport>("sysmon_ports", { sessionId, tool, elevate }),
+  sysmonFirewall: (sessionId: SessionId, tool: FirewallTool, elevate: Elevate) =>
+    invoke<FirewallReport>("sysmon_firewall", { sessionId, tool, elevate }),
+
   /** Start a two-tree directory diff; returns a diff id. Each side is a session
    *  id (or LOCAL_SESSION) + a path. `hash` confirms same-size files by content. */
   diffStart: (
@@ -863,6 +913,21 @@ export async function onDeepLink(
   cb: (link: DeepLink) => void
 ): Promise<UnlistenFn> {
   return listen<DeepLink>("deep-link://open", (e) => cb(e.payload));
+}
+
+/** Server view sampler: `sample` is one chart point, `ended` says the sampler
+ *  stopped (and why, when Faro didn't stop it). */
+export async function onSysmonEvent(
+  onSample: (s: SysSample) => void,
+  onEnded: (e: SysEndedEvent) => void
+): Promise<UnlistenFn> {
+  const unsubs = await Promise.all([
+    listen<SysSample>("sysmon://sample", (e) => onSample(e.payload)),
+    listen<SysEndedEvent>("sysmon://ended", (e) => onEnded(e.payload)),
+  ]);
+  return () => {
+    unsubs.forEach((u) => u());
+  };
 }
 
 /** Disk-usage scan lifecycle. `progress` carries live counts; the terminal

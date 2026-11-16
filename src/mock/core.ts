@@ -3,6 +3,7 @@
 // commands resolve to null, which is harmless for the screens we capture.
 import * as data from "./data";
 import * as transfers from "./transfers";
+import * as sysmon from "./sysmon";
 import { emit } from "./event";
 
 type Args = Record<string, any>;
@@ -92,6 +93,8 @@ export async function invoke<T = unknown>(cmd: string, args: Args = {}): Promise
 }
 
 async function dispatch(cmd: string, a: Args): Promise<unknown> {
+  // Server view (Plan 30) lives in its own module.
+  if (cmd.startsWith("sysmon_")) return sysmon.handle(cmd, a) ?? null;
   switch (cmd) {
     case "app_update_release": {
       const w = window as any;

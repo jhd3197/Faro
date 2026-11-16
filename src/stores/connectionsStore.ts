@@ -4,6 +4,7 @@ import { toast } from "./toastStore";
 import { toastError, messageOf } from "@/lib/errors";
 import type { ConnectionProfile, ProfileOrganization, SessionId } from "@/lib/types";
 import { useTerminals } from "./terminalsStore";
+import { useServerView } from "./serverViewStore";
 import { useSites } from "./sitesStore";
 
 // Site shortcuts share their parent's in-flight connection as well as its session.
@@ -163,6 +164,7 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
       // best effort — drop it locally regardless
     }
     useTerminals.getState().dropSessionTabs(sid);
+    useServerView.getState().dropSession(sid);
     set((s) => {
       const sessions = s.sessions.filter((x) => x.sessionId !== sid);
       // If we closed the focused session, fall back to the most recent one.
