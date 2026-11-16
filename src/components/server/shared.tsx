@@ -59,10 +59,12 @@ export function SudoPasswordModal({
   );
 }
 
-/** Open a terminal tab on the session with `command` already typed and run. */
+/** Open a terminal tab on the session and run `command` in it. The terminal
+ *  types a tab's initial command verbatim, so the newline that runs it is
+ *  added here. */
 export function runInTerminal(sessionId: string, command: string, title?: string) {
   const terminals = useTerminals.getState();
-  const tab = terminals.openTab(sessionId, command);
+  const tab = terminals.openTab(sessionId, `${command}\n`);
   if (title) terminals.renameTab(tab.id, title);
   useLayout.getState().setTerminalOpen(true);
 }

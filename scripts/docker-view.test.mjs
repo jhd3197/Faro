@@ -137,7 +137,8 @@ test('Docker tab: lists, actions, drawer, live logs, shell, access modes', { tim
     // --- Shell: a terminal tab named after the container, with the command.
     await page.click('button[aria-label="Shell in shop-db-1"]');
     const tab = await page.evaluate(() => window.__demo.useTerminals.getState().tabs.at(-1));
-    assert.equal(tab.initialCommand, "docker exec -it shop-db-1 sh -c 'command -v bash >/dev/null && exec bash || exec sh'");
+    // The trailing newline is what runs it: the terminal types the command verbatim.
+    assert.equal(tab.initialCommand, "docker exec -it shop-db-1 sh -c 'command -v bash >/dev/null && exec bash || exec sh'\n");
     assert.equal(tab.title, 'shop-db-1');
     assert.equal(await page.evaluate(() => window.__demo.useLayout.getState().terminalOpen), true);
 
@@ -232,7 +233,7 @@ test('Docker tab: lists, actions, drawer, live logs, shell, access modes', { tim
     await reopen({ mode: 'needsRoot', error: 'permission denied' }, { root: 'password', hasPassword: false });
     await page.waitForFunction(() => document.body.innerText.includes('Docker needs root on this host'));
     await clickText('[role="tabpanel"] button', 'Open in terminal');
-    assert.equal(await page.evaluate(() => window.__demo.useTerminals.getState().tabs.at(-1).initialCommand), 'sudo docker ps -a');
+    assert.equal(await page.evaluate(() => window.__demo.useTerminals.getState().tabs.at(-1).initialCommand), 'sudo docker ps -a\n');
 
     // --- No daemon: say so, with Docker's own words.
     await reopen({ mode: 'unavailable', error: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock.' }, { root: 'sudo' });

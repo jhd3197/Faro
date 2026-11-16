@@ -152,7 +152,7 @@ test('Server view: live charts, probe-driven tabs, sampler lifecycle, confirmed 
     await page.click('button[aria-label="Restart cron.service"]');
     await page.waitForSelector('[role="dialog"]');
     await clickText('[role="dialog"] button', 'Open in terminal');
-    await page.waitForFunction(() => window.__demo.useTerminals.getState().tabs.some(t => t.initialCommand === 'sudo systemctl restart cron.service'));
+    await page.waitForFunction(() => window.__demo.useTerminals.getState().tabs.some(t => t.initialCommand === 'sudo systemctl restart cron.service\n'));
     assert.equal((await calls()).actions.length, 2, 'the backend did not run it');
 
     // --- A host with nothing to read gets one clear empty state.
