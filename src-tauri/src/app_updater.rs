@@ -6,6 +6,8 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 const RELEASE_API: &str = "https://api.github.com/repos/jhd3197/Faro/releases/latest";
+// Newest first; 50 covers months of patch releases at the current cadence.
+const RELEASES_API: &str = "https://api.github.com/repos/jhd3197/Faro/releases?per_page=50";
 const MAX_METADATA: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
@@ -128,8 +130,7 @@ async fn fetch_release(
     Ok(bytes)
 }
 
-#[tauri::command]
-pub async fn app_update_release() -> Result<UpdateRelease, UpdateCheckError> {
+async fn fetch_with_retry(url: &str) -> Result<Vec<u8>, UpdateCheckError> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("Faro/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(5))
@@ -137,8 +138,8 @@ pub async fn app_update_release() -> Result<UpdateRelease, UpdateCheckError> {
         .build()
         .map_err(|e| failure("Couldn't start the update check.", e))?;
     for attempt in 0..3 {
-        match fetch_release(&client, RELEASE_API).await {
-            Ok(bytes) => return parse_release(&bytes, env!("CARGO_PKG_VERSION")),
+        match fetch_release(&client, url).await {
+            Ok(bytes) => return Ok(bytes),
             Err((error, retry)) => {
                 if !retry || attempt == 2 {
                     return Err(error);
@@ -151,6 +152,79 @@ pub async fn app_update_release() -> Result<UpdateRelease, UpdateCheckError> {
         "Couldn't complete the update check.",
         "Retry limit reached",
     ))
+}
+
+#[tauri::command]
+pub async fn app_update_release() -> Result<UpdateRelease, UpdateCheckError> {
+    parse_release(
+        &fetch_with_retry(RELEASE_API).await?,
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct ReleaseNote {
+    version: String,
+    notes: Option<String>,
+}
+
+/// Published stable releases with `from < version <= to`, newest first. With no
+/// `from` (an upgrade from a build that never recorded one), only `to` itself.
+fn parse_releases_since(
+    bytes: &[u8],
+    from: Option<&str>,
+    to: &str,
+) -> Result<Vec<ReleaseNote>, UpdateCheckError> {
+    let invalid = |e: String| {
+        failure(
+            "GitHub returned incomplete release information. Try again later.",
+            e,
+        )
+    };
+    let to = semver::Version::parse(to).map_err(|e| invalid(e.to_string()))?;
+    let from = from
+        .map(semver::Version::parse)
+        .transpose()
+        .map_err(|e| invalid(e.to_string()))?;
+    let releases: Vec<Release> =
+        serde_json::from_slice(bytes).map_err(|e| invalid(e.to_string()))?;
+    let mut notes: Vec<(semver::Version, Option<String>)> = releases
+        .into_iter()
+        .filter(|r| !r.draft && !r.prerelease)
+        .filter_map(|r| {
+            let v = semver::Version::parse(r.tag_name.strip_prefix('v').unwrap_or(&r.tag_name))
+                .ok()
+                .filter(|v| v.pre.is_empty())?;
+            let in_range = match &from {
+                Some(from) => *from < v && v <= to,
+                None => v == to,
+            };
+            in_range.then_some((v, r.body))
+        })
+        .collect();
+    notes.sort_by(|a, b| b.0.cmp(&a.0));
+    notes.dedup_by(|a, b| a.0 == b.0);
+    Ok(notes
+        .into_iter()
+        .map(|(v, notes)| ReleaseNote {
+            version: v.to_string(),
+            notes,
+        })
+        .collect())
+}
+
+/// Release notes for every version between the last one the user saw and the
+/// one now running, so skipping updates doesn't lose what changed.
+#[tauri::command]
+pub async fn app_release_notes_since(
+    from: Option<String>,
+    to: String,
+) -> Result<Vec<ReleaseNote>, UpdateCheckError> {
+    parse_releases_since(
+        &fetch_with_retry(RELEASES_API).await?,
+        from.as_deref(),
+        &to,
+    )
 }
 
 #[cfg(test)]
@@ -238,6 +312,37 @@ mod tests {
         assert!(parse_release(&fixture("v1.3.100"), "1.3.99").unwrap().newer);
         assert!(!parse_release(&fixture("v1.3.49"), "1.3.49").unwrap().newer);
         assert!(!parse_release(&fixture("v1.3.49"), "1.4.0").unwrap().newer);
+    }
+
+    #[test]
+    fn lists_only_published_releases_in_range_newest_first() {
+        let list = serde_json::to_vec(&serde_json::json!([
+            { "tag_name": "v1.4.8", "body": "eight", "draft": false, "prerelease": false },
+            { "tag_name": "v1.4.9", "body": "draft", "draft": true, "prerelease": false },
+            { "tag_name": "v1.4.6", "body": "six", "draft": false, "prerelease": false },
+            { "tag_name": "v1.4.7-beta.1", "body": "beta", "draft": false, "prerelease": false },
+            { "tag_name": "v1.4.7", "body": null, "draft": false, "prerelease": false },
+            { "tag_name": "v1.4.5", "body": "five", "draft": false, "prerelease": false },
+            { "tag_name": "nightly", "body": "x", "draft": false, "prerelease": false },
+        ]))
+        .unwrap();
+        let since = parse_releases_since(&list, Some("1.4.5"), "1.4.8").unwrap();
+        let versions: Vec<_> = since.iter().map(|r| r.version.as_str()).collect();
+        assert_eq!(versions, ["1.4.8", "1.4.7", "1.4.6"]);
+        assert_eq!(since[1].notes, None);
+        let only = parse_releases_since(&list, None, "1.4.6").unwrap();
+        assert_eq!(
+            only,
+            [ReleaseNote {
+                version: "1.4.6".into(),
+                notes: Some("six".into())
+            }]
+        );
+        assert!(parse_releases_since(&list, Some("1.4.8"), "1.4.5")
+            .unwrap()
+            .is_empty());
+        assert!(parse_releases_since(&list, Some("junk"), "1.4.8").is_err());
+        assert!(parse_releases_since(b"{}", None, "1.4.8").is_err());
     }
 
     #[test]
