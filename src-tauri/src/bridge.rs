@@ -469,7 +469,7 @@ fn command_uses_sudo(cmd: &str) -> bool {
 
 /// The reusable login password for a session, if it authenticated with one.
 /// Key/agent logins return None (nothing to hand to sudo).
-fn connection_password(ssh: &crate::session::SshSession) -> Option<String> {
+pub(crate) fn connection_password(ssh: &crate::session::SshSession) -> Option<String> {
     match &ssh.profile.auth {
         crate::profiles::AuthMethod::Password { password } => Some(password.clone()),
         _ => None,

@@ -274,6 +274,8 @@ pub async fn disconnect(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let profile_id = state.sessions.get(&session_id).await.map(|s| s.profile().id.clone());
+    // Stop streamed execs first, while the transport can still carry the kill.
+    state.streams.stop_session(&session_id).await;
     state.sessions.disconnect(&session_id).await.map_err(err)?;
     // Stop this connection's forwards once nothing is using the session.
     // A forward started from faro-cli is left running.

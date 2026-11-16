@@ -1,0 +1,45 @@
+# Server view lab (Plan 30): a Linux host with systemd as PID 1, so the
+# Services tab has real units to list and restart.
+#
+#   admin / lab-pass   sudo without a password
+#   ops   / lab-pass   sudo asks for the password
+#   guest / lab-pass   no sudo
+#
+#   lab-web.service      a running service to restart
+#   lab-broken.service   always fails, so "failed" units have a row
+#
+#   docker compose -f scripts/server-lab.yml up -d --build
+#   FARO_LIVE_SFTP=127.0.0.1:2225:admin:lab-pass \
+#     cargo test -p faro --lib sysmon::live_tests -- --ignored --nocapture
+#
+# systemd needs a privileged container with the host cgroup namespace.
+services:
+  host:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ubuntu:24.04
+        ENV DEBIAN_FRONTEND=noninteractive
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+              systemd systemd-sysv dbus openssh-server sudo iproute2 procps ufw nftables \
+            && rm -rf /var/lib/apt/lists/*
+        RUN for u in admin ops guest; do useradd -m -s /bin/bash "$$u" && echo "$$u:lab-pass" | chpasswd; done \
+            && echo 'admin ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/admin \
+            && echo 'ops ALL=(ALL) ALL' > /etc/sudoers.d/ops \
+            && chmod 440 /etc/sudoers.d/admin /etc/sudoers.d/ops \
+            && printf 'PasswordAuthentication yes\nKbdInteractiveAuthentication no\n' > /etc/ssh/sshd_config.d/lab.conf
+        RUN printf '[Unit]\nDescription=Lab web service\n[Service]\nExecStart=/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/lab-web.service \
+            && printf '[Unit]\nDescription=Lab service that always fails\n[Service]\nExecStart=/bin/false\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/lab-broken.service \
+            && systemctl enable ssh lab-web lab-broken \
+            && systemctl mask systemd-resolved getty.target console-getty.service
+        STOPSIGNAL SIGRTMIN+3
+        CMD ["/sbin/init"]
+    privileged: true
+    cgroup: host
+    tmpfs:
+      - /run
+      - /run/lock
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    ports:
+      - "127.0.0.1:2225:22"

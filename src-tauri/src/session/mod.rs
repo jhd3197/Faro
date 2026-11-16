@@ -712,7 +712,7 @@ impl SshSession {
     /// Open a fresh exec channel for `command`, reconnecting once if the
     /// transport is dead. Used by `exec_bounded` so the agent's first command
     /// after an idle hour transparently re-establishes the session.
-    async fn open_exec_channel(&self, command: &str) -> Result<Channel<client::Msg>> {
+    pub(crate) async fn open_exec_channel(&self, command: &str) -> Result<Channel<client::Msg>> {
         self.with_reconnect(|| async move {
             let channel = {
                 let h = self.handle.lock().await;
