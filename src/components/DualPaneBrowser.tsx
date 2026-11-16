@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FilePane } from "@faro/file-ui";
 import { SyncDialog } from "./SyncDialog";
+import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
@@ -147,7 +148,7 @@ export function DualPaneBrowser() {
         )}
       </div>
       <div className="flex min-w-0 overflow-hidden" style={{ flex: `${1 - splitRatio} 1 0%` }}>
-        <FilePane
+        {profiles.length === 0 && !activeSessionId ? <NoConnections /> : <FilePane
           paneId="remote"
           key={`${activeSessionId}:${siteBrowser.site?.id ?? "server"}`}
           title={siteBrowser.site?.name ?? (profile ? `Remote — ${profile.name}` : "Remote")}
@@ -159,7 +160,7 @@ export function DualPaneBrowser() {
           transferLabel="Download"
           onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
           toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
-        />
+        />}
       </div>
       {siteBrowser.dialog}
 

@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react";
 import { Folder, X } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { useSites, type SiteShortcut } from "@/stores/sitesStore";
+import { useTips } from "@/stores/tipsStore";
 import { messageOf } from "@/lib/errors";
 
 export function SiteDialog({ profileId, serverName, path, site, onClose }: {
@@ -27,6 +28,7 @@ export function SiteDialog({ profileId, serverName, path, site, onClose }: {
     setError(null);
     try {
       await useSites.getState().save({ id: site?.id ?? crypto.randomUUID(), profileId, name, path });
+      if (!site) useTips.getState().trigger("first-site");
       onClose();
     } catch (e) {
       setError(messageOf(e));

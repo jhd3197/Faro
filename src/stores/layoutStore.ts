@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ConnectionProfile } from "@/lib/types";
+import type { ConnectionProfile, ImporterKind } from "@/lib/types";
 import {
   normalizeSettingsTarget,
   type SettingsSectionId,
@@ -79,7 +79,9 @@ interface LayoutState {
   exportRequest: ExportRequest | null;
   openExport: (req?: ExportRequest) => void;
   importFile: string | null;
-  openImport: (file?: string) => void;
+  /** The tab Import opens on (the welcome screen links straight to a source). */
+  importTab: ImporterKind | null;
+  openImport: (file?: string, tab?: ImporterKind) => void;
   // Connections the Invite dialog shares (one server, or a folder's).
   inviteIds: string[];
   openInvite: (ids: string[]) => void;
@@ -129,7 +131,7 @@ export const useLayout = create<LayoutState>((set) => ({
   dialog: null,
   openDialog: (d) => set({ dialog: d, settingsTarget: null }),
   closeDialog: () =>
-    set({ dialog: null, settingsTarget: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, inviteIds: [], moveProfileId: null }),
+    set({ dialog: null, settingsTarget: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, importTab: null, inviteIds: [], moveProfileId: null }),
 
   settingsTarget: null,
   openSettings: (target) => {
@@ -148,7 +150,8 @@ export const useLayout = create<LayoutState>((set) => ({
   exportRequest: null,
   openExport: (req) => set({ dialog: "export", exportRequest: req ?? null }),
   importFile: null,
-  openImport: (file) => set({ dialog: "import", importFile: file ?? null }),
+  importTab: null,
+  openImport: (file, tab) => set({ dialog: "import", importFile: file ?? null, importTab: file ? "faro" : tab ?? null }),
   inviteIds: [],
   openInvite: (ids) => set({ dialog: "invite", inviteIds: ids }),
   moveProfileId: null,

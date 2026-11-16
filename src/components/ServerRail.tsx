@@ -800,7 +800,7 @@ export function ServerRail() {
               <RailRow
                 expanded={expanded}
                 tooltip="Add your first server"
-                onClick={() => setEditing("new")}
+                onClick={() => openDialog("welcome")}
                 ariaLabel="Add a server"
                 bubble={
                   <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-dashed border-border text-text-dim transition-colors group-hover:border-accent group-hover:text-accent">

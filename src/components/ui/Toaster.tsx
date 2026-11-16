@@ -33,7 +33,8 @@ export function Toaster() {
       role="status"
       aria-live="polite"
       aria-atomic="false"
-      className="pointer-events-none fixed bottom-10 right-3 z-toast flex w-80 max-w-[calc(100vw-1.5rem)] flex-col gap-2"
+      style={{ bottom: "calc(2.5rem + var(--tip-strip-height, 0px))" }}
+      className="pointer-events-none fixed right-3 z-toast flex w-80 max-w-[calc(100vw-1.5rem)] flex-col gap-2"
     >
       {toasts.map((t) => (
         <ToastCard key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />

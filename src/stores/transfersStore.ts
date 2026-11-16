@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useTips } from "./tipsStore";
 import {
   ipc,
   inspectUploadPaths,
@@ -293,6 +294,7 @@ export const useTransfers = create<TransfersState>((set, get) => ({
           toast.info("Transfer skipped", baseName(t.source));
         } else {
           toast.success("File transfer complete", `${verb} ${baseName(t.source)}`);
+          useTips.getState().trigger("first-transfer");
         }
       } else if (kind === "error") {
         toast.error("Transfer failed", t.error || baseName(t.source));
