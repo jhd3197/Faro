@@ -1022,10 +1022,21 @@ fn confirm(question: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// Test harnesses (the S3 regression audit in CI) drive debug builds of the
+/// CLI against local emulators with no Faro app running. They set
+/// `FARO_CLI_UNGOVERNED=1`, which only exists in debug builds: shipped
+/// binaries are built with `--release`, where this is always false.
+fn ungoverned_test_build() -> bool {
+    cfg!(debug_assertions) && std::env::var("FARO_CLI_UNGOVERNED").is_ok_and(|v| v == "1")
+}
+
 const BRIDGE_DOWN: &str = "Faro's Agent Bridge isn't running, so this direct faro-cli call can't be \
     approved or logged and is refused. Open Faro with the Agent Bridge on, or use `faro-cli agent …`.";
 
 fn authorize_direct(profile: &ConnectionProfile, access: Access, kind: &str, summary: &str) -> Result<()> {
+    if ungoverned_test_build() {
+        return Ok(());
+    }
     let body = serde_json::json!({
         "profileId": profile.id,
         "class": access.as_str(),
@@ -1087,7 +1098,7 @@ fn report_direct_failure(why: &str) {
 /// at a terminal, otherwise only those granted in the Bridge (and only while
 /// direct CLI access is on), so a locked-down agent can't enumerate every host.
 fn visible_profile_ids() -> Result<Option<Vec<String>>> {
-    if interactive() {
+    if interactive() || ungoverned_test_build() {
         return Ok(None);
     }
     let ep = read_endpoint().map_err(|_| anyhow!(BRIDGE_DOWN))?;

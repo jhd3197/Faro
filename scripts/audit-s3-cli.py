@@ -58,7 +58,9 @@ def main():
                            username="test", auth=dict(kind="password", password="test"),
                            bucket=bucket, region="us-east-1", endpoint=endpoint)
             (work / "profiles.json").write_text(json.dumps([profile]), encoding="utf-8")
-            env = dict(os.environ, FARO_DATA_DIR=str(work), NO_PROXY="127.0.0.1,localhost")
+            # FARO_CLI_UNGOVERNED: no Faro app runs here to authorize direct
+            # calls; the bypass only exists in debug builds of faro-cli.
+            env = dict(os.environ, FARO_DATA_DIR=str(work), NO_PROXY="127.0.0.1,localhost", FARO_CLI_UNGOVERNED="1")
 
             def run(*argv):
                 p = subprocess.run([str(cli), *map(str, argv)], env=env, cwd=work,
