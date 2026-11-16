@@ -133,7 +133,7 @@ try {
   await clickText("Server");
   await page.waitForSelector('[role="tablist"][aria-label="Server view"]', { timeout: 20000 });
   const tabs = await page.$$eval('[role="tab"]', (els) => els.map((e) => e.textContent.trim()));
-  check("probe shows all four tabs", tabs.join(",") === "Overview,Services,Ports,Firewall", tabs.join(","));
+  check("probe shows every tab", tabs.join(",") === "Overview,Services,Ports,Firewall,Docker", tabs.join(","));
   const header = await page.evaluate(() => document.querySelector('[role="tablist"]')?.parentElement?.innerText ?? "");
   check("header names the distro", /Ubuntu 24\.04/.test(header), header.replace(/\n/g, " ").slice(0, 80));
   const cpu = await waitFor(async () => (await panel()).match(/CPU\s+(\d+\.\d)%/), 20000);
@@ -172,10 +172,11 @@ try {
   check("the unit really restarted", !!restarted, `MainPID ${before} -> ${mainPid("lab-web.service")}`);
   await page.click('button[aria-label="Logs for lab-web.service"]');
   const logs = await waitFor(
-    () => page.evaluate(() => document.querySelector('aside[aria-label="Logs for lab-web.service"] pre')?.innerText.includes("Started lab-web.service")),
+    () => page.evaluate(() => // The log view wraps long lines across rows; ignore the breaks.
+      document.querySelector('aside[aria-label="Logs for lab-web.service"] .xterm-rows')?.innerText.replace(/\s+/g, "").includes("Startedlab-web.service")),
     15000
   );
-  check("journal shows the restart", !!logs);
+  check("journal follows live and shows the restart", !!logs);
   await shot("server-live-services");
 
   console.log("\n3. Ports and firewall — read as root");
