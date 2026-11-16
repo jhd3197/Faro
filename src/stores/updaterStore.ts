@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ipc } from "@/lib/ipc";
+import { NOTES_KEY } from "./discoveryStore";
 import { toast } from "./toastStore";
 
 // Tauri owns downloading and signature verification in Rust. Keep the verified
@@ -72,6 +73,8 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
     // Timestamp successful checks only. An offline launch must not suppress the
     // next launch's check for six hours.
     const checked = () => {
+      const { version, notes } = get();
+      if (version && notes) void ipc.settingsSet(`${NOTES_KEY}:${version}`, JSON.stringify({ version, notes })).catch(() => {});
       const now = Date.now();
       set({ lastChecked: now });
       void ipc.settingsSet("lastUpdateCheck", JSON.stringify(now)).catch(() => {});
@@ -144,6 +147,8 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
     try {
       if (!installed) {
         // Windows launches the installer and exits here; macOS/Linux return.
+        const { version, notes } = get();
+        if (version && notes) await ipc.settingsSet(`${NOTES_KEY}:${version}`, JSON.stringify({ version, notes })).catch(() => {});
         await heldUpdate.install();
         installed = true;
       }

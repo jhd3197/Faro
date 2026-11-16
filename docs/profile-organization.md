@@ -19,3 +19,25 @@ not inherit itself. Normal gateway cycle detection still applies.
 Group gateways are stored in `profile-groups.json` and included in full backups.
 Connection exports materialize inherited gateways and include their dependencies,
 so the exported connections work without a separate group configuration file.
+
+## Site folders and synchronized browsing
+
+Each site shortcut remembers its own last local and remote folders. The server
+view has a separate pair. Navigation updates these folders automatically, and
+they survive layout changes, reconnects, and application restarts. A profile's
+default local folder seeds a new pair; it does not replace a site's remembered
+folder each time you return to it. Site home still opens the shortcut's saved
+remote home.
+
+Synchronized browsing is enabled independently for each pair. Turning it on uses
+the two open folders as roots; the re-base button replaces those roots with the
+current folders. The roots and enabled state are saved, not reset on reconnect.
+Switching sites or connections cancels pending mirrored navigation. Missing or
+unreadable counterparts leave the other pane in place. An unavailable remembered
+local folder falls back to the local filesystem root and disables that pair's
+synchronized browsing until you choose its folders again.
+
+This only synchronizes navigation. It never uploads, downloads, overwrites, or
+deletes files. Folder Sync and the Sync directory dialog remain separate,
+explicit file-transfer features. Removing a shortcut removes its remembered
+navigation and pairing settings, not any files.

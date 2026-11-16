@@ -8,18 +8,7 @@ use std::sync::OnceLock;
 
 pub(crate) fn fake_exe() -> PathBuf {
     static EXE: OnceLock<PathBuf> = OnceLock::new();
-    EXE.get_or_init(|| {
-        let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-            .args(["build", "-q", "-p", "faro", "--example", "fake_cloudflare"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .status()
-            .expect("run cargo build --example fake_cloudflare");
-        assert!(status.success(), "building the fake_cloudflare example failed");
-        let exe = std::env::current_exe().unwrap();
-        let profile_dir = exe.parent().unwrap().parent().unwrap();
-        profile_dir.join("examples").join(format!("fake_cloudflare{}", std::env::consts::EXE_SUFFIX))
-    })
-    .clone()
+    EXE.get_or_init(|| crate::proxy_command::e2e::build_example("fake_cloudflare")).clone()
 }
 
 /// A running fake API, killed on drop. `state` holds its store as JSON.

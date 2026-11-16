@@ -20,21 +20,51 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 /// `examples/stdio_relay`, built once per test run.
 pub(crate) fn relay_exe() -> PathBuf {
     static EXE: OnceLock<PathBuf> = OnceLock::new();
-    EXE.get_or_init(|| {
-        let status = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-            .args(["build", "-q", "-p", "faro", "--example", "stdio_relay"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .status()
-            .expect("run cargo build --example stdio_relay");
-        assert!(status.success(), "building the stdio_relay example failed");
-        // target/<profile>/deps/faro_lib-xxxx(.exe) -> target/<profile>/examples/
-        let exe = std::env::current_exe().unwrap();
-        let profile_dir = exe.parent().unwrap().parent().unwrap();
-        let relay = profile_dir.join("examples").join(format!("stdio_relay{}", std::env::consts::EXE_SUFFIX));
-        assert!(relay.is_file(), "{} missing", relay.display());
-        relay
-    })
-    .clone()
+    EXE.get_or_init(|| build_example("stdio_relay")).clone()
+}
+
+/// Build one of this crate's examples and return the path cargo wrote it to.
+///
+/// The path comes from cargo's own build messages, not from where the test
+/// binary happens to live: Rust 1.100 moved test binaries out of
+/// `target/<profile>/deps`, so deriving `target/<profile>/examples` from
+/// `current_exe()` pointed at a folder that doesn't exist.
+pub(crate) fn build_example(name: &str) -> PathBuf {
+    let out = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args(["build", "-q", "-p", "faro", "--example", name, "--message-format=json"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .unwrap_or_else(|e| panic!("run cargo build --example {name}: {e}"));
+    assert!(out.status.success(), "building the {name} example failed");
+    let exe = example_executable(&String::from_utf8_lossy(&out.stdout), name)
+        .unwrap_or_else(|| panic!("cargo reported no executable for the {name} example"));
+    assert!(exe.is_file(), "{} missing", exe.display());
+    exe
+}
+
+/// The executable cargo reported for example `name` in its JSON build messages.
+fn example_executable(messages: &str, name: &str) -> Option<PathBuf> {
+    messages
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == name)
+        .filter(|m| m["target"]["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "example")))
+        .find_map(|m| m["executable"].as_str().map(PathBuf::from))
+}
+
+#[test]
+fn example_path_comes_from_cargo_not_the_test_binary() {
+    // Shaped like cargo's real output; a build-script line and another
+    // target come first and must be skipped.
+    let messages = r#"{"reason":"build-script-executed","package_id":"faro"}
+{"reason":"compiler-artifact","target":{"name":"faro_lib","kind":["lib"]},"executable":null}
+{"reason":"compiler-artifact","target":{"name":"fake_cloudflare","kind":["example"]},"executable":"/t/debug/examples/fake_cloudflare"}
+{"reason":"compiler-artifact","target":{"name":"stdio_relay","kind":["example"]},"executable":"/t/debug/examples/stdio_relay"}
+{"reason":"build-finished","success":true}"#;
+    assert_eq!(example_executable(messages, "stdio_relay"), Some(PathBuf::from("/t/debug/examples/stdio_relay")));
+    assert_eq!(example_executable(messages, "faro_lib"), None, "only examples count");
+    assert_eq!(example_executable("not json\n", "stdio_relay"), None);
 }
 
 /// The relay under the name `cloudflared`, so Faro treats it as such.

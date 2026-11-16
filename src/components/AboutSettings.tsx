@@ -18,6 +18,7 @@ import { useSettings } from "@/stores/settingsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useUpdater } from "@/stores/updaterStore";
+import { ReleaseNotesText } from "./DiscoveryDialog";
 import { UpdateProgress } from "./UpdateProgress";
 import type { PathStatus } from "@/lib/types";
 import { getVersion } from "@tauri-apps/api/app";
@@ -56,6 +57,10 @@ export function AboutSettings() {
         </p>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => useLayout.getState().openDialog("welcome")} className="rounded-md border border-border px-3 py-2 text-xs hover:bg-bg-hover">Replay walkthrough</button>
+        <button onClick={() => useLayout.getState().openDialog("whatsNew")} className="rounded-md border border-border px-3 py-2 text-xs hover:bg-bg-hover">What's new</button>
+      </div>
       <UpdaterCard />
 
       <NotificationsRow />
@@ -125,10 +130,7 @@ function UpdaterCard() {
             Check again
           </button>}
         </div>}
-        {notes && ["available", "manual", "ready"].includes(status) && <details className="mt-3 text-xs text-text-muted">
-          <summary className="cursor-pointer hover:text-text">What's new</summary>
-          <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words leading-relaxed">{notes}</p>
-        </details>}
+        {notes && ["available", "manual", "ready"].includes(status) && <section aria-label="Release notes" className="mt-3 max-h-52 overflow-auto"><h3 className="mb-2 text-sm font-medium">What's new</h3><ReleaseNotesText notes={notes} /></section>}
         {errorDetail && <details className="mt-3 text-xs text-text-muted">
           <summary className="cursor-pointer hover:text-text">Technical details</summary>
           <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words">{errorDetail}</p>

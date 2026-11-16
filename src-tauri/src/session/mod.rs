@@ -712,7 +712,7 @@ impl SshSession {
     /// Open a fresh exec channel for `command`, reconnecting once if the
     /// transport is dead. Used by `exec_bounded` so the agent's first command
     /// after an idle hour transparently re-establishes the session.
-    async fn open_exec_channel(&self, command: &str) -> Result<Channel<client::Msg>> {
+    pub(crate) async fn open_exec_channel(&self, command: &str) -> Result<Channel<client::Msg>> {
         self.with_reconnect(|| async move {
             let channel = {
                 let h = self.handle.lock().await;
@@ -1062,10 +1062,15 @@ impl SshSession {
     /// tree only; a server-side database statement the command kicked off (e.g. a
     /// long `UPDATE`) keeps running until cancelled at the database.
     pub async fn kill_pgid(&self, pgid: i32) -> Result<()> {
+        // A pgid of 0 or 1 would aim at our own group or at init's.
+        if pgid <= 1 {
+            return Ok(());
+        }
+        let (term, kill) = (signal_group_cmd("TERM", pgid), signal_group_cmd("KILL", pgid));
         let cmd = format!(
-            "kill -TERM -{pgid} 2>/dev/null || kill -TERM {pgid} 2>/dev/null; \
+            "{term} 2>/dev/null || kill -s TERM {pgid} 2>/dev/null; \
              sleep 2; \
-             kill -KILL -{pgid} 2>/dev/null || kill -KILL {pgid} 2>/dev/null; true"
+             {kill} 2>/dev/null || kill -s KILL {pgid} 2>/dev/null; true"
         );
         // `Box::pin` breaks the exec_bounded → kill_pgid → exec_bounded async
         // recursion cycle (it only ever recurses one level: the kill runs
@@ -1317,6 +1322,19 @@ fn wrap_tracked(command: &str, marker: &str) -> String {
     use base64::Engine as _;
     let encoded = base64::engine::general_purpose::STANDARD.encode(command);
     format!("echo \"{marker}:$$\" 1>&2; echo {encoded} | base64 -d | sh")
+}
+
+/// The shell command that sends `signal` to the whole process group `pgid`.
+///
+/// The spelling matters. `kill -TERM -<pgid>` is only safe in a shell whose
+/// `kill` is a builtin: the procps `kill` binary — what `sudo kill` runs, and
+/// what fish runs, having no builtin — reads the leading `-1` of `-12345` as
+/// the pid `-1` and signals every process the caller may signal. With `--`
+/// but without `-s`, dash's builtin does nothing. `kill -s SIG -- -PGID` is
+/// the one form that hits the group and only the group in procps, dash, bash,
+/// zsh, fish and busybox (verified against each with a canary process).
+pub(crate) fn signal_group_cmd(signal: &str, pgid: i32) -> String {
+    format!("kill -s {signal} -- -{pgid}")
 }
 
 /// Parse the `<marker>:<pid>` line that `wrap_tracked` emits into the pid.

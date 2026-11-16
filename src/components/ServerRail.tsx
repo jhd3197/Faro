@@ -9,6 +9,7 @@ import {
   Cloud,
   Search,
   Radio,
+  Activity,
   Plug,
   Unplug,
   TerminalSquare,
@@ -36,6 +37,7 @@ import {
 import { useConnections } from "@/stores/connectionsStore";
 import { useBridge } from "@/stores/bridgeStore";
 import { useLayout } from "@/stores/layoutStore";
+import { useServerView } from "@/stores/serverViewStore";
 import { useSettings } from "@/stores/settingsStore";
 import { ProfileEditor } from "./ProfileEditor";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -435,6 +437,17 @@ export function ServerRail() {
         icon: <TerminalSquare size={14} />,
         onClick: () => openShell(p.id),
       });
+      if (connected && sid) {
+        items.push({
+          label: "Server view",
+          icon: <Activity size={14} />,
+          onClick: () => {
+            setBrowseLocal(false);
+            setActiveSession(sid);
+            void useServerView.getState().openFor(sid);
+          },
+        });
+      }
     }
     items.push({
       label: "Properties / Edit…",

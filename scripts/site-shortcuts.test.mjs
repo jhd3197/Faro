@@ -22,11 +22,14 @@ test('site shortcuts reuse connections and preserve independent navigation', { t
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/site-shortcuts.html`);
     await page.waitForFunction(() => window.siteTest?.useConnections.getState().activeSessionId && window.siteTest.useSites.getState().loaded);
-    const clickText = text => page.evaluate(text => {
-      const button = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text && b.getBoundingClientRect().width);
-      if (!button) throw Error(`Missing button: ${text}`);
-      button.click();
-    }, text);
+    const clickText = async text => {
+      await page.waitForFunction(text => [...document.querySelectorAll("button")].some(b => b.textContent.trim() === text && b.getBoundingClientRect().width), {}, text);
+      return page.evaluate(text => {
+        const button = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text && b.getBoundingClientRect().width);
+        if (!button) throw Error(`Missing button: ${text}`);
+        button.click();
+      }, text);
+    };
     const clickAria = label => page.click(`button[aria-label=${JSON.stringify(label)}]`);
     const waitSite = name => page.waitForSelector(`button[aria-label=${JSON.stringify(`Open site ${name}`)}]`);
     const nameSite = async name => {
@@ -55,6 +58,7 @@ test('site shortcuts reuse connections and preserve independent navigation', { t
       await page.waitForFunction(() => [...document.querySelectorAll('[data-idx]')].some(e => e.textContent.includes('uploads')));
       await page.evaluate(() => [...document.querySelectorAll('[data-idx]')].find(e => e.textContent.includes('uploads'))
         .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 430, clientY: 260 })));
+      await clickText('Tools');
       await clickText('Save as site…');
       await nameSite('Media library');
       const state = await snapshot();

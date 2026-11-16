@@ -10,6 +10,8 @@ import {
 // command palette, keyboard shortcuts and title-bar menus can all open them
 // without prop-threading through App.
 export type AppDialog =
+  | "welcome"
+  | "whatsNew"
   | "settings"
   | "newConnection"
   | "import"

@@ -1,146 +1,136 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Crosshair } from "lucide-react";
 import { ipc } from "@/lib/ipc";
 import { LOCAL_SESSION } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { useConnections } from "@/stores/connectionsStore";
+import { browserLocationKey, useSites } from "@/stores/sitesStore";
 import {
-  clearMatchingEcho,
-  initialSyncState,
-  rebaseSync,
-  retargetSession,
-  runMirror,
-  toggleSync,
-  type Side,
-  type SyncHint,
-  type SyncState,
+  clearMatchingEcho, initialSyncState, rebaseSync, runMirror, toggleSync,
+  type Side, type SyncHint,
 } from "@/lib/syncBrowse";
 
-/**
- * Keep the local and remote panes on the same relative folder.
- *
- * Navigation on either side lists the counterpart and, only when that listing
- * succeeds, moves the other pane. A missing folder, a permission error, or a
- * dropped connection leaves the other pane where it is and shows a status
- * hint — never a dialog, and never a transfer.
- */
+/** Navigation only: a persisted base per profile/site, with each asynchronous
+ * probe owned by one selection and connection lifetime. Never transfers files. */
 export function useSyncedPanes(args: {
+  profileId?: string;
+  siteId?: string;
   sessionId: string | null;
   localPath: string;
   remotePath: string;
   setLocalPath: (path: string) => void;
   setRemotePath: (path: string) => void;
-  defaultLocalPath?: string;
 }) {
-  const stateRef = useRef<SyncState>(initialSyncState());
+  const key = args.profileId ? browserLocationKey(args.profileId, args.siteId) : null;
+  const saved = useSites(s => key ? s.syncPairs[key] : undefined);
+  const loaded = useSites(s => s.loaded);
+  const selectionVersion = useSites(s => s.selectionVersion);
+  const connectionProfileId = useConnections(s => s.activeProfileId);
+  const [lifetime, setLifetime] = useState(0);
+  const runtime = useMemo(() => ({
+    active: true,
+    state: loaded && saved?.enabled && saved.base && args.sessionId
+      ? toggleSync(initialSyncState(), true, saved.base.local, saved.base.remote, args.sessionId)
+      : initialSyncState(),
+  }), [key, args.sessionId, connectionProfileId, saved, loaded, selectionVersion, lifetime]);
+  const runtimeRef = useRef(runtime);
+  runtimeRef.current = runtime;
   const argsRef = useRef(args);
   argsRef.current = args;
-  const [enabled, setEnabled] = useState(false);
-  const [hint, setHint] = useState<SyncHint | null>(null);
+  const enabled = !!saved?.enabled;
+  const [notice, setNotice] = useState<{ owner: typeof runtime; value: SyncHint } | null>(null);
+  const hint = notice?.owner === runtime ? notice.value : null;
   const hintTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const sessionSeen = useRef(args.sessionId);
+
+  const isCurrent = useCallback(() => {
+    const sites = useSites.getState();
+    const connections = useConnections.getState();
+    return runtime.active && runtimeRef.current === runtime &&
+      connections.activeSessionId === args.sessionId && connections.activeProfileId === connectionProfileId &&
+      sites.selectionVersion === selectionVersion &&
+      (!args.profileId || sites.activeByProfile[args.profileId] === args.siteId) &&
+      (!key || sites.syncPairs[key] === saved);
+  }, [runtime, args.sessionId, connectionProfileId, args.profileId, args.siteId, selectionVersion, key, saved]);
+
+  useEffect(() => {
+    runtime.active = true;
+    // Synchronous subscriptions also invalidate A -> B -> A transitions made
+    // before React has rendered B. Equality with A again cannot revive a probe.
+    const invalidate = () => {
+      if (runtime.active && !isCurrent()) {
+        runtime.active = false;
+        setLifetime(n => n + 1);
+      }
+    };
+    const offSites = useSites.subscribe(invalidate);
+    const offConnections = useConnections.subscribe(invalidate);
+    return () => { runtime.active = false; offSites(); offConnections(); };
+  }, [runtime, isCurrent]);
+  useEffect(() => () => { if (hintTimer.current) clearTimeout(hintTimer.current); }, []);
 
   const showHint = useCallback((next: SyncHint) => {
-    setHint(next);
+    setNotice({ owner: runtime, value: next });
     if (hintTimer.current) clearTimeout(hintTimer.current);
-    hintTimer.current = setTimeout(() => setHint(null), 4500);
-  }, []);
-
-  useEffect(() => () => {
-    if (hintTimer.current) clearTimeout(hintTimer.current);
-  }, []);
-
-  // Switching servers re-bases onto the folders open on the new connection
-  // (after a Default local path has landed) instead of replaying the previous
-  // server's offset. Wait one frame when that default hasn't been applied yet.
-  useEffect(() => {
-    if (sessionSeen.current === args.sessionId) return;
-    const expected = args.defaultLocalPath;
-    if (expected && args.localPath !== expected) return;
-    sessionSeen.current = args.sessionId;
-    stateRef.current = retargetSession(
-      stateRef.current,
-      args.sessionId,
-      args.localPath,
-      args.remotePath
-    );
-  }, [args.sessionId, args.localPath, args.remotePath, args.defaultLocalPath]);
+    hintTimer.current = setTimeout(() => setNotice(null), 4500);
+  }, [runtime]);
 
   const follow = useCallback((side: Side, path: string) => {
+    if (!isCurrent()) return;
     const current = argsRef.current;
-    const otherPath = side === "local" ? current.remotePath : current.localPath;
-    const otherSession = () => {
-      const live = argsRef.current;
-      return side === "local" ? live.sessionId : LOCAL_SESSION;
-    };
     void runMirror({
-      getState: () => stateRef.current,
-      setState: (next) => {
-        stateRef.current = next;
-      },
-      side,
-      path,
-      otherPath,
-      listDirectory: async (counterpart) => {
-        const sessionId = otherSession();
+      getState: () => runtime.state,
+      setState: next => { runtime.state = next; },
+      side, path,
+      otherPath: side === "local" ? current.remotePath : current.localPath,
+      listDirectory: async counterpart => {
+        const sessionId = side === "local" ? current.sessionId : LOCAL_SESSION;
         if (!sessionId) throw new Error("no connection");
-        // Existence probe only. The file panes do their own listing after a move.
         await ipc.listDirectory(sessionId, counterpart);
       },
-    }).then((result) => {
-      if (result.stale) return;
+    }).then(result => {
+      if (!isCurrent() || result.stale) return;
       if (result.hint) showHint(result.hint);
       if (!result.apply) return;
-      const applied = result.apply;
-      const echo = stateRef.current.echo;
-      if (applied.side === "local") argsRef.current.setLocalPath(applied.path);
-      else argsRef.current.setRemotePath(applied.path);
-      queueMicrotask(() => {
-        stateRef.current = clearMatchingEcho(stateRef.current, echo);
-      });
+      const echo = runtime.state.echo;
+      if (result.apply.side === "local") current.setLocalPath(result.apply.path);
+      else current.setRemotePath(result.apply.path);
+      queueMicrotask(() => { runtime.state = clearMatchingEcho(runtime.state, echo); });
     });
-  }, [showHint]);
+  }, [runtime, isCurrent, showHint]);
 
   const onLocalNavigate = useCallback((path: string) => {
+    if (!isCurrent()) return;
     argsRef.current.setLocalPath(path);
     follow("local", path);
-  }, [follow]);
-
+  }, [follow, isCurrent]);
   const onRemoteNavigate = useCallback((path: string) => {
+    if (!isCurrent()) return;
     argsRef.current.setRemotePath(path);
     follow("remote", path);
-  }, [follow]);
+  }, [follow, isCurrent]);
 
-  const toggle = useCallback(() => {
-    const current = argsRef.current;
-    if (!current.sessionId) return;
-    const next = !stateRef.current.enabled;
-    stateRef.current = toggleSync(
-      stateRef.current,
-      next,
-      current.localPath,
-      current.remotePath,
-      current.sessionId
-    );
-    setEnabled(next);
-    setHint(null);
-  }, []);
-
-  const rebase = useCallback(() => {
-    const current = argsRef.current;
-    if (!current.sessionId || !stateRef.current.enabled) return;
-    stateRef.current = rebaseSync(
-      stateRef.current,
-      current.localPath,
-      current.remotePath,
-      current.sessionId
-    );
-    showHint({
-      title: "Synchronized base updated",
-      message: "Both panes now mirror relative folders from the directories that are open.",
+  const save = () => {
+    if (!args.profileId) return;
+    const { enabled, base } = runtime.state;
+    useSites.getState().setBrowseSync(args.profileId, args.siteId, {
+      enabled, base: base ? { local: base.local, remote: base.remote } : null,
     });
-  }, [showHint]);
+  };
+  const toggle = () => {
+    const current = argsRef.current;
+    if (!isCurrent() || !current.profileId || !current.sessionId || !loaded) return;
+    runtime.state = toggleSync(runtime.state, !runtime.state.enabled, current.localPath, current.remotePath, current.sessionId);
+    save();
+    setNotice(null);
+  };
+  const rebase = () => {
+    const current = argsRef.current;
+    if (!isCurrent() || !current.sessionId || !runtime.state.enabled) return;
+    runtime.state = rebaseSync(runtime.state, current.localPath, current.remotePath, current.sessionId);
+    save();
+  };
 
-  const toolbar = currentSessionId(args.sessionId) ? (
+  const toolbar = args.profileId && currentSessionId(args.sessionId) ? (
     <>
       <button
         type="button"

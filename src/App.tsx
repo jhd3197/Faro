@@ -1,4 +1,6 @@
 import { UploadReports } from "./components/UploadReports";
+import { DiscoveryDialog } from "./components/DiscoveryDialog";
+import { useDiscovery } from "./stores/discoveryStore";
 import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -27,6 +29,7 @@ import { useLayout } from "./stores/layoutStore";
 import { SETTINGS_ENTRY_POINTS } from "./lib/settingsNav";
 import {
   TerminalSquare,
+  Activity,
   ArrowDownUp,
   Wifi,
   WifiOff,
@@ -62,6 +65,8 @@ import { AgentBridgePage } from "./components/AgentBridgePage";
 import { AgentConsoleDock } from "./components/AgentConsole";
 import { AgentDrawer } from "./components/AgentDrawer";
 import { DiskUsageHost } from "./components/DiskUsage";
+import { ServerViewHost } from "./components/ServerView";
+import { useServerView } from "./stores/serverViewStore";
 import { DirectoryDiffHost } from "./components/DirectoryDiff";
 import { FindDuplicatesHost } from "./components/FindDuplicates";
 import { FleetSearchHost } from "./components/FleetSearch";
@@ -105,6 +110,8 @@ export default function App() {
   const [editsMenuOpen, setEditsMenuOpen] = useState(false);
 
   useShortcuts();
+
+  useEffect(() => { void useDiscovery.getState().init(); }, []);
 
   // Boot the Folder Sync store: fetch the current pairs and attach the
   // "foldersync://changed" listener so background syncs keep the UI live.
@@ -158,6 +165,7 @@ export default function App() {
     <div className="flex h-screen w-screen flex-col">
       {zen ? <ZenExit /> : <TitleBar />}
       <DeepLinkListener />
+      {(dialog === "welcome" || dialog === "whatsNew") && <DiscoveryDialog key={dialog} mode={dialog} />}
       {dialog === "settings" && <Settings onClose={closeDialog} />}
       {dialog === "newConnection" && (
         <ProfileEditor
@@ -194,6 +202,7 @@ export default function App() {
                 underneath so their paths survive opening it). */}
             {dialog === "agentBridge" && <AgentBridgePage onClose={closeDialog} />}
             <DiskUsageHost />
+            <ServerViewHost />
             <div className="min-w-0 flex-1 overflow-hidden">
               <FileUiBridge>
                 {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
@@ -292,6 +301,9 @@ function StatusBar({
   const edits = useEditor((s) => s.edits);
   const stopEditing = useEditor((s) => s.stopEditing);
   const editList = Object.values(edits);
+  const serverViewOpen = useServerView((s) => s.open);
+  const openServerView = useServerView((s) => s.openFor);
+  const closeServerView = useServerView((s) => s.close);
 
   const history = useToasts((s) => s.history);
   const unread = useToasts((s) => s.unreadCount);
@@ -542,6 +554,22 @@ function StatusBar({
         title="Split view — show local files next to the server"
       >
         Split
+      </PillButton>
+      <PillButton
+        active={serverViewOpen}
+        onClick={() => {
+          if (serverViewOpen) closeServerView();
+          else if (activeSessionId) void openServerView(activeSessionId);
+        }}
+        disabled={!activeSessionId || !terminalAvailable}
+        icon={<Activity size={11} />}
+        title={
+          !terminalAvailable && activeSessionId
+            ? "Server view is only available for SSH connections"
+            : "Server view — live CPU, memory and network, services, ports, firewall"
+        }
+      >
+        Server
       </PillButton>
       <PillButton
         active={terminalOpen}

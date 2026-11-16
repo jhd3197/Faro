@@ -30,6 +30,7 @@ pub mod diff;
 pub mod error;
 pub mod fsutil;
 mod diskscan;
+mod docker;
 mod editor;
 mod foldersync;
 pub mod grant;
@@ -50,6 +51,9 @@ pub mod search;
 pub mod session;
 pub mod ssh_cert;
 pub mod sync;
+mod logfollow;
+mod stream_exec;
+mod sysmon;
 mod terminal;
 mod tls_trust;
 mod transfer;
@@ -78,6 +82,8 @@ pub struct AppState {
     pub virtualfs: Arc<virtualfs::VirtualFs>,
     /// Running disk-usage scans (Plan 4). Ephemeral — not persisted.
     pub diskscan: Arc<diskscan::ScanManager>,
+    /// Long-lived streamed execs (Plan 30) — the Server view's metrics sampler.
+    pub streams: Arc<stream_exec::StreamManager>,
     /// Running directory diffs (Plan 6). Ephemeral — not persisted.
     pub diff: Arc<diff::DiffManager>,
     /// Running duplicate scans. Ephemeral — not persisted.
@@ -348,6 +354,7 @@ pub fn run() {
                         .expect("failed to initialise virtualfs settings"),
                 ),
                 diskscan: Arc::new(diskscan::ScanManager::new()),
+                streams: Arc::new(stream_exec::StreamManager::new()),
                 diff: Arc::new(diff::DiffManager::new()),
                 dedupe: Arc::new(dedupe::DedupeManager::new()),
                 search: Arc::new(search::SearchManager::new()),
@@ -544,6 +551,30 @@ pub fn run() {
             diskscan::diskscan_tree,
             diskscan::diskscan_cancel,
             diskscan::diskscan_forget,
+            sysmon::sysmon_probe,
+            sysmon::sysmon_start,
+            sysmon::sysmon_stop,
+            sysmon::sysmon_disks,
+            sysmon::sysmon_services,
+            sysmon::sysmon_service_action,
+            sysmon::sysmon_service_logs,
+            sysmon::sysmon_ports,
+            sysmon::sysmon_firewall,
+            sysmon::sysmon_service_logs_follow,
+            logfollow::follow_stop,
+            docker::docker_access,
+            docker::docker_containers,
+            docker::docker_stats,
+            docker::docker_inspect,
+            docker::docker_container_action,
+            docker::docker_logs_start,
+            docker::docker_logs_tail,
+            docker::docker_images,
+            docker::docker_volumes,
+            docker::docker_networks,
+            docker::docker_disk_use,
+            docker::docker_remove,
+            docker::docker_prune,
             diff::diff_start,
             diff::diff_result,
             diff::diff_cancel,

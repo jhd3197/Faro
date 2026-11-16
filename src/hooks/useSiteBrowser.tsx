@@ -7,7 +7,7 @@ import { resolveLaunchRemotePath } from "@/lib/localFolder";
 
 /** Shared navigation keeps site locations intact across browser layouts and reconnects. */
 export function useSiteBrowser(profile: ConnectionProfile | null) {
-  const { sites, activeByProfile, sitePaths, serverPaths, navigate } = useSites();
+  const { sites, activeByProfile, sitePaths, serverPaths, navigateAt, selectionVersion } = useSites();
   const [saveTarget, setSaveTarget] = useState<{ profileId: string; serverName: string; path: string } | null>(null);
   const site = profile ? sites.find(s => s.profileId === profile.id && s.id === activeByProfile[profile.id]) : undefined;
   // Site shortcuts win over the server's last folder and the profile default.
@@ -19,7 +19,12 @@ export function useSiteBrowser(profile: ConnectionProfile | null) {
         defaultRemotePath: profile?.defaultRemotePath,
       });
   const profileId = profile?.id;
-  const setPath = useCallback((next: string) => { if (profileId) navigate(profileId, next); }, [profileId, navigate]);
+  const siteId = site?.id;
+  const setPath = useCallback((next: string) => {
+    // A callback from an old pane never redirects the currently selected site.
+    const live = useSites.getState();
+    if (profileId && live.selectionVersion === selectionVersion && live.activeByProfile[profileId] === siteId) navigateAt(profileId, siteId, next);
+  }, [profileId, siteId, navigateAt, selectionVersion]);
   const saveSite = (path: string) => {
     if (profile) setSaveTarget({ profileId: profile.id, serverName: profile.name, path });
   };

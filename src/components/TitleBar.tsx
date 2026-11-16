@@ -207,6 +207,8 @@ export function TitleBar() {
     {
       label: "Help",
       items: [
+        { label: "Welcome & walkthrough", icon: <Info size={11} />, onClick: () => openDialog("welcome") },
+        { label: "What's new", icon: <ArrowDownUp size={11} />, onClick: () => openDialog("whatsNew") },
         {
           label: "Keyboard shortcuts",
           icon: <Keyboard size={11} />,
