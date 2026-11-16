@@ -253,6 +253,12 @@ struct PersistedConfig {
     /// Skills. Prevents re-seeding on every launch.
     #[serde(default)]
     skills_migrated: bool,
+    /// Whether `faro-cli`'s direct subcommands (`exec`, `ls`, `cp`, …, which
+    /// open their own connection with stored credentials) may run at all.
+    /// Default false: they refuse and point at `faro-cli agent`. When on, each
+    /// call is still checked against the access matrix and logged.
+    #[serde(default)]
+    direct_cli: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -270,6 +276,8 @@ pub struct BridgeStatus {
     pub enabled_profiles: Vec<String>,
     /// Explicit per-server levels; profiles absent here use the policy defaults.
     pub profile_access: HashMap<String, ProfileAccess>,
+    /// "Allow direct CLI access" — see [`PersistedConfig::direct_cli`].
+    pub direct_cli: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -281,6 +289,15 @@ pub struct ActivityEntry {
     pub detail: String,
     pub ok: bool,
     pub at: i64, // unix millis
+    /// Set for direct `faro-cli` calls, which have no app session: the server
+    /// they touched, so the UI can name it and update its Last call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    /// Where the call came from when it is not the bridge itself: `"cli"` for a
+    /// direct `faro-cli` subcommand, `"terminal"` when a person confirmed one at
+    /// an interactive prompt despite the policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -338,6 +355,8 @@ pub struct BridgeState {
     skills: Mutex<Vec<Skill>>,
     /// Whether saved commands have been seeded into Skills (one-time).
     skills_migrated: Mutex<bool>,
+    /// "Allow direct CLI access" (persisted, default off).
+    direct_cli: Mutex<bool>,
     approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
     /// What each pending approval asks, beside its sender, so something other
     /// than the webview (the Vela companion) can say what is waiting.
@@ -372,6 +391,8 @@ fn activity(kind: &str, session_id: &str, detail: String, ok: bool) -> ActivityE
         detail,
         ok,
         at: now_millis(),
+        profile_id: None,
+        via: None,
     }
 }
 
@@ -512,6 +533,7 @@ impl BridgeState {
             saved_commands: Mutex::new(cfg.saved_commands),
             skills: Mutex::new(cfg.skills),
             skills_migrated: Mutex::new(cfg.skills_migrated),
+            direct_cli: Mutex::new(cfg.direct_cli),
             config_path: Some(path),
             ..Default::default()
         })
@@ -529,6 +551,7 @@ impl BridgeState {
             saved_commands: self.saved_commands.lock().await.clone(),
             skills: self.skills.lock().await.clone(),
             skills_migrated: *self.skills_migrated.lock().await,
+            direct_cli: *self.direct_cli.lock().await,
         };
         if let Ok(bytes) = serde_json::to_vec_pretty(&cfg) {
             let _ = crate::fsutil::write_atomic(path, &bytes);
@@ -542,6 +565,7 @@ impl BridgeState {
         let policy = *self.policy.lock().await;
         let enabled_profiles = self.enabled_profiles.lock().await.iter().cloned().collect();
         let profile_access = self.profile_access.lock().await.clone();
+        let direct_cli = *self.direct_cli.lock().await;
         match running.as_ref() {
             Some(r) => BridgeStatus {
                 running: true,
@@ -553,6 +577,7 @@ impl BridgeState {
                 policy,
                 enabled_profiles,
                 profile_access,
+                direct_cli,
             },
             None => BridgeStatus {
                 running: false,
@@ -564,6 +589,7 @@ impl BridgeState {
                 policy,
                 enabled_profiles,
                 profile_access,
+                direct_cli,
             },
         }
     }
@@ -674,6 +700,12 @@ impl BridgeState {
         }
     }
 
+    /// Turn "Allow direct CLI access" on or off.
+    pub async fn set_direct_cli(&self, on: bool) {
+        *self.direct_cli.lock().await = on;
+        self.persist().await;
+    }
+
     pub async fn set_policy(&self, policy: ApprovalPolicy) {
         *self.policy.lock().await = policy;
         self.persist().await;
@@ -758,6 +790,17 @@ impl BridgeState {
         exec: Option<ExecText<'_>>,
     ) -> AccessLevel {
         let access = self.access_for_session(app, session_id).await;
+        self.decide_with(access, class, exec).await
+    }
+
+    /// [`Self::decide`] for a known set of levels (a direct CLI call has a
+    /// profile but no app session).
+    async fn decide_with(
+        &self,
+        access: ProfileAccess,
+        class: OpClass,
+        exec: Option<ExecText<'_>>,
+    ) -> AccessLevel {
         let level = match class {
             OpClass::Read => access.read,
             OpClass::Write => access.write,
@@ -1127,6 +1170,165 @@ async fn gate(
     }
 }
 
+
+// ---- Direct CLI governance (issue #81) ----
+//
+// `faro-cli exec/ls/cp/…` open their own connection with a saved profile's
+// credentials instead of going through a bridge session. Before they do, the
+// CLI asks here: the "Allow direct CLI access" switch, the profile's grant and
+// its access-matrix level decide (Off refuses, Ask prompts in the app, Auto
+// runs), and every call that runs is logged to the console marked "cli".
+
+async fn direct_deny(
+    app: &AppHandle,
+    state: &Arc<BridgeState>,
+    profile_id: &str,
+    detail: &str,
+    msg: String,
+) -> (u16, Value) {
+    state
+        .log(app, direct_activity("denied", profile_id, detail.to_string(), false, "cli"))
+        .await;
+    (403, json!({"error": msg}))
+}
+
+fn direct_activity(kind: &str, profile_id: &str, detail: String, ok: bool, via: &str) -> ActivityEntry {
+    ActivityEntry {
+        id: Uuid::new_v4().to_string(),
+        session_id: String::new(),
+        kind: kind.to_string(),
+        detail,
+        ok,
+        at: now_millis(),
+        profile_id: Some(profile_id.to_string()),
+        via: Some(via.to_string()),
+    }
+}
+
+const DIRECT_CLI_OFF: &str = "direct faro-cli access is off in Faro's Agent Bridge settings. \
+    Use `faro-cli agent …` instead (it goes through the Bridge's approval and log), or ask the \
+    user to turn on 'Allow direct CLI access'. Don't retry.";
+
+/// `/direct/authorize` — may a direct CLI subcommand use this profile?
+/// Body: `{profileId, class: "read"|"write"|"exec", kind, summary, command?}`.
+async fn handle_direct_authorize(app: &AppHandle, state: &Arc<BridgeState>, body: &[u8]) -> (u16, Value) {
+    let parsed = match parse_body(body) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let profile_id = body_str(&parsed, "profileId");
+    let summary = body_str(&parsed, "summary");
+    let command = body_str(&parsed, "command");
+    let mut kind = body_str(&parsed, "kind");
+    if kind.is_empty() {
+        kind = "exec".into();
+    }
+    let class = match body_str(&parsed, "class").as_str() {
+        "read" => OpClass::Read,
+        "write" => OpClass::Write,
+        "exec" => OpClass::Exec,
+        _ => return (400, json!({"error": "class must be read, write or exec"})),
+    };
+    let profile = match app.state::<AppState>().profiles.get(&profile_id).await {
+        Ok(Some(p)) => p,
+        _ => return (404, json!({"error": format!("no saved profile with id {profile_id}")})),
+    };
+    let name = profile.name.clone();
+    let detail = summary.clone();
+    if !*state.direct_cli.lock().await {
+        return direct_deny(app, state, &profile_id, &detail, DIRECT_CLI_OFF.to_string()).await;
+    }
+    if !state.enabled_profiles.lock().await.contains(&profile_id) {
+        return direct_deny(app, state, &profile_id, &detail, format!(
+            "'{name}' has not granted agent access in Faro's Agent Bridge, so direct faro-cli calls to it are refused. Ask the user if you need it."
+        ))
+        .await;
+    }
+    let access = {
+        let policy = *state.policy.lock().await;
+        state
+            .profile_access
+            .lock()
+            .await
+            .get(&profile_id)
+            .copied()
+            .unwrap_or_else(|| default_access(&policy))
+    };
+    let exec = (class == OpClass::Exec).then(|| ExecText::Command(command.as_str()));
+    match state.decide_with(access, class, exec).await {
+        AccessLevel::Auto => {}
+        AccessLevel::Off => {
+            let what = match class {
+                OpClass::Read => "reading",
+                OpClass::Write => "writing or transferring files",
+                OpClass::Exec => "running commands",
+            };
+            return direct_deny(app, state, &profile_id, &detail, format!(
+                "the user has turned off {what} for '{name}' in Faro's Agent Bridge access settings. Don't retry; ask the user if you need it."
+            ))
+            .await;
+        }
+        AccessLevel::Ask => {
+            let prompt = format!("[faro-cli] {summary}");
+            if !state.request_approval(app, "", &name, &kind, &prompt).await {
+                return direct_deny(app, state, &profile_id, &detail, 
+                    "the user denied or did not respond to the approval prompt in Faro. Ask before trying again."
+                        .to_string(),
+                )
+                .await;
+            }
+        }
+    }
+    state
+        .log(app, direct_activity(&kind, &profile_id, detail.clone(), true, "cli"))
+        .await;
+    (200, json!({"ok": true, "profile": name}))
+}
+
+/// `/direct/report` — the outcome of a direct call (a failure or a non-zero
+/// exit), or a run a person forced through at an interactive prompt.
+/// Body: `{profileId, kind, summary, ok, via?: "cli"|"terminal"}`.
+async fn handle_direct_report(app: &AppHandle, state: &Arc<BridgeState>, body: &[u8]) -> (u16, Value) {
+    let parsed = match parse_body(body) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let profile_id = body_str(&parsed, "profileId");
+    let summary = body_str(&parsed, "summary");
+    let mut kind = body_str(&parsed, "kind");
+    if profile_id.is_empty() || summary.is_empty() {
+        return (400, json!({"error": "profileId and summary are required"}));
+    }
+    let ok = parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !ok {
+        kind = "error".into();
+    } else if kind.is_empty() {
+        kind = "exec".into();
+    }
+    let via = if body_str(&parsed, "via") == "terminal" { "terminal" } else { "cli" };
+    state
+        .log(app, direct_activity(&kind, &profile_id, summary, ok, via))
+        .await;
+    (200, json!({"ok": true}))
+}
+
+/// `/direct/profiles` — the saved profiles a non-interactive `faro-cli
+/// profiles list/show` may see: only the ones granted in the Bridge, and only
+/// while direct CLI access is on.
+async fn handle_direct_profiles(app: &AppHandle, state: &Arc<BridgeState>) -> (u16, Value) {
+    if !*state.direct_cli.lock().await {
+        return (403, json!({"error": DIRECT_CLI_OFF}));
+    }
+    let granted = state.enabled_profiles.lock().await.clone();
+    let profiles = app.state::<AppState>().profiles.list().await.unwrap_or_default();
+    let ids: Vec<String> = profiles
+        .into_iter()
+        .filter(|p| granted.contains(&p.id))
+        .map(|p| p.id)
+        .collect();
+    (200, json!({"profileIds": ids}))
+}
+
 // ---- HTTP server (hand-rolled, localhost-only, one request per connection) ----
 
 async fn serve(
@@ -1292,6 +1494,9 @@ async fn route(app: &AppHandle, state: &Arc<BridgeState>, req: &Request) -> (u16
         ),
         ("GET", "/context") => op_context(app, state).await,
         ("GET", "/sessions") => handle_sessions(app, state).await,
+        ("POST", "/direct/authorize") => handle_direct_authorize(app, state, &req.body).await,
+        ("POST", "/direct/report") => handle_direct_report(app, state, &req.body).await,
+        ("GET", "/direct/profiles") => handle_direct_profiles(app, state).await,
         ("POST", "/exec") => handle_exec(app, state, &req.body).await,
         ("POST", "/exec_script") => handle_exec_script(app, state, &req.body).await,
         ("POST", "/job") => handle_job(app, state, &req.body).await,
@@ -2055,6 +2260,8 @@ async fn exec_core_agent(
                         detail,
                         ok,
                         at: now_millis(),
+                        profile_id: None,
+                        via: None,
                     },
                 )
                 .await;
@@ -2092,6 +2299,8 @@ async fn exec_core_agent(
                         detail: format!("{label} — {e}"),
                         ok: false,
                         at: now_millis(),
+                        profile_id: None,
+                        via: None,
                     },
                 )
                 .await;
@@ -2521,6 +2730,8 @@ async fn exec_core(
                         detail,
                         ok,
                         at: now_millis(),
+                        profile_id: None,
+                        via: None,
                     },
                 )
                 .await;
@@ -2550,6 +2761,8 @@ async fn exec_core(
                         detail: format!("{label} — {e}"),
                         ok: false,
                         at: now_millis(),
+                        profile_id: None,
+                        via: None,
                     },
                 )
                 .await;
@@ -3348,6 +3561,8 @@ pub(crate) async fn op_tail(
                         detail,
                         ok,
                         at: now_millis(),
+                        profile_id: None,
+                        via: None,
                     },
                 )
                 .await;
@@ -3371,6 +3586,8 @@ pub(crate) async fn op_tail(
                         detail: format!("{label} — {e}"),
                         ok: false,
                         at: now_millis(),
+                        profile_id: None,
+                        via: None,
                     },
                 )
                 .await;
@@ -5350,7 +5567,10 @@ exactly what you do.
 
 Work carefully: prefer read-only inspection first, explain what you're checking \
 and why, and avoid destructive operations unless the user clearly asked for them. \
-Keep actions scoped to the connection the user intended.";
+Keep actions scoped to the connection the user intended. Work only through \
+these tools (or `faro-cli agent`); don't call faro-cli's direct subcommands \
+(`faro-cli exec`, `ls`, `cp`, `profiles`, ...), which skip the Bridge and are \
+refused unless the user has allowed direct CLI access.";
 
 fn mcp_initialize(params: &Value) -> Value {
     let version = params

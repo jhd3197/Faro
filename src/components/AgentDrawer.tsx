@@ -122,6 +122,18 @@ export function ActivityLine({
         )}
         title={`${a.kind} ${a.detail}`}
       >
+        {a.via && (
+          <span
+            className="mr-1 rounded border border-border px-1 text-[10px] text-text-dim"
+            title={
+              a.via === "terminal"
+                ? "Direct faro-cli call a person confirmed at a terminal"
+                : "Direct faro-cli call (not through a bridge session)"
+            }
+          >
+            {a.via === "terminal" ? "cli · forced" : "cli"}
+          </span>
+        )}
         <span className="text-text-dim">{a.kind === "denied" ? "denied" : a.kind}</span>{" "}
         {a.detail}
       </span>
@@ -153,8 +165,8 @@ export function AgentDrawer() {
   const caps = profile ? accessCaps(profile.protocol) : null;
   const granted = profile ? status.enabledProfiles.includes(profile.id) : false;
 
-  const nameOfSession = (sid: string) => {
-    const pid = sessions.find((s) => s.sessionId === sid)?.profileId;
+  const nameOfActivity = (a: BridgeActivity) => {
+    const pid = a.profileId ?? sessions.find((s) => s.sessionId === a.sessionId)?.profileId;
     return profiles.find((p) => p.id === pid)?.name ?? "";
   };
 
@@ -277,7 +289,7 @@ export function AgentDrawer() {
           ) : (
             <div className="pb-3">
               {activity.slice(0, 60).map((a) => (
-                <ActivityLine key={a.id} a={a} serverName={nameOfSession(a.sessionId)} />
+                <ActivityLine key={a.id} a={a} serverName={nameOfActivity(a)} />
               ))}
             </div>
           )}

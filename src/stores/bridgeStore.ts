@@ -7,6 +7,7 @@ import {
   onAgentOutput,
 } from "@/lib/ipc";
 import { toast } from "./toastStore";
+import { useConnections } from "./connectionsStore";
 import type {
   BridgeStatus,
   BridgeActivity,
@@ -32,6 +33,7 @@ const EMPTY: BridgeStatus = {
   policy: { allowAll: false, autoRead: false, autoSafeExec: false, allowSudo: false },
   enabledProfiles: [],
   profileAccess: {},
+  directCli: false,
 };
 
 interface BridgeStoreState {
@@ -49,6 +51,8 @@ interface BridgeStoreState {
   setEnabled: (enabled: boolean) => Promise<void>;
   setSessionAccess: (sessionId: string, enabled: boolean) => Promise<void>;
   setPolicy: (policy: ApprovalPolicy) => Promise<void>;
+  /** "Allow direct CLI access" (issue #81). */
+  setDirectCli: (enabled: boolean) => Promise<void>;
   /** Set one server's levels (works offline; all-off revokes the grant). */
   setProfileAccess: (profileId: string, access: ProfileAccess) => Promise<void>;
   respond: (requestId: string, decision: ApprovalDecision) => Promise<void>;
@@ -108,6 +112,10 @@ export const useBridge = create<BridgeStoreState>((set, get) => ({
             {
               id: e.id,
               sessionId: e.sessionId,
+              // Direct faro-cli calls have no session: name their server.
+              sessionName: e.profileId
+                ? `${useConnections.getState().profiles.find((p) => p.id === e.profileId)?.name ?? "server"} (cli)`
+                : undefined,
               kind: e.kind,
               command: e.detail,
               output: "",
@@ -213,6 +221,16 @@ export const useBridge = create<BridgeStoreState>((set, get) => ({
       set({ status });
     } catch (e) {
       toast.error("Couldn't update auto-approve policy", String(e));
+      void get().refresh();
+    }
+  },
+
+  setDirectCli: async (directCli) => {
+    set((s) => ({ status: { ...s.status, directCli } }));
+    try {
+      set({ status: await ipc.bridgeSetDirectCli(directCli) });
+    } catch (e) {
+      toast.error("Couldn't update direct CLI access", String(e));
       void get().refresh();
     }
   },

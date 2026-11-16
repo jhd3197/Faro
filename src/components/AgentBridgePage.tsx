@@ -21,7 +21,7 @@ import {
 import { cn } from "@/lib/cn";
 import { toast } from "@/stores/toastStore";
 import { PROTOCOL_LABEL } from "@/lib/types";
-import type { AccessLevel, ConnectionProfile, ProfileAccess } from "@/lib/types";
+import type { AccessLevel, BridgeActivity, ConnectionProfile, ProfileAccess } from "@/lib/types";
 import { AccessSeg } from "./ui/AccessSeg";
 import { AgentBridgeSetup, mcpAddCmd } from "./AgentBridge";
 import { ActivityLine, ApprovalCard, clockTime } from "./AgentDrawer";
@@ -110,13 +110,13 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
   const lastCall = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of activity) {
-      const pid = sessions.find((s) => s.sessionId === a.sessionId)?.profileId;
+      const pid = a.profileId ?? sessions.find((s) => s.sessionId === a.sessionId)?.profileId;
       if (pid && !m.has(pid)) m.set(pid, a.at);
     }
     return m;
   }, [activity, sessions]);
-  const nameOfSession = (sid: string) => {
-    const pid = sessions.find((s) => s.sessionId === sid)?.profileId;
+  const nameOfActivity = (a: BridgeActivity) => {
+    const pid = a.profileId ?? sessions.find((s) => s.sessionId === a.sessionId)?.profileId;
     return profiles.find((p) => p.id === pid)?.name ?? "";
   };
 
@@ -475,7 +475,7 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
             activity
               .slice(0, 80)
               .map((a) => (
-                <ActivityLine key={a.id} a={a} serverName={nameOfSession(a.sessionId)} />
+                <ActivityLine key={a.id} a={a} serverName={nameOfActivity(a)} />
               ))
           )}
         </div>

@@ -288,9 +288,12 @@ export const bridgeStatus: BridgeStatus = {
   profileAccess: {
     "p-api": { read: "auto", write: "ask", exec: "ask", sudo: "off" },
   },
+  directCli: true,
 };
 
 export const bridgeActivity = [
+  { id: "a0", sessionId: "", profileId: "p-api", via: "cli", kind: "exec", detail: "uptime", ok: true, at: (T - 12) * 1000 },
+  { id: "a00", sessionId: "", profileId: "p-db", via: "cli", kind: "denied", detail: "whoami", ok: false, at: (T - 20) * 1000 },
   { id: "a1", sessionId: "sess-p-api", kind: "exec", detail: "systemctl status api", ok: true, at: (T - 30) * 1000 },
   { id: "a2", sessionId: "sess-p-api", kind: "read", detail: "/var/www/api/.env", ok: true, at: (T - 70) * 1000 },
   { id: "a3", sessionId: "sess-p-api", kind: "denied", detail: "rm -rf /var/www/api/dist", ok: false, at: (T - 110) * 1000 },

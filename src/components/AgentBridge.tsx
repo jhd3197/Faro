@@ -284,6 +284,9 @@ approves each action in the Faro UI.
 You help through **\`faro-cli agent\`**, which talks to Faro's local Agent Bridge.
 You never handle a URL, port or token — \`faro-cli\` reads them from Faro's local
 discovery file. You only need the **connection name** (here: \`${S}\`).
+Use only \`faro-cli agent …\` (and \`faro-cli skill …\`). Don't call the direct
+subcommands (\`faro-cli exec\`, \`ls\`, \`cp\`, \`profiles\` …): they skip the
+Bridge, and Faro refuses them unless the user has allowed direct CLI access.
 
 You are using the **read-only helper** skill. You can browse, read, search and
 transfer files, but you do **not** run arbitrary commands. If the user asks for
@@ -383,6 +386,9 @@ approves each action in the Faro UI.
 You help through **\`faro-cli agent\`**, which talks to Faro's local Agent Bridge.
 You never handle a URL, port or token — \`faro-cli\` reads them from Faro's local
 discovery file. You only need the **connection name** (here: \`${S}\`).
+Use only \`faro-cli agent …\` (and \`faro-cli skill …\`). Don't call the direct
+subcommands (\`faro-cli exec\`, \`ls\`, \`cp\`, \`profiles\` …): they skip the
+Bridge, and Faro refuses them unless the user has allowed direct CLI access.
 
 You are using the **admin helper** skill, which can also run commands on connected
 SSH servers. Prefer read-only inspection first, and only run commands the user
@@ -522,6 +528,7 @@ export function AgentBridgeSetup({ onClose }: { onClose: () => void }) {
   const setEnabled = useBridge((s) => s.setEnabled);
   const setSessionAccess = useBridge((s) => s.setSessionAccess);
   const setPolicy = useBridge((s) => s.setPolicy);
+  const setDirectCli = useBridge((s) => s.setDirectCli);
   const refresh = useBridge((s) => s.refresh);
   const savedCommands = useBridge((s) => s.savedCommands);
   const saveCommand = useBridge((s) => s.saveCommand);
@@ -672,6 +679,17 @@ export function AgentBridgeSetup({ onClose }: { onClose: () => void }) {
                 The agent can run anything on enabled sessions without confirmation.
               </div>
             )}
+          </Card>
+
+          {/* Direct CLI — faro-cli subcommands that skip the bridge session. */}
+          <Card title="Direct CLI access">
+            <PolicyRow
+              label="Allow direct CLI access"
+              help="faro-cli exec, ls, cp, mv, rm, mkdir, sync, search, fetch and wp open their own connection with a saved server's credentials. When this is off they are refused (point agents at faro-cli agent instead). When on, each call still follows that server's row on the Access tab (Off refuses, Ask prompts here, Auto runs) and is logged below as CLI. A person at an interactive terminal can confirm a refused call by hand."
+              checked={status.directCli}
+              onChange={(v) => void setDirectCli(v)}
+              danger={status.directCli}
+            />
           </Card>
 
           {/* Sudo — let Faro answer sudo's prompt with the login password. */}

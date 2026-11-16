@@ -30,7 +30,15 @@ use std::sync::Arc;
 #[command(
     name = "faro-cli",
     about = "Faro CLI — SFTP / FTP / S3 / R2 / B2 / Azure Blob from the terminal",
-    version
+    version,
+    after_help = "Agent Bridge governance:\n  \
+        `agent` and `skill` run through the Bridge session open in Faro. The direct\n  \
+        subcommands (exec, ls, cp, mv, rm, mkdir, sync, diff, dedupe, search, fetch, wp)\n  \
+        open their own connection, so the running Faro app checks each call first:\n  \
+        'Allow direct CLI access' must be on in Agent Bridge settings, and the server's\n  \
+        access matrix applies (Off refuses, Ask prompts in Faro, Auto runs). Every call\n  \
+        is logged in the Bridge. With Faro closed they are refused. At an interactive\n  \
+        terminal you can confirm a refused call by hand. AI agents: use `faro-cli agent`."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -196,9 +204,11 @@ enum Cmd {
 
     /// Operate a server through Faro's running Agent Bridge.
     ///
-    /// Unlike the other subcommands (which open their own connection), `agent`
-    /// talks to the Bridge you already have open in the Faro app — so commands
-    /// go through Faro's per-command approval and show up in its live console.
+    /// Unlike the direct subcommands (which open their own connection and are
+    /// refused unless 'Allow direct CLI access' is on), `agent` talks to the
+    /// Bridge you already have open in the Faro app — so commands go through
+    /// Faro's per-command approval and show up in its live console. AI agents
+    /// should use this.
     /// The bridge URL + token are read from Faro's local discovery file, so you
     /// only pass a server name; you never handle a URL or token.
     Agent {
@@ -674,6 +684,7 @@ fn main() {
 async fn async_main() {
     let cli = Cli::parse();
     if let Err(e) = run(cli).await {
+        report_direct_failure(&format!("{e:#}").lines().next().unwrap_or("failed").to_string());
         eprintln!("\x1b[31merror:\x1b[0m {e:#}");
         std::process::exit(1);
     }
@@ -944,6 +955,133 @@ fn open_store() -> Result<ProfileStore> {
     ProfileStore::from_dir(&dir, keychain)
 }
 
+
+// ---- Agent Bridge governance for direct subcommands (issue #81) ----------
+//
+// The `agent` subcommands run inside a Bridge session. The others (`exec`,
+// `ls`, `cp`, `mv`, `rm`, `mkdir`, `sync`, `diff`, `dedupe`, `search`,
+// `fetch`, `wp`) open their own connection, so they ask the running app
+// first. With the app or bridge off, nothing can approve or log the call,
+// so it is refused. A person at an interactive terminal can still confirm a
+// refused call by hand; that is logged as forced through.
+
+/// Which access-matrix column a direct call counts against.
+#[derive(Clone, Copy)]
+enum Access {
+    Read,
+    Write,
+    Exec,
+}
+
+impl Access {
+    fn as_str(self) -> &'static str {
+        match self {
+            Access::Read => "read",
+            Access::Write => "write",
+            Access::Exec => "exec",
+        }
+    }
+}
+
+/// Direct calls this process was allowed to make: `(profile id, kind, summary)`.
+/// A failure is reported against them so the Bridge log shows it.
+static AUTHORIZED: std::sync::Mutex<Vec<(String, String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// A person at a terminal (stdin and stderr both a TTY). An agent's shell tool
+/// has no TTY, so it can't answer the confirmation silently.
+fn interactive() -> bool {
+    use std::io::IsTerminal;
+    io::stdin().is_terminal() && io::stderr().is_terminal()
+}
+
+fn confirm(question: &str) -> bool {
+    eprint!("{question} [y/N] ");
+    io::stderr().flush().ok();
+    let mut line = String::new();
+    if io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+const BRIDGE_DOWN: &str = "Faro's Agent Bridge isn't running, so this direct faro-cli call can't be \
+    approved or logged and is refused. Open Faro with the Agent Bridge on, or use `faro-cli agent …`.";
+
+fn authorize_direct(profile: &ConnectionProfile, access: Access, kind: &str, summary: &str) -> Result<()> {
+    let body = serde_json::json!({
+        "profileId": profile.id,
+        "class": access.as_str(),
+        "kind": kind,
+        "summary": summary,
+        "command": if matches!(access, Access::Exec) { summary } else { "" },
+    });
+    // The approval can wait on the user for up to two minutes; keep the
+    // blocking HTTP call off the async workers.
+    let verdict = match read_endpoint() {
+        Ok(ep) => tokio::task::block_in_place(|| http_post(&ep, "/direct/authorize", body).map(|_| ())),
+        Err(_) => Err(anyhow!(BRIDGE_DOWN)),
+    };
+    let allowed = match verdict {
+        Ok(()) => true,
+        Err(e) => {
+            if !interactive() {
+                return Err(e);
+            }
+            eprintln!("{}", warn(&format!("{e:#}")));
+            if !confirm(&format!("Run `{summary}` on {} anyway?", profile.name)) {
+                bail!("cancelled");
+            }
+            report_direct(&profile.id, kind, &format!("{summary} (confirmed at a terminal)"), true, "terminal");
+            true
+        }
+    };
+    if allowed {
+        AUTHORIZED
+            .lock()
+            .unwrap()
+            .push((profile.id.clone(), kind.to_string(), summary.to_string()));
+    }
+    Ok(())
+}
+
+/// Best-effort: log a direct call's outcome in the Bridge.
+fn report_direct(profile_id: &str, kind: &str, summary: &str, ok: bool, via: &str) {
+    let Ok(ep) = read_endpoint() else { return };
+    let body = serde_json::json!({
+        "profileId": profile_id,
+        "kind": kind,
+        "summary": summary,
+        "ok": ok,
+        "via": via,
+    });
+    let _ = tokio::task::block_in_place(|| http_post(&ep, "/direct/report", body));
+}
+
+/// Log a failure against every direct call this process made.
+fn report_direct_failure(why: &str) {
+    let calls = std::mem::take(&mut *AUTHORIZED.lock().unwrap());
+    for (profile_id, kind, summary) in calls {
+        report_direct(&profile_id, &kind, &format!("{summary} — {why}"), false, "cli");
+    }
+}
+
+/// Profile ids a `profiles list/show` caller may see: all of them for a person
+/// at a terminal, otherwise only those granted in the Bridge (and only while
+/// direct CLI access is on), so a locked-down agent can't enumerate every host.
+fn visible_profile_ids() -> Result<Option<Vec<String>>> {
+    if interactive() {
+        return Ok(None);
+    }
+    let ep = read_endpoint().map_err(|_| anyhow!(BRIDGE_DOWN))?;
+    let v = tokio::task::block_in_place(|| http_get(&ep, "/direct/profiles"))?;
+    Ok(Some(
+        v.get("profileIds")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|i| i.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+    ))
+}
+
 // ---- Path parsing ------------------------------------------------------
 
 /// Targets passed on the CLI are either local paths or remote paths prefixed
@@ -994,7 +1132,19 @@ async fn find_profile(store: &ProfileStore, name: &str) -> Result<ConnectionProf
 
 /// Build a session for a remote target. Each invocation opens a fresh
 /// connection — short-lived CLI scripts don't need a long-lived manager.
-async fn open_session(profile: &ConnectionProfile) -> Result<Session> {
+///
+/// Every direct subcommand reaches a saved profile's credentials through here,
+/// so this is where the Agent Bridge governs them (issue #81): the call is
+/// authorized by the running app first — "Allow direct CLI access", the
+/// profile's grant and its access-matrix level (Off refuses, Ask prompts in
+/// Faro, Auto runs) — and shows up in the Bridge log.
+async fn open_session(
+    profile: &ConnectionProfile,
+    access: Access,
+    kind: &str,
+    summary: impl Into<String>,
+) -> Result<Session> {
+    authorize_direct(profile, access, kind, &summary.into())?;
     let verifier: Arc<dyn HostKeyVerifier> = Arc::new(CliHostKeyVerifier);
     faro_open_session(profile, verifier).await
 }
@@ -1062,7 +1212,7 @@ async fn cmd_ls(store: &ProfileStore, raw: &str, bytes: bool) -> Result<()> {
         Target::Local(p) => faro_lib::remotefs::local::LocalFs.list_dir(&p).await?,
         Target::Remote { profile_name, path } => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Read, "read", format!("ls {path}")).await?;
             let fs = fs_for(&session);
             fs.list_dir(&path).await?
         }
@@ -1111,7 +1261,7 @@ fn print_entry(e: &DirEntry, bytes: bool) {
 
 async fn cmd_exec(store: &ProfileStore, profile_name: &str, command: &[String]) -> Result<()> {
     let profile = find_profile(store, profile_name).await?;
-    let session = open_session(&profile).await?;
+    let session = open_session(&profile, Access::Exec, "exec", command.join(" ")).await?;
     let Session::Ssh(ssh) = session else {
         bail!(
             "`exec` needs an SSH/SFTP profile; `{}` is {}",
@@ -1133,8 +1283,13 @@ async fn cmd_exec(store: &ProfileStore, profile_name: &str, command: &[String]) 
         se.write_all(out.stderr.as_bytes()).ok();
         se.flush().ok();
     }
-    // Propagate the remote command's exit code as our own.
-    std::process::exit(out.exit_code.unwrap_or(0))
+    // Propagate the remote command's exit code as our own (and log a failure
+    // in the Bridge first — process::exit skips `run`'s reporting).
+    let code = out.exit_code.unwrap_or(0);
+    if code != 0 {
+        report_direct_failure(&format!("exit {code}"));
+    }
+    std::process::exit(code)
 }
 
 async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str) -> Result<()> {
@@ -1152,7 +1307,7 @@ async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str) -> Result<()> {
         // upload: local → remote
         (Target::Local(local_path), Target::Remote { profile_name, path: dest }) => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Write, "upload", format!("cp {local_path} -> {dest}")).await?;
             let dest_parent = parent_of(&dest);
             let name = if dest.ends_with('/') { basename(&local_path) } else { basename(&dest) };
             let parent = if dest.ends_with('/') { dest.trim_end_matches('/').to_string() } else { dest_parent };
@@ -1161,7 +1316,7 @@ async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str) -> Result<()> {
         // download: remote → local
         (Target::Remote { profile_name, path: src }, Target::Local(destination)) => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Write, "download", format!("cp {src} -> {destination}")).await?;
             let target = if std::path::Path::new(&destination).is_dir() || destination.ends_with(['/', '\\']) {
                 PathBuf::from(&destination).join(basename(&src))
             } else { PathBuf::from(&destination) };
@@ -1189,7 +1344,7 @@ async fn cmd_mv(store: &ProfileStore, src: &str, dst: &str) -> Result<()> {
             Target::Remote { profile_name: d_p, path: d_path },
         ) if s_p == d_p => {
             let profile = find_profile(store, &s_p).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Write, "write", format!("mv {s_path} -> {d_path}")).await?;
             fs_for(&session).rename(&s_path, &d_path).await?;
         }
         _ => bail!("mv must stay within a single profile or be fully local"),
@@ -1204,7 +1359,7 @@ async fn cmd_rm(store: &ProfileStore, raw: &str, recursive: bool) -> Result<()> 
         }
         Target::Remote { profile_name, path } => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Write, "write", format!("rm{} {path}", if recursive { " -r" } else { "" })).await?;
             fs_for(&session).delete(&path, recursive).await?;
         }
     }
@@ -1218,7 +1373,7 @@ async fn cmd_mkdir(store: &ProfileStore, raw: &str) -> Result<()> {
         }
         Target::Remote { profile_name, path } => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Write, "write", format!("mkdir {path}")).await?;
             fs_for(&session).create_dir(&path).await?;
         }
     }
@@ -1242,7 +1397,7 @@ async fn cmd_sync(
         Target::Local(_) => bail!("sync's second argument must be `profile:/path`"),
     };
     let profile = find_profile(store, &profile_name).await?;
-    let session = open_session(&profile).await?;
+    let session = open_session(&profile, if dry_run { Access::Read } else { Access::Write }, "sync", format!("sync {local_path} {remote_path}{}", if dry_run { " (dry run)" } else { "" })).await?;
 
     let local_fs: Box<dyn RemoteFs> = Box::new(faro_lib::remotefs::local::LocalFs);
     let remote_fs = fs_for(&session);
@@ -1399,7 +1554,7 @@ async fn resolve_diff_side(store: &ProfileStore, raw: &str) -> Result<DiffSide> 
         Target::Local(p) => Ok(DiffSide::Local(p)),
         Target::Remote { profile_name, path } => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Read, "diff", format!("diff {path}")).await?;
             Ok(DiffSide::Remote { session, path })
         }
     }
@@ -1560,7 +1715,7 @@ async fn cmd_dedupe(
         Target::Local(p) => (Box::new(faro_lib::remotefs::local::LocalFs), None, p),
         Target::Remote { profile_name, path } => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, if delete { Access::Write } else { Access::Read }, "search", format!("dedupe {path}{}", if delete { " --delete" } else { "" })).await?;
             let root = path.clone();
             (fs_for(&session), Some(session), root)
         }
@@ -1685,7 +1840,7 @@ async fn cmd_search(
         Target::Local(p) => (Box::new(faro_lib::remotefs::local::LocalFs), None, p),
         Target::Remote { profile_name, path } => {
             let profile = find_profile(store, &profile_name).await?;
-            let session = open_session(&profile).await?;
+            let session = open_session(&profile, Access::Read, "search", format!("search {path} for {pattern}")).await?;
             let fs = fs_for(&session);
             (fs, Some(session), path)
         }
@@ -1827,7 +1982,12 @@ async fn cmd_fetch(
         }
     };
 
-    let session = open_session(&profile).await?;
+    let fetch_access = if matches!(method, reqwest::Method::GET | reqwest::Method::HEAD) {
+        Access::Read
+    } else {
+        Access::Write
+    };
+    let session = open_session(&profile, fetch_access, "read", format!("fetch {method} {url_str}")).await?;
     let mut rb = match &session {
         Session::Http(http) => http.request(method.clone(), url),
         Session::WordPress(wp) => wp.request_url(method.clone(), url),
@@ -1954,7 +2114,20 @@ async fn cmd_wp(store: &ProfileStore, connection: &str, action: WpCmd) -> Result
     if profile.protocol != "wordpress" {
         bail!("`{}` is not a WordPress connection", profile.name);
     }
-    let session = open_session(&profile).await?;
+    let (wp_access, wp_summary) = match &action {
+        WpCmd::Rest { method, route, .. } => {
+            let write = !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD");
+            (if write { Access::Write } else { Access::Read }, format!("rest {method} {route}"))
+        }
+        WpCmd::Routes { .. } => (Access::Read, "routes".to_string()),
+        WpCmd::Plugins { action: Some(a), plugin } => {
+            (Access::Write, format!("plugins {a} {}", plugin.as_deref().unwrap_or("")))
+        }
+        WpCmd::Plugins { .. } => (Access::Read, "plugins".to_string()),
+        WpCmd::Options { .. } => (Access::Read, "options".to_string()),
+        WpCmd::Forms { .. } => (Access::Read, "forms".to_string()),
+    };
+    let session = open_session(&profile, wp_access, "read", format!("wp {wp_summary}")).await?;
     let Session::WordPress(wp) = session else {
         bail!("`{}` is not a WordPress connection", profile.name);
     };
@@ -2026,7 +2199,10 @@ async fn cmd_wp(store: &ProfileStore, connection: &str, action: WpCmd) -> Result
 }
 
 async fn cmd_profiles_list(store: &ProfileStore) -> Result<()> {
-    let profiles = store.list().await?;
+    let mut profiles = store.list().await?;
+    if let Some(ids) = visible_profile_ids()? {
+        profiles.retain(|p| ids.contains(&p.id));
+    }
     if profiles.is_empty() {
         eprintln!("No profiles saved. Open the GUI to add one.");
         return Ok(());
@@ -2047,6 +2223,14 @@ async fn cmd_profiles_list(store: &ProfileStore) -> Result<()> {
 
 async fn cmd_profiles_show(store: &ProfileStore, name: &str) -> Result<()> {
     let p = find_profile(store, name).await?;
+    if let Some(ids) = visible_profile_ids()? {
+        if !ids.contains(&p.id) {
+            bail!(
+                "no profile named `{name}` is available here. Non-interactive faro-cli calls only \
+                 see servers granted in Faro's Agent Bridge."
+            );
+        }
+    }
     let mut json = serde_json::to_value(&p)?;
     // Redact the password / passphrase before printing.
     if let Some(obj) = json.as_object_mut() {

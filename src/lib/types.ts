@@ -1209,6 +1209,9 @@ export interface BridgeStatus {
   enabledProfiles: string[];
   /** Explicit per-server levels; absent profiles use the policy defaults. */
   profileAccess: Record<string, ProfileAccess>;
+  /** "Allow direct CLI access": whether `faro-cli exec/ls/cp/…` (which open
+   *  their own connection) may run at all. Default off. */
+  directCli: boolean;
 }
 
 export interface BridgeContext {
@@ -1235,6 +1238,11 @@ export interface BridgeActivity {
   detail: string;
   ok: boolean;
   at: number; // unix millis
+  /** Set on direct `faro-cli` calls, which have no app session. */
+  profileId?: string;
+  /** "cli" for a direct `faro-cli` call; "terminal" when a person forced a
+   *  refused one through at an interactive prompt. */
+  via?: "cli" | "terminal";
 }
 
 export interface BridgeApproval {
