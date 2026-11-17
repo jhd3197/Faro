@@ -63,6 +63,7 @@ import { ipc } from "@/lib/ipc";
 import { CfForwardsRail } from "./CfForwardsRail";
 import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
 import { effectiveAccess, accessSummary } from "@/lib/agentAccess";
+import { searchRank } from "@/lib/serverSearch";
 import type { ProfileAccess } from "@/lib/types";
 
 type RowState = "focused" | "connected" | "connecting" | "error" | "idle";
@@ -1635,13 +1636,16 @@ function RailSearch({
     };
   }, [onClose]);
 
-  const q = query.trim().toLowerCase();
-  const results = q
-    ? profiles.filter((p) =>
-        [p.name, p.host, p.username, p.bucket, p.account, PROTOCOL_LABEL[p.protocol]]
-          .some((s) => !!s && s.toLowerCase().includes(q))
-      )
-    : profiles;
+  // Loose match: separators ignored, each word on its own, ranked best first.
+  const results = searchRank(profiles, query, (p) => [
+    { text: p.name, weight: 40 },
+    { text: p.group, weight: 25 },
+    { text: p.host, weight: 20 },
+    { text: p.username, weight: 10 },
+    { text: p.bucket, weight: 10 },
+    { text: p.account, weight: 10 },
+    { text: PROTOCOL_LABEL[p.protocol], weight: 0 },
+  ]);
 
   return (
     <div

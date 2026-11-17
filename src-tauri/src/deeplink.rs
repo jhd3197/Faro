@@ -11,8 +11,14 @@
 //! ```text
 //! faro://connect?protocol=sftp&host=example.com&port=22&username=me&path=/var/www&name=My%20Site
 //! faro://pair?host=192.168.1.5&port=8722&code=428170&name=Basement%20NAS
+//! faro://site?host=example.com&username=me&path=/var/www/shop&name=Shop
 //! faro://terminal?name=My%20Site
 //! ```
+//!
+//! `connect` and `site` reuse a saved connection with the same host and
+//! username (matched in the UI) instead of creating a duplicate; `site` also
+//! saves `path` as a site on it. Unmatched links open the prefilled editor,
+//! in the rail folder named by `group`.
 //!
 //! `terminal` opens a standalone terminal window for an already-connected
 //! server (matched by `name` or `host`); if the server isn't connected, the
@@ -28,10 +34,12 @@ use url::Url;
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeepLink {
-    /// `"connect"` (open a server editor) or `"pair"` (open the Faro Agent
-    /// pairing editor). Anything else is ignored by the UI.
+    /// `"connect"` (a server), `"site"` (a folder on a server), `"pair"` (the
+    /// Faro Agent pairing editor), `"terminal"` or `"grant"`.
     pub action: String,
     pub protocol: Option<String>,
+    /// Rail folder for a connection the link creates.
+    pub group: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
     pub username: Option<String>,
@@ -93,7 +101,13 @@ pub fn parse(raw: &str) -> Option<DeepLink> {
             "account" => dl.account = Some(v),
             "issuer" => dl.issuer = Some(v),
             "token" => dl.token = Some(v),
+            "group" | "folder" => dl.group = Some(v),
             "via" => dl.via = Some(v.to_lowercase()),
+            // `cf=<hostname>`: shorthand for `via=cloudflare&access=<hostname>`.
+            "cf" => {
+                dl.via = Some("cloudflare".into());
+                dl.access = Some(v);
+            }
             "access" => dl.access = Some(v),
             "auth" => dl.auth = Some(v.to_lowercase()),
             // Deliberately ignored — links must not carry credentials.
@@ -114,6 +128,7 @@ pub fn handle_urls(app: &AppHandle, urls: &[url::Url]) {
         match parse(u.as_str()) {
             Some(dl)
                 if dl.action == "connect"
+                    || dl.action == "site"
                     || dl.action == "pair"
                     || dl.action == "terminal"
                     || dl.action == "grant" =>
@@ -158,6 +173,17 @@ mod tests {
         assert_eq!(dl.via.as_deref(), Some("cloudflare"));
         assert_eq!(dl.access.as_deref(), Some("ssh.example.com"));
         assert_eq!(dl.auth.as_deref(), Some("cloudflarecert"));
+    }
+
+    #[test]
+    fn parses_site_link_with_group_and_cf_shorthand() {
+        let dl = parse("faro://site?host=box&username=web&path=/var/www/shop&name=Shop&group=Acme%20Panel&cf=ssh.example.com")
+            .unwrap();
+        assert_eq!(dl.action, "site");
+        assert_eq!(dl.group.as_deref(), Some("Acme Panel"));
+        assert_eq!(dl.path.as_deref(), Some("/var/www/shop"));
+        assert_eq!(dl.via.as_deref(), Some("cloudflare"));
+        assert_eq!(dl.access.as_deref(), Some("ssh.example.com"));
     }
 
     #[test]

@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate GitHub workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/ci.yml .github/workflows/release.yml
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/release-notes.yml
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -52,6 +52,9 @@ jobs:
 
       - name: Release upload retry and completeness tests
         run: node --test scripts/release-tools.test.mjs
+
+      - name: Server search and deep-link matching
+        run: node --test scripts/server-search.test.mjs scripts/deep-link-match.test.mjs scripts/deep-link-reuse.test.mjs
 
       - name: File pane listing and navigation regression tests
         run: node --test scripts/file-pane.test.mjs
