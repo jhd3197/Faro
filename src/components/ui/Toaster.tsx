@@ -66,7 +66,11 @@ function ToastCard({
         )}
         {toast.action && (
           <button
-            onClick={() => followToastAction(toast.action!)}
+            onClick={() => {
+              followToastAction(toast.action!);
+              // Connect is a one-shot: leave nothing to press twice.
+              if (toast.action!.connect) onDismiss();
+            }}
             className="mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent hover:bg-bg-hover"
           >
             {toast.action.url && <ExternalLink size={11} />}

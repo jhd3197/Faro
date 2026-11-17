@@ -32,7 +32,7 @@ faro://<action>?<param>=<value>&<param>=<value>…
 The **authority** is the action; everything else is URL-encoded query
 parameters. The *site's* own host goes in `?host=`, not in the URL authority.
 
-Four actions:
+Five actions:
 
 ### `faro://grant` — accept delegated access to one or many servers
 
@@ -69,6 +69,18 @@ site's REST API (`protocol=wordpress`, `host` = the site address).
 | `via`      | `cloudflare`: reach the server through Cloudflare Access (SFTP) | `cloudflare` |
 | `access`   | Access hostname, when it isn't `host`                | `ssh.example.com`       |
 | `auth`     | A login that needs no secret: `agent`, or `cloudflarecert` (with `via=cloudflare`) | `cloudflarecert` |
+| `cf`       | Shorthand for `via=cloudflare&access=<hostname>`     | `ssh.example.com`       |
+| `group`    | Rail folder for a **new** connection (alias `folder`) | `Acme Panel`           |
+
+**Saved connections are reused.** If a saved connection already has the
+link's `host` and `username` (and its `protocol`, `port` and Cloudflare
+hostname, when the link sets them), Faro selects it instead of opening the
+editor, wherever it sits in the rail. If it's already connected, Faro switches
+to it and opens `path`; if not, a notification offers **Connect** — a link
+still never connects on its own. A link without a `username` reuses a
+connection only when exactly one saved server has that host. With no match,
+the editor opens prefilled, and `group` puts the new connection in that rail
+folder so everything a panel hands out lands together.
 
 A connection's rail menu has **Copy link**, which writes exactly these
 parameters for it: the fastest way to hand a teammate a server. For a whole
@@ -92,6 +104,18 @@ certificate (nothing to install or type):**
 
 ```
 faro://connect?protocol=sftp&host=ssh.example.com&username=jane.doe&via=cloudflare&auth=cloudflarecert&name=Prod%20box
+```
+
+### `faro://site` — open one website's folder on a shared server
+
+Same parameters as `connect`, with `path` set to the site's folder and `name`
+to the site's name. When the server is already saved, Faro saves `path` as a
+**site** on it (the same thing **Save as site** does in the file pane), or
+reuses the site if that folder is already saved, and opens it. When the server
+isn't saved yet, the prefilled editor opens instead.
+
+```
+faro://site?protocol=sftp&host=web1.example.com&username=deploy&path=%2Fvar%2Fwww%2Fshop&name=Shop&group=Acme%20Panel
 ```
 
 ### `faro://pair` — pair a Faro Agent machine

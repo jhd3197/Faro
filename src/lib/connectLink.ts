@@ -25,6 +25,7 @@ export function connectLink(p: ConnectionProfile): string {
   set("region", p.region);
   set("endpoint", p.protocol === "wordpress" ? undefined : p.endpoint);
   set("account", p.account);
+  set("group", p.group);
   if (p.protocol === "sftp") {
     if (p.proxyCommand?.kind === "cloudflare") {
       set("via", "cloudflare");

@@ -56,6 +56,9 @@ import { ipc, onDeepLink } from "./lib/ipc";
 import { runDefaultBumps, runSettingsMigration } from "./lib/secretMigration";
 import { initNotifications } from "./lib/notifications";
 import { openTerminalWindow } from "./lib/popout";
+import { cleanRemotePath, matchLinkProfile, sameRemotePath, siteNameFor } from "./lib/deepLinkMatch";
+import { showLinkTarget } from "./lib/linkTarget";
+import { useSites } from "./stores/sitesStore";
 import type { DeepLink, Protocol, ConnectionProfile } from "./lib/types";
 import { PROTOCOL_DEFAULT_PORT } from "./lib/types";
 import { Toaster } from "./components/ui/Toaster";
@@ -779,18 +782,86 @@ function DeepLinkListener() {
         );
         return;
       }
+      if (dl.action === "connect" || dl.action === "site") {
+        void openConnectLink(dl, openNewConnection);
+        return;
+      }
       const prefill = deepLinkToPrefill(dl);
       openNewConnection(prefill);
-      toast.info(
-        dl.action === "pair" ? "Pair a machine" : "Open connection",
-        prefill.name || prefill.host || undefined
-      );
+      toast.info("Pair a machine", prefill.name || prefill.host || undefined);
     });
     return () => {
       void un.then((f) => f());
     };
   }, [openNewConnection, openGrant]);
   return null;
+}
+
+/// `faro://connect` and `faro://site`: reuse a saved connection that matches
+/// the link (host, username, port, protocol, Cloudflare hostname) instead of
+/// creating a duplicate. A connected match opens straight away; otherwise a
+/// toast offers Connect, because a link never connects on its own. A `site`
+/// link saves its folder as a site on the match. Without a match, the editor
+/// opens prefilled, in the link's `group`.
+async function openConnectLink(
+  dl: DeepLink,
+  openNewConnection: (prefill?: Partial<ConnectionProfile>) => void
+) {
+  const match = matchLinkProfile(useConnections.getState().profiles, dl);
+  const path = dl.path?.trim() ? cleanRemotePath(dl.path) : undefined;
+  if (!match) {
+    const prefill = deepLinkToPrefill(dl);
+    openNewConnection(prefill);
+    toast.info(
+      dl.action === "site" ? "Save the server first" : "Open connection",
+      dl.action === "site"
+        ? "This site's server isn't saved in Faro yet."
+        : prefill.name || prefill.host || undefined
+    );
+    return;
+  }
+
+  let siteId: string | undefined;
+  let savedSite = false;
+  if (path) {
+    try {
+      await useSites.getState().load();
+      const existing = useSites
+        .getState()
+        .sites.find((s) => s.profileId === match.id && sameRemotePath(s.path, path));
+      if (existing) {
+        siteId = existing.id;
+      } else if (dl.action === "site") {
+        const id = crypto.randomUUID();
+        await useSites.getState().save({ id, profileId: match.id, name: siteNameFor(dl, path), path });
+        siteId = id;
+        savedSite = true;
+      }
+    } catch (e) {
+      toast.error("Couldn't save the site", String(e));
+    }
+  }
+
+  // Reveal the server in the rail if its folder is collapsed.
+  const settings = useSettings.getState();
+  if (match.group && settings.railCollapsedGroups.includes(match.group)) {
+    settings.toggleRailGroup(match.group);
+  }
+
+  const target = { profileId: match.id, siteId, path: siteId ? undefined : path };
+  const siteName = siteId ? useSites.getState().sites.find((s) => s.id === siteId)?.name : undefined;
+  const label = siteName ? `${siteName} on ${match.name}` : match.name;
+  if (showLinkTarget(target)) {
+    toast.info(savedSite ? "Site saved" : "Opened saved connection", label);
+    return;
+  }
+  useToasts.getState().push({
+    variant: "info",
+    title: savedSite ? "Site saved" : "Already saved in Faro",
+    message: `${label}. Press Connect to open it.`,
+    action: { label: "Connect", connect: target },
+    duration: 15000,
+  });
 }
 
 /// Map a parsed deep link to editor seed values. `pair` links become a
@@ -816,6 +887,7 @@ function deepLinkToPrefill(dl: DeepLink): Partial<ConnectionProfile> {
     endpoint:
       dl.endpoint ?? (protocol === "wordpress" ? (dl.host ?? undefined) : undefined),
     account: dl.account ?? undefined,
+    group: dl.group?.trim() || undefined,
     ...(protocol === "sftp" ? sshRouteFromLink(dl) : {}),
   };
 }

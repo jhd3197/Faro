@@ -10,6 +10,8 @@ export interface ToastAction {
   url?: string;
   /** Open Settings on this section (and scroll to `focus` when set). */
   settings?: { section: string; focus?: string };
+  /** Connect a saved server and open a folder or site on it (a deep link's target). */
+  connect?: { profileId: string; siteId?: string; path?: string };
 }
 
 export interface Toast {
@@ -106,6 +108,12 @@ export const toast = {
 export function followToastAction(action: ToastAction): void {
   if (action.settings) {
     useLayout.getState().openSettings(action.settings);
+    return;
+  }
+  if (action.connect) {
+    // Loaded on demand: the connection stores import this one.
+    const target = action.connect;
+    void import("@/lib/linkTarget").then((m) => m.connectLinkTarget(target));
     return;
   }
   if (action.url) void ipc.openExternalUrl(action.url);

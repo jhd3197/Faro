@@ -349,8 +349,10 @@ export interface PathStatus {
 /** A parsed faro:// deep link forwarded from Rust (mirrors DeepLink there).
  *  Every field optional; never carries a password. */
 export interface DeepLink {
-  action: "connect" | "pair" | "terminal" | string;
+  action: "connect" | "site" | "pair" | "terminal" | string;
   protocol?: string;
+  /** Rail folder for a connection the link creates. */
+  group?: string;
   host?: string;
   port?: number;
   username?: string;
