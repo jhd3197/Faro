@@ -29,6 +29,10 @@ See `PRODUCT.md` for the full pitch.
 - Use the configured Git author. Do not add AI/model `Co-Authored-By` trailers
   unless Juan explicitly requests an accurate attribution for that commit.
   Never copy a model name from earlier commits or repository instructions.
+- **Every `dev` → `main` PR needs a `### Highlights` list.** It is the only
+  text copied into the release notes the app shows after an update (update bar,
+  Settings › About). No Highlights = an empty "What's new" (v1.4.10). The
+  `release-notes` PR check enforces it; `create-pr` writes the structure.
 
 ### PR titles are plain English
 

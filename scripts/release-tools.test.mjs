@@ -104,3 +104,14 @@ test('a PR without highlights, or with smuggled markers, publishes nothing extra
   assert.doesNotMatch(sneaky, /- c/);
   assert.deepEqual(withNotes({ version: '1.2.3', notes: 'old', platforms: {} }, 'new\n'), { version: '1.2.3', notes: 'new', platforms: {} });
 });
+
+test('a PR into main without highlights is flagged before it can ship', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { releaseNotesProblem } = await import('./release-tools.mjs');
+  const good = readFileSync(new URL('./fixtures/release-highlights.md', import.meta.url), 'utf8');
+  assert.equal(releaseNotesProblem(good), null);
+  // PR #82's shape: bold paragraphs and a details block, but no Highlights heading.
+  assert.match(releaseNotesProblem('Two fixes.\n\n**Split divider fixed.** Details.\n\n<details>\n<summary>Technical details</summary>\n\n- x\n</details>\n'), /Highlights/);
+  assert.match(releaseNotesProblem('### Highlights\n\n<details>\n- hidden\n</details>'), /Highlights/);
+  assert.match(releaseNotesProblem(null), /Highlights/);
+});

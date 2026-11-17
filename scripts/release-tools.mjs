@@ -88,6 +88,18 @@ export function changesSection(pull) {
   return [CHANGES_START, ...(title ? [`### ${title}`, ''] : []), list, CHANGES_END, ''].join('\n');
 }
 
+/**
+ * Why a `dev` → `main` PR body would ship a release with no "What's new", or
+ * null when it has a Highlights list. Every merge into main cuts a release,
+ * and its Highlights are the only text the app shows for it.
+ */
+export function releaseNotesProblem(body) {
+  if (highlights(body)) return null;
+  return 'This PR merges into main, which publishes a release. Its description needs a "### Highlights" '
+    + 'heading followed by a bullet list of what users will notice; that list becomes the release notes '
+    + 'shown in the app (Settings > About and the update bar). Edit the description to add it.';
+}
+
 /** latest.json with its `notes` replaced; the signatures cover artifacts, not this field. */
 export function withNotes(manifest, changes) {
   return { ...manifest, notes: changes.trim() };
@@ -104,12 +116,16 @@ function main() {
     console.log('All required release downloads are present and nonempty.');
   } else if (mode === 'changes' && args.length === 1) {
     process.stdout.write(changesSection(mergedPull(JSON.parse(readFileSync(args[0], 'utf8')))));
+  } else if (mode === 'check-pr' && args.length === 1) {
+    const problem = releaseNotesProblem(readFileSync(args[0], 'utf8'));
+    if (problem) throw new Error(problem);
+    console.log('The PR description has release highlights.');
   } else if (mode === 'set-notes' && args.length === 2) {
     const manifest = JSON.parse(readFileSync(args[0], 'utf8'));
     writeFileSync(args[0], JSON.stringify(withNotes(manifest, readFileSync(args[1], 'utf8')), null, 2) + '\n');
   } else {
     throw new Error('Usage: release-tools.mjs gh <args...> | verify-assets <release.json> <version>'
-      + ' | changes <commit-pulls.json> | set-notes <latest.json> <changes.md>');
+      + ' | changes <commit-pulls.json> | check-pr <body.md> | set-notes <latest.json> <changes.md>');
   }
 }
 

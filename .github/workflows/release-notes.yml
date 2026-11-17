@@ -1,0 +1,27 @@
+name: release-notes
+
+# Every merge into main publishes a release, and the app's "What's new" shows
+# only the merged PR's Highlights list (scripts/release-tools.mjs). A PR into
+# main without one would ship a release with no notes, so it fails here first.
+# Re-runs when the description is edited.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  highlights:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PR description has release highlights
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > pr-body.md
+          node scripts/release-tools.mjs check-pr pr-body.md
