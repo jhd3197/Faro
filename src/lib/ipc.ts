@@ -606,6 +606,8 @@ export const ipc = {
   bridgeStatus: () => invoke<BridgeStatus>("bridge_status"),
   bridgeSetSessionAccess: (sessionId: SessionId, enabled: boolean) =>
     invoke<BridgeStatus>("bridge_set_session_access", { sessionId, enabled }),
+  bridgeSetDirectCli: (enabled: boolean) =>
+    invoke<BridgeStatus>("bridge_set_direct_cli", { enabled }),
   bridgeSetPolicy: (policy: ApprovalPolicy) =>
     invoke<BridgeStatus>("bridge_set_policy", { policy }),
   bridgeSetProfileAccess: (profileId: string, access: ProfileAccess) =>

@@ -659,6 +659,7 @@ pub fn run() {
             commands::bridge_status,
             commands::bridge_set_session_access,
             commands::bridge_set_policy,
+            commands::bridge_set_direct_cli,
             commands::bridge_set_profile_access,
             commands::bridge_set_active_session,
             commands::bridge_register_mcp,

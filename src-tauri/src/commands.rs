@@ -2338,6 +2338,15 @@ pub async fn bridge_set_profile_access(
 }
 
 #[tauri::command]
+pub async fn bridge_set_direct_cli(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<BridgeStatus, String> {
+    state.bridge.set_direct_cli(enabled).await;
+    Ok(state.bridge.status().await)
+}
+
+#[tauri::command]
 pub async fn bridge_set_policy(
     policy: ApprovalPolicy,
     state: State<'_, AppState>,

@@ -69,6 +69,7 @@ import { AgentDrawer } from "./components/AgentDrawer";
 import { DiskUsageHost } from "./components/DiskUsage";
 import { ServerViewHost } from "./components/ServerView";
 import { useServerView } from "./stores/serverViewStore";
+import { useDiskScan } from "./stores/diskScanStore";
 import { DirectoryDiffHost } from "./components/DirectoryDiff";
 import { FindDuplicatesHost } from "./components/FindDuplicates";
 import { FleetSearchHost } from "./components/FleetSearch";
@@ -96,6 +97,9 @@ export default function App() {
   const zen = useLayout((s) => s.zen);
   const browserLayout = useSettings((s) => s.browserLayout);
   const dialog = useLayout((s) => s.dialog);
+  const diskUsageOpen = useDiskScan((s) => s.open);
+  const serverViewCovering = useServerView((s) => s.open);
+  const workAreaCovered = dialog === "agentBridge" || diskUsageOpen || serverViewCovering;
   const closeDialog = useLayout((s) => s.closeDialog);
   const connectionPrefill = useLayout((s) => s.connectionPrefill);
   const exportRequest = useLayout((s) => s.exportRequest);
@@ -205,7 +209,13 @@ export default function App() {
             {dialog === "agentBridge" && <AgentBridgePage onClose={closeDialog} />}
             <DiskUsageHost />
             <ServerViewHost />
-            <div className="min-w-0 flex-1 overflow-hidden">
+            {/* While a full-page view covers the work area, hide the panes:
+                their own stacked controls (the split divider at z-raised)
+                would otherwise draw and stay hoverable over the page. */}
+            <div
+              className={cn("min-w-0 flex-1 overflow-hidden", workAreaCovered && "invisible")}
+              aria-hidden={workAreaCovered || undefined}
+            >
               <FileUiBridge>
                 {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
               </FileUiBridge>
