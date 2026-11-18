@@ -41,6 +41,7 @@ export {
   formatCombo,
   isMacPlatform,
   isComposing,
+  shouldConfirmOnEnter,
   type FileBrowserAction,
 } from "./lib/keys";
 export { InlineRename } from "./components/InlineRename";

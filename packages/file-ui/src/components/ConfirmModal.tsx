@@ -1,5 +1,6 @@
 import { useId, useRef, type ReactNode } from "react";
 import { useDialog } from "../hooks/useDialog";
+import { shouldConfirmOnEnter } from "../lib/keys";
 
 interface Props {
   title: ReactNode;
@@ -21,6 +22,10 @@ export function ConfirmModal({
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   useDialog(panelRef, { onClose });
+  const confirm = () => {
+    onConfirm();
+    onClose();
+  };
   return (
     <div
       className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -32,6 +37,12 @@ export function ConfirmModal({
         aria-modal="true"
         aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // A focused button handles its own Enter (Cancel stays Cancel).
+          if (!shouldConfirmOnEnter(e)) return;
+          e.preventDefault();
+          confirm();
+        }}
         className="anim-modal w-[26rem] max-w-[92vw] rounded-xl border border-border bg-bg-panel p-5 shadow-elev-3"
       >
         <div id={titleId} className="mb-2 text-sm font-semibold">{title}</div>
@@ -46,10 +57,7 @@ export function ConfirmModal({
             Cancel
           </button>
           <button
-            onClick={() => {
-              onConfirm();
-              onClose();
-            }}
+            onClick={confirm}
             className={
               destructive
                 ? "rounded-md bg-danger px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"

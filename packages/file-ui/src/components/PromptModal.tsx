@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useDialog } from "../hooks/useDialog";
-import { isComposing } from "../lib/keys";
+import { shouldConfirmOnEnter } from "../lib/keys";
 
 interface Props {
   title: string;
@@ -30,8 +30,9 @@ export function PromptModal({
     inputRef.current?.select();
   }, []);
 
+  const empty = value.trim().length === 0;
   const submit = () => {
-    if (value.trim().length === 0) return;
+    if (empty) return;
     onSubmit(value);
     onClose();
   };
@@ -58,8 +59,10 @@ export function PromptModal({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !isComposing(e)) submit();
-            else if (e.key === "Escape") onClose();
+            if (shouldConfirmOnEnter(e, { disabled: empty })) {
+              e.preventDefault();
+              submit();
+            } else if (e.key === "Escape") onClose();
           }}
           className="w-full rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"
         />
@@ -72,7 +75,8 @@ export function PromptModal({
           </button>
           <button
             onClick={submit}
-            className="btn-accent rounded-md px-3.5 py-1.5 text-sm font-medium text-white"
+            disabled={empty}
+            className="btn-accent rounded-md px-3.5 py-1.5 text-sm font-medium text-white disabled:opacity-40"
           >
             {okLabel}
           </button>

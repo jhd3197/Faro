@@ -133,3 +133,33 @@ export function isComposing(e: { nativeEvent?: KeyboardEvent; isComposing?: bool
   const n = e.nativeEvent ?? e;
   return !!n.isComposing || n.keyCode === 229;
 }
+
+type EnterEvent = {
+  key: string;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  target: EventTarget | null;
+  defaultPrevented?: boolean;
+  nativeEvent?: KeyboardEvent;
+  isComposing?: boolean;
+  keyCode?: number;
+};
+
+/** Whether this Enter should confirm a dialog. Only a bare Enter counts (a
+ *  modifier means the user wants something else); a focused button, link,
+ *  select or textarea keeps Enter for itself; a disabled confirm stays
+ *  disabled; and an input method picking a candidate never confirms. */
+export function shouldConfirmOnEnter(e: EnterEvent, opts: { disabled?: boolean } = {}): boolean {
+  if (e.key !== "Enter" || opts.disabled || e.defaultPrevented) return false;
+  if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return false;
+  if (isComposing(e)) return false;
+  const t = e.target as HTMLElement | null;
+  if (t && typeof t.closest === "function") {
+    if (t.closest("button, a[href], select, textarea, [role='button'], [role='menuitem'], [role='option'], [role='combobox'], [contenteditable='true']")) {
+      return false;
+    }
+  }
+  return true;
+}
