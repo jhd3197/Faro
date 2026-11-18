@@ -17,7 +17,7 @@ import puppeteer from "puppeteer-core";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.FILES_PORT || 1433);
-const URL = process.env.FARO_URL || `http://localhost:${PORT}/`;
+const URL = process.env.FARO_URL || `http://127.0.0.1:${PORT}/`;
 const SHOTS = process.env.SHOT_DIR || path.join(ROOT, ".shots", "bruno-lessons", "files");
 const isWin = process.platform === "win32";
 
@@ -112,7 +112,7 @@ async function waitForServer(url, ms = 90_000) {
 test("file clipboard, drag-to-move and delete in the app", { timeout: 300_000, skip: !CHROME && "no Chrome/Edge" }, async (t) => {
   let server;
   if (!process.env.FARO_URL) {
-    server = spawn("npx", ["vite", "--mode", "mock", "--port", String(PORT), "--strictPort"], {
+    server = spawn("npx", ["vite", "--mode", "mock", "--host", "127.0.0.1", "--port", String(PORT), "--strictPort"], {
       cwd: ROOT,
       shell: true,
       stdio: "ignore",

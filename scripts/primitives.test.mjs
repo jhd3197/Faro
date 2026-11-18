@@ -1,16 +1,18 @@
 // Shared UI primitives: Dialog Enter rules, Menu keyboard, Popover hiding with
 // its trigger, Show more only on real overflow, and Select all that acts on
 // the filtered rows. Runs against the mock build:
-//   npx vite --mode mock --port 1439 --strictPort   (VITE_UI_LOCALE=en)
-//   node --test scripts/primitives.test.mjs
-// FARO_TEST_URL overrides the address; FARO_SHOTS the screenshot folder.
+//   node --test scripts/primitives.test.mjs   (VITE_UI_LOCALE=en)
+// Starts its own mock server unless FARO_TEST_URL points at one (e.g.
+// `npx vite --mode mock --port 1439`); FARO_SHOTS sets the screenshot folder.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import puppeteer from 'puppeteer-core';
+import { createServer } from 'vite';
 
-const URL = process.env.FARO_TEST_URL ?? 'http://localhost:1439';
+let URL = process.env.FARO_TEST_URL;
+let server;
 const SHOTS = process.env.FARO_SHOTS ?? join(process.cwd(), '.shots', 'bruno-lessons', 'primitives');
 mkdirSync(SHOTS, { recursive: true });
 const executablePath = [
@@ -22,6 +24,8 @@ const executablePath = [
 let browser, page;
 const errors = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Let React commit the last keystroke (a slower machine lags a frame or two).
+const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 const log = () => page.evaluate(() => [...window.__primitives.log]);
 const active = () => page.evaluate(() => {
   const a = document.activeElement;
@@ -41,6 +45,11 @@ async function boot() {
 }
 
 before(async () => {
+  if (!URL) {
+    server = await createServer({ mode: 'mock', server: { host: '127.0.0.1', port: 0, strictPort: false } });
+    await server.listen();
+    URL = `http://127.0.0.1:${server.httpServer.address().port}/`;
+  }
   browser = await puppeteer.launch({ executablePath, headless: true });
   page = await browser.newPage();
   page.on('pageerror', (e) => errors.push(e.message));
@@ -52,6 +61,7 @@ before(async () => {
 
 after(async () => {
   await browser?.close();
+  await server?.close();
 });
 
 // ── Dialog ────────────────────────────────────────────────────────────────
@@ -163,6 +173,7 @@ test('Menu: search filters (terms ANDed) and typing from the list goes into it',
   await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'combobox');
   assert.match(await activeOption(), /^web-2/);
   await page.keyboard.type('stag');
+  await frames();
   let labels = await page.$$eval('[data-menu] [role="option"]', (o) => o.map((e) => e.textContent));
   assert.deepEqual(labels.map((l) => l.replace(/10\..*/, '')), ['staging']);
   await page.keyboard.press('Enter');
@@ -303,6 +314,8 @@ test('Settings: terminal font is a searchable Dropdown with a tick on the choice
   await btn.evaluate((b) => b.scrollIntoView({ block: 'center' }));
   await btn.click();
   await page.waitForSelector('[data-popover] [role="combobox"]');
+  // Focus moves into the search box after the popover mounts.
+  await page.waitForFunction(() => document.activeElement?.matches('[data-popover] [role="combobox"]'));
   await page.keyboard.type('code');
   const opts = await page.$$eval('[data-popover] [role="option"]', (o) => o.map((e) => e.textContent));
   assert.deepEqual(opts, ['Fira Code', 'Cascadia Code']);
