@@ -4,7 +4,7 @@
 // wrap the tree in <FileUiProvider>, and render <FilePane>. The components never
 // import a transport — they talk only to the injected adapter.
 
-export { FilePane } from "./components/FilePane";
+export { FilePane, type FocusedFileItem } from "./components/FilePane";
 export { FileUiProvider, useFileUi } from "./context";
 export type {
   FileSystemAdapter,
@@ -38,8 +38,11 @@ export { materialIconUrl } from "./lib/materialIcons";
 export {
   DEFAULT_FILE_BROWSER_KEYBINDINGS,
   comboFromEvent,
+  formatCombo,
+  isMacPlatform,
   type FileBrowserAction,
 } from "./lib/keys";
+export { InlineRename } from "./components/InlineRename";
 
 // Hooks + utils.
 export { usePathHistory } from "./hooks/usePathHistory";

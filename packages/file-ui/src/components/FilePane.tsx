@@ -61,9 +61,11 @@ import { materialIconUrl } from "../lib/materialIcons";
 import {
   DEFAULT_FILE_BROWSER_KEYBINDINGS,
   comboFromEvent,
+  formatCombo,
   type FileBrowserAction,
 } from "../lib/keys";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { InlineRename } from "./InlineRename";
 import { PromptModal } from "./PromptModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PropertiesModal } from "./PropertiesModal";
@@ -187,11 +189,27 @@ const COMPRESS_FORMATS: Array<{ format: CompressFormat; label: string; ext: stri
   { format: "7z", label: "7-Zip (.7z)", ext: ".7z", remoteOnly: true },
 ];
 
+/** The file row (or folder) that has keyboard focus in a pane, announced on
+ *  `window` as a "faro:focused-item" CustomEvent so app-level commands can act
+ *  on it (e.g. "Open terminal here" on the focused folder). `null` detail =
+ *  nothing focused in that pane any more. */
+export interface FocusedFileItem {
+  paneId: string;
+  sessionId: SessionId;
+  path: string;
+  name: string;
+  isDir: boolean;
+}
+
+// The pane the user last worked in. Pane shortcuts that have an obvious
+// target even with nothing focused (Ctrl+L, Ctrl+F, Alt+←/→) go there.
+let lastActivePane: string | null = null;
+const GLOBAL_PANE_ACTIONS = new Set<FileBrowserAction>(["back", "forward", "focusPath", "focusFilter"]);
+
 type ModalState =
-  | { type: "rename"; entry: DirEntry }
   | { type: "compress"; entries: DirEntry[]; format: CompressFormat; ext: string }
   | { type: "extractTo"; entry: DirEntry; stem: string }
-  | { type: "mkdir" }
+  | { type: "mkdir"; parent?: string }
   | { type: "chmod"; entry: DirEntry }
   | { type: "delete"; entries: DirEntry[] }
   | { type: "props"; entry: DirEntry }
@@ -236,15 +254,21 @@ export function FilePane({
   // defaults, indexed combo→action so the keydown handler is a single lookup.
   // Memoized on the combo values (not object identity) so a host that rebuilds
   // the settings object each render doesn't thrash the listener.
-  const comboToAction = useMemo(() => {
+  const [comboToAction, actionCombo] = useMemo(() => {
     const merged = { ...DEFAULT_FILE_BROWSER_KEYBINDINGS, ...keyBindings };
     const map: Record<string, FileBrowserAction> = {};
     for (const [action, combo] of Object.entries(merged)) {
       if (combo) map[combo] = action as FileBrowserAction;
     }
-    return map;
+    return [map, merged as Record<FileBrowserAction, string>] as const;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify({ ...DEFAULT_FILE_BROWSER_KEYBINDINGS, ...keyBindings })]);
+  /** A menu item's shortcut, live from the effective bindings: an unbound
+   *  action shows no hint and has no key. */
+  const keyOf = (action: FileBrowserAction) => {
+    const combo = actionCombo[action];
+    return combo ? { combo, hint: formatCombo(combo) } : {};
+  };
 
   // Re-key the thumbnail loader whenever the remote-preview toggle flips, so
   // already-mounted Thumbnails re-run their effect the moment the user clicks
@@ -288,8 +312,11 @@ export function FilePane({
     items: MenuItem[];
   } | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
+  // The row being renamed in place (by path).
+  const [renaming, setRenaming] = useState<string | null>(null);
   const dragCounter = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
   const typeBufRef = useRef("");
   const typeAtRef = useRef(0);
 
@@ -307,6 +334,7 @@ export function FilePane({
     setDraftPath(path);
     setEditingPath(false);
     setFilter("");
+    setRenaming(null);
   }, [path]);
 
   const load = useCallback(
@@ -391,6 +419,28 @@ export function FilePane({
       });
   }, [entries, showHiddenFiles, filter, sortField, sortDirection]);
 
+  // Pane actions that make sense from anywhere in the pane, a text box included.
+  const runGlobalAction = (action: FileBrowserAction, e: KeyboardEvent) => {
+    if (!sessionId) return;
+    e.preventDefault();
+    switch (action) {
+      case "back":
+        history.back();
+        break;
+      case "forward":
+        history.forward();
+        break;
+      case "focusPath":
+        setDraftPath(path);
+        setEditingPath(true);
+        break;
+      case "focusFilter":
+        filterRef.current?.focus();
+        filterRef.current?.select();
+        break;
+    }
+  };
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -398,31 +448,53 @@ export function FilePane({
       anchor ? visible.find((v) => v.path === anchor) ?? null : null;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      // An inline rename and an open menu own their keys; something that
+      // already handled the key (defaultPrevented) wins too.
+      if (e.defaultPrevented) return;
+      if (target?.closest?.('[data-inline-rename], [role="menu"]')) return;
       const typing =
         !!target &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
+      const inFilter = !!target?.closest?.("[data-pane-filter]");
       if (e.key === "Escape") {
-        // Filter first, then selection — least-surprising unwind order. Escape
-        // is intentionally not remappable (it's the universal cancel key).
+        // Esc peels one layer at a time: filter text, then the filter box
+        // itself, then the selection. Not remappable (the universal cancel).
+        if (typing && !inFilter) return; // the path box handles its own Esc
         if (filter) {
           setFilter("");
-          if (typing) (target as HTMLInputElement).blur();
+        } else if (inFilter) {
+          containerRef.current?.focus();
         } else {
           setSelected(new Set());
           setAnchor(null);
         }
         return;
       }
-      if (typing) return; // don't hijack keys while editing text
+      const combo = comboFromEvent(e);
+      const action = comboToAction[combo];
+      if (typing) {
+        // Only the "go somewhere" chords work from a text box, and only with a
+        // modifier, so typing is never hijacked.
+        const hasMod = e.ctrlKey || e.metaKey || e.altKey;
+        if (!hasMod || !action || !GLOBAL_PANE_ACTIONS.has(action)) return;
+        runGlobalAction(action, e);
+        return;
+      }
       // Only run list nav when the pane/list area is focused, not a toolbar btn.
-      if (target && target.closest('button, a, [role="button"]')) return;
+      if (target && target.closest('button, a, [role="button"]')) {
+        if (action && GLOBAL_PANE_ACTIONS.has(action)) runGlobalAction(action, e);
+        return;
+      }
 
       // Remappable in-pane actions (F2/Enter/Delete/Backspace/mod+A/Space/
       // mod+shift+N/F5, all overridable by the host). One combo → one action.
-      const action = comboToAction[comboFromEvent(e)];
       if (action) {
+        if (GLOBAL_PANE_ACTIONS.has(action)) {
+          runGlobalAction(action, e);
+          return;
+        }
         switch (action) {
           case "selectAll":
             e.preventDefault();
@@ -437,7 +509,7 @@ export function FilePane({
             const item = anchorItem();
             if (item) {
               e.preventDefault();
-              setModal({ type: "rename", entry: item });
+              setRenaming(item.path);
             }
             return;
           }
@@ -452,7 +524,12 @@ export function FilePane({
           case "newFolder":
             if (sessionId && caps?.hasDirectories !== false) {
               e.preventDefault();
-              setModal({ type: "mkdir" });
+              // A focused folder row is where the new folder goes.
+              const item = anchorItem();
+              setModal({
+                type: "mkdir",
+                parent: item && opensAsFolder(item) && selected.has(item.path) ? item.path : undefined,
+              });
             }
             return;
           case "refresh":
@@ -509,9 +586,42 @@ export function FilePane({
         }
       }
     };
+    // Nothing focused at all (focus fell back to <body>): the pane the user
+    // last worked in still answers Ctrl+L / Ctrl+F / Alt+←/→.
+    const onWindowKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || lastActivePane !== paneId) return;
+      const active = document.activeElement;
+      if (active && active !== document.body) return;
+      const action = comboToAction[comboFromEvent(e)];
+      if (action && GLOBAL_PANE_ACTIONS.has(action)) runGlobalAction(action, e);
+    };
+    const onFocusIn = () => { lastActivePane = paneId; };
     el.addEventListener("keydown", handler);
-    return () => el.removeEventListener("keydown", handler);
+    el.addEventListener("focusin", onFocusIn);
+    window.addEventListener("keydown", onWindowKey);
+    return () => {
+      el.removeEventListener("keydown", handler);
+      el.removeEventListener("focusin", onFocusIn);
+      window.removeEventListener("keydown", onWindowKey);
+    };
   }, [visible, selected, filter, anchor, comboToAction, caps, path, sessionId]);
+
+  // Tell the app which row has keyboard focus here, so commands such as
+  // "Open terminal here" can act on it.
+  const anchorEntry = anchor ? visible.find((v) => v.path === anchor) ?? null : null;
+  useEffect(() => {
+    const detail: FocusedFileItem | null =
+      sessionId && anchorEntry
+        ? {
+            paneId,
+            sessionId,
+            path: anchorEntry.path,
+            name: anchorEntry.name,
+            isDir: opensAsFolder(anchorEntry),
+          }
+        : null;
+    window.dispatchEvent(new CustomEvent("faro:focused-item", { detail: detail ?? { paneId, cleared: true } }));
+  }, [paneId, sessionId, anchorEntry]);
 
   // Watch this pane's width and pick a column tier. Content-driven, not
   // viewport-driven: only re-renders when crossing a threshold, not per pixel.
@@ -705,6 +815,7 @@ export function FilePane({
     if (single) {
       items.push({
         label: opensAsFolder(single) ? "Open" : transferLabel,
+        hint: opensAsFolder(single) && actionCombo.open ? formatCombo(actionCombo.open) : undefined,
         icon: opensAsFolder(single) ? <FolderOpen size={14} /> : sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onRowActivate(single),
       });
@@ -840,7 +951,8 @@ export function FilePane({
       items.push({
         label: "Rename",
         icon: <Edit3 size={12} />,
-        onClick: () => setModal({ type: "rename", entry: single }),
+        ...keyOf("rename"),
+        onClick: () => setRenaming(single.path),
         separatorAfter: true,
       });
     } else {
@@ -856,6 +968,7 @@ export function FilePane({
       label: `Delete${selectedItems.length > 1 ? ` (${selectedItems.length})` : ""}`,
       icon: <Trash2 size={12} />,
       destructive: true,
+      ...keyOf("delete"),
       onClick: () => setModal({ type: "delete", entries: selectedItems }),
       separatorAfter: true,
     });
@@ -885,6 +998,7 @@ export function FilePane({
       items.push({
         label: "Properties",
         icon: <Info size={12} />,
+        ...keyOf("quickInfo"),
         onClick: () => setModal({ type: "props", entry: single }),
       });
     }
@@ -918,6 +1032,7 @@ export function FilePane({
       items.push({
         label: "New folder…",
         icon: <FolderPlus size={12} />,
+        ...keyOf("newFolder"),
         onClick: () => setModal({ type: "mkdir" }),
         separatorAfter: true,
       });
@@ -925,6 +1040,7 @@ export function FilePane({
     items.push({
       label: "Refresh",
       icon: <RefreshCw size={12} />,
+      ...keyOf("refresh"),
       onClick: () => load(path),
     });
     setMenu({ x: e.clientX, y: e.clientY, items });
@@ -932,6 +1048,8 @@ export function FilePane({
 
   // --- File op handlers ---
 
+  // Inline rename: a failure is thrown back to the row's editor, which keeps
+  // it open with the message, instead of replacing the whole listing.
   const doRename = async (entry: DirEntry, newName: string) => {
     if (!sessionId) return;
     const parentEnd = isWindowsPath(entry.path)
@@ -941,10 +1059,18 @@ export function FilePane({
     const to = joinPath(parent, newName);
     try {
       await fs.rename(sessionId, entry.path, to);
-      await load(path);
     } catch (e) {
-      setError(errorText(e));
+      throw new Error(`Couldn't rename ${entry.name}: ${errorText(e)}`);
     }
+    await load(path);
+    setSelected(new Set([to]));
+    setAnchor(to);
+  };
+  const renameProblem = (name: string) =>
+    /[/\\]/.test(name) ? "A name can't contain / or \\." : name === "." || name === ".." ? "That name is reserved." : null;
+  const endRename = () => {
+    setRenaming(null);
+    containerRef.current?.focus();
   };
 
   const doDelete = async (items: DirEntry[]) => {
@@ -997,10 +1123,10 @@ export function FilePane({
     );
   };
 
-  const doMkdir = async (name: string) => {
+  const doMkdir = async (name: string, parent = path) => {
     if (!sessionId) return;
     try {
-      await fs.mkdir(sessionId, joinPath(path, name));
+      await fs.mkdir(sessionId, joinPath(parent, name));
       await load(path);
     } catch (e) {
       setError(errorText(e));
@@ -1062,8 +1188,8 @@ export function FilePane({
     setEditingPath(false);
   };
 
-  const rowHandlers = useRef({ onRowClick, onRowActivate, onRowDragStart, openRowMenu });
-  rowHandlers.current = { onRowClick, onRowActivate, onRowDragStart, openRowMenu };
+  const rowHandlers = useRef({ onRowClick, onRowActivate, onRowDragStart, openRowMenu, doRename, renameProblem, endRename });
+  rowHandlers.current = { onRowClick, onRowActivate, onRowDragStart, openRowMenu, doRename, renameProblem, endRename };
 
   return (
     <div
@@ -1223,6 +1349,8 @@ export function FilePane({
         {editingPath ? (
           <input
             autoFocus
+            onFocus={(e) => e.currentTarget.select()}
+            aria-label="Folder path"
             value={draftPath}
             onChange={(e) => setDraftPath(e.target.value)}
             onKeyDown={(e) => {
@@ -1354,10 +1482,13 @@ export function FilePane({
             className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-dim"
           />
           <input
+            ref={filterRef}
+            data-pane-filter
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             disabled={!sessionId}
             placeholder="Filter"
+            aria-label="Filter this folder"
             className="w-32 rounded border border-border bg-bg-subtle py-1 pl-7 pr-6 text-xs outline-none focus:border-accent disabled:opacity-50"
           />
           {filter && (
@@ -1477,6 +1608,7 @@ export function FilePane({
                 sessionId={sessionId}
                 loadThumb={loadThumb}
                 handlers={rowHandlers}
+                renaming={renaming === entry.path}
               />
             ))}
           </div>
@@ -1497,6 +1629,7 @@ export function FilePane({
               sessionId={sessionId}
               loadThumb={loadThumb}
               handlers={rowHandlers}
+              renaming={renaming === entry.path}
             />
           ))
         )}
@@ -1532,24 +1665,14 @@ export function FilePane({
         />
       )}
 
-      {modal?.type === "rename" && (
-        <PromptModal
-          title={`Rename ${modal.entry.name}`}
-          label="New name"
-          initialValue={modal.entry.name}
-          okLabel="Rename"
-          onClose={() => setModal(null)}
-          onSubmit={(v) => doRename(modal.entry, v)}
-        />
-      )}
       {modal?.type === "mkdir" && (
         <PromptModal
           title="New folder"
-          label={`In ${path}`}
+          label={`In ${modal.parent ?? path}`}
           initialValue=""
           okLabel="Create"
           onClose={() => setModal(null)}
-          onSubmit={(v) => doMkdir(v)}
+          onSubmit={(v) => doMkdir(v, modal.parent ?? path)}
         />
       )}
       {modal?.type === "chmod" && (
@@ -1643,6 +1766,9 @@ type RowHandlers = React.MutableRefObject<{
   onRowActivate: (entry: DirEntry) => void;
   onRowDragStart: (e: React.DragEvent, entry: DirEntry) => void;
   openRowMenu: (e: React.MouseEvent, entry: DirEntry) => void;
+  doRename: (entry: DirEntry, name: string) => Promise<void>;
+  renameProblem: (name: string) => string | null;
+  endRename: () => void;
 }>;
 
 const Row = memo(function Row({
@@ -1659,6 +1785,7 @@ const Row = memo(function Row({
   sessionId,
   loadThumb,
   handlers,
+  renaming,
 }: {
   paneId: string;
   entry: DirEntry;
@@ -1677,6 +1804,7 @@ const Row = memo(function Row({
     signal?: AbortSignal
   ) => Promise<Blob | null>;
   handlers: RowHandlers;
+  renaming: boolean;
 }) {
   const onClick = (e: React.MouseEvent) => handlers.current.onRowClick(entry, e);
   const onActivate = () => handlers.current.onRowActivate(entry);
@@ -1708,6 +1836,20 @@ const Row = memo(function Row({
       <Icon size={size} className={cn("shrink-0", iconColor)} />
     );
   const iconEl = glyph(13);
+  // The name, or its inline editor while this row is being renamed.
+  const nameEl = (cls: string) =>
+    renaming ? (
+      <InlineRename
+        value={entry.name}
+        selectStem={entry.kind === "file"}
+        aria-label={`Rename ${entry.name}`}
+        validate={(n) => handlers.current.renameProblem(n)}
+        onSubmit={(n) => handlers.current.doRename(entry, n)}
+        onDone={() => handlers.current.endRename()}
+      />
+    ) : (
+      <span className={cls}>{entry.name}</span>
+    );
   // Show a real image preview when the adapter can supply bytes. The adapter
   // gates the (expensive, network) remote kind on the `remoteImagePreviews`
   // setting — when it's off it returns null fast and the icon fallback shows,
@@ -1741,12 +1883,13 @@ const Row = memo(function Row({
         onClick={onClick}
         onDoubleClick={onActivate}
         onContextMenu={onContextMenu}
-        draggable
+        draggable={!renaming}
         onDragStart={onDragStart}
         title={title}
         className={cn(
           "flex cursor-default select-none flex-col items-center gap-1.5 rounded-lg border p-2.5 text-center",
-          "[content-visibility:auto] [contain-intrinsic-size:auto_92px]",
+          // Containment clips overflow; the rename error must show below.
+          !renaming && "[content-visibility:auto] [contain-intrinsic-size:auto_92px]",
           selected
             ? "border-accent/40 bg-accent/15"
             : "border-transparent hover:border-border-subtle hover:bg-bg-hover"
@@ -1763,9 +1906,7 @@ const Row = memo(function Row({
         ) : (
           bigIcon
         )}
-        <span className="line-clamp-2 w-full break-words text-xs leading-tight">
-          {entry.name}
-        </span>
+        {nameEl("line-clamp-2 w-full break-words text-xs leading-tight")}
       </div>
     );
   }
@@ -1781,18 +1922,19 @@ const Row = memo(function Row({
         onClick={onClick}
         onDoubleClick={onActivate}
         onContextMenu={onContextMenu}
-        draggable
+        draggable={!renaming}
         onDragStart={onDragStart}
         title={title}
         className={cn(
           "flex cursor-default select-none items-center gap-2 border-b border-border-subtle px-3",
-          "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
+          // Containment clips overflow; the rename error must show below.
+          !renaming && "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
           pad,
           sel
         )}
       >
         {rowThumb}
-        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+        {nameEl("min-w-0 flex-1 truncate")}
         <span className="shrink-0 text-xs tabular-nums text-text-dim">
           {entry.kind === "file" ? fmtSize(entry.size) : ""}
         </span>
@@ -1810,20 +1952,21 @@ const Row = memo(function Row({
       onClick={onClick}
       onDoubleClick={onActivate}
       onContextMenu={onContextMenu}
-      draggable
+      draggable={!renaming}
       onDragStart={onDragStart}
       title={title}
       style={{ gridTemplateColumns: cols }}
       className={cn(
         "grid cursor-default select-none items-center gap-2 border-b border-border-subtle px-3",
-        "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
+        // Containment clips overflow; the rename error must show below.
+          !renaming && "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
         pad,
         sel
       )}
     >
       <span className="flex min-w-0 items-center gap-2">
         {rowThumb}
-        <span className="truncate">{entry.name}</span>
+        {nameEl("truncate")}
       </span>
       {showModified && (
         <span className="truncate text-xs text-text-dim">

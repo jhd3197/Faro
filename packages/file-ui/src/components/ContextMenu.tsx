@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/cn";
+import { comboFromEvent } from "../lib/keys";
 
 export interface MenuItem {
   label: string;
@@ -9,6 +10,11 @@ export interface MenuItem {
   disabled?: boolean;
   destructive?: boolean;
   separatorAfter?: boolean;
+  /** Its shortcut as a canonical combo ("f2", "mod+shift+n"). Pressing it
+   *  while the menu is open runs the item and closes the menu. */
+  combo?: string;
+  /** The shortcut as shown, right-aligned (e.g. "F2"). */
+  hint?: string;
   /**
    * Nested items. When present, this row is a submenu parent: clicking/hovering
    * it reveals `children` in a flyout and its own `onClick` is ignored.
@@ -22,6 +28,13 @@ interface Props {
   items: MenuItem[];
   onClose: () => void;
 }
+
+const MENU_KEYS = new Set([
+  "enter", "space", "escape", "tab", "shift+tab",
+  "arrowup", "arrowdown", "arrowleft", "arrowright", "home", "end",
+]);
+
+const MODIFIER_ONLY = new Set(["Control", "Shift", "Alt", "Meta", "OS", "AltGraph"]);
 
 export function ContextMenu({ x, y, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -75,7 +88,35 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     };
   }, [onClose]);
 
+  // A shortcut pressed while the menu is open runs that item and closes the
+  // menu, the same as clicking it.
+  const runByCombo = (e: React.KeyboardEvent): boolean => {
+    const combo = comboFromEvent(e.nativeEvent);
+    // Keys the menu itself uses (activate, move, close) keep their meaning.
+    if (MENU_KEYS.has(combo)) return false;
+    const all = items.flatMap((it) => (it.children?.length ? it.children : [it]));
+    const hit = all.find((it) => it.combo === combo && !it.disabled);
+    if (!hit) return false;
+    e.preventDefault();
+    hit.onClick();
+    onClose();
+    return true;
+  };
+  const hasHints = items.some((it) => it.hint);
+  const subHasHints = (it: MenuItem) => !!it.children?.some((c) => c.hint);
+
   const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    if (runByCombo(e)) {
+      e.stopPropagation();
+      return;
+    }
+    // Any other chord closes the menu and carries on to the app (a modifier
+    // on its own is just the start of one).
+    if (MODIFIER_ONLY.has(e.key)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key)) {
+      onClose();
+      return;
+    }
     e.stopPropagation();
     const button = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
     const currentMenu = button?.closest('[role="menu"]');
@@ -159,6 +200,11 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
                   {item.icon}
                 </span>
               <span className="flex-1">{item.label}</span>
+              {hasHints && (
+                <span className="min-w-[3.5rem] pl-4 text-right text-[11px] text-text-dim">
+                  {item.hint}
+                </span>
+              )}
               {hasChildren && (
                 <ChevronRight size={12} className="text-text-dim" />
               )}
@@ -190,6 +236,11 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
                         {child.icon}
                       </span>
                     <span className="flex-1">{child.label}</span>
+                    {subHasHints(item) && (
+                      <span className="min-w-[3.5rem] pl-4 text-right text-[11px] text-text-dim">
+                        {child.hint}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
