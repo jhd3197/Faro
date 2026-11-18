@@ -1,4 +1,4 @@
-import { toast } from "@/stores/toastStore";
+import { toast, type ToastOptions } from "@/stores/toastStore";
 
 // Structured IPC errors (Plan 12 Phase 3). Migrated Rust commands reject with a
 // `{ kind, message }` object instead of a bare string, so the UI can pattern-
@@ -89,12 +89,22 @@ function describe(kind: ErrorKind, context?: string): Copy {
 
 /** Show an error toast keyed off the structured `kind`, falling back to a
  *  generic toast for legacy string errors. `context` names the operation. */
-export function toastError(e: unknown, context?: string): ErrorKind {
+export function toastError(
+  e: unknown,
+  context?: string,
+  opts?: Omit<ToastOptions, "detail">,
+): ErrorKind {
   const kind = kindOf(e);
   const { title, hint } = describe(kind, context);
   const msg = messageOf(e);
   // Show the hint plus the raw message; if they'd duplicate, prefer the message.
   const body = hint ? (msg && msg !== hint ? `${hint} — ${msg}` : hint) : msg;
-  toast.error(title, body || undefined);
+  toast.error(title, body || undefined, undefined, { ...opts, detail: errorDetail(e) });
   return kind;
+}
+
+/** The raw error for "Copy details": the message plus its kind when known. */
+export function errorDetail(e: unknown): string {
+  const msg = messageOf(e);
+  return isFaroError(e) && e.kind !== "other" ? `${msg} (${e.kind})` : msg;
 }

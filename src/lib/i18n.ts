@@ -85,10 +85,43 @@ const ZH: Record<string, string> = {
   "Copy on select": "选中即复制",
   "Inline suggestions": "行内建议",
   "Default port for new profiles": "新连接默认端口",
+  "Restore last session": "恢复上次会话",
+  "When Faro starts, reconnect the server you were using if it was still connected when you quit.":
+    "启动 Faro 时，如果退出时仍连接着正在使用的服务器，则重新连接它。",
+  "Quit Faro?": "退出 Faro？",
+  "Quit anyway": "仍然退出",
   "Allow all — no prompts": "全部允许，不再询问",
   "Auto-approve read-only operations": "自动批准只读操作",
   "Auto-approve safe shell commands": "自动批准安全 Shell 命令",
   "Settings persist locally.": "设置会保存在本地。",
+  "Changes save automatically.": "更改会自动保存。",
+  "Light theme": "浅色主题",
+  "Dark theme": "深色主题",
+  "Used while your OS is in light mode.": "系统处于浅色模式时使用。",
+  "Used while your OS is in dark mode.": "系统处于深色模式时使用。",
+  "Reset to 100%": "重置为 100%",
+  "Changed from the default": "已更改默认值",
+  "Limit bandwidth": "限制带宽",
+  Limit: "上限",
+  Storage: "存储",
+  "Image thumbnails": "图片缩略图",
+  "Transfer resume data": "传输续传数据",
+  "Leftover edit copies": "残留的编辑副本",
+  "Clearing…": "正在清除…",
+  Empty: "空",
+  "Theme not found": "找不到主题",
+  "Change theme in Settings…": "在设置中更改主题…",
+  "Thumbnails cleared": "缩略图已清除",
+  "Resume data cleared": "续传数据已清除",
+  "Edit copies cleared": "编辑副本已清除",
+  "Space Faro uses for things it can rebuild. Clearing never touches your files or settings.":
+    "Faro 用于可重建内容的空间。清除不会影响你的文件或设置。",
+  "Previews of remote images. They're fetched again the next time you view the folder.":
+    "远程图片的预览。下次查看该文件夹时会重新获取。",
+  "Partial downloads that let paused or failed transfers continue. Clearing cancels those transfers; running ones are left alone.":
+    "用于继续已暂停或失败传输的部分下载。清除会取消这些传输；正在进行的传输不受影响。",
+  "Local copies from edit-in-place sessions that are no longer open.":
+    "已关闭的就地编辑会话留下的本地副本。",
   "Local files": "本地文件",
   "Keep rail expanded": "保持侧栏展开",
   "Collapse rail": "收起侧栏",
@@ -229,6 +262,18 @@ const ZH: Record<string, string> = {
   Compare: "比较",
   Rerun: "重新运行",
   Search: "搜索",
+  "Show more": "显示更多",
+  "Show less": "收起",
+  Filter: "筛选",
+  "Filter connections": "筛选连接",
+  "Select all shown": "全选显示的项",
+  "No matches": "没有匹配项",
+  "Copy all": "全部复制",
+  "All copies": "全部复制项",
+  "Choose…": "选择…",
+  "Close help": "关闭帮助",
+  "Terminal font": "终端字体",
+  "Sort by": "排序方式",
   "Search failed": "搜索失败",
   "No matches.": "没有匹配项。",
   "Files:": "文件：",
@@ -236,6 +281,14 @@ const ZH: Record<string, string> = {
   "Reveal in browser": "在文件浏览器中显示",
   "Open in editor": "在编辑器中打开",
   "Copy path": "复制路径",
+  Cut: "剪切",
+  Paste: "粘贴",
+  "Copy as text": "复制为文本",
+  "Copy selected files": "复制所选文件",
+  "Cut selected files": "剪切所选文件",
+  "Paste files here": "在此粘贴文件",
+  "Delete this file?": "删除此文件？",
+  "Delete this folder?": "删除此文件夹？",
   "Copy read-only skill": "复制只读技能",
   "Copy admin skill": "复制管理员技能",
   Refresh: "刷新",
@@ -337,6 +390,17 @@ const ZH: Record<string, string> = {
   "Settings › Cloudflare": "设置 › Cloudflare",
   "Pop out failed": "弹出窗口失败",
   "Transfer failed": "传输失败",
+  "Copy details": "复制详情",
+  Errors: "错误",
+  Error: "错误",
+  "No errors": "没有错误",
+  "Show errors": "显示错误",
+  "Unexpected error": "意外错误",
+  "Unhandled error in the background": "后台出现未处理的错误",
+  "The rest of Faro still works. Try again reloads just this part.": "Faro 的其他部分仍可使用。重试只会重新加载这一部分。",
+  "Don't show again for this server": "此服务器不再显示",
+  "Couldn't check faro-cli": "无法检查 faro-cli",
+  "Couldn't update faro-cli": "无法更新 faro-cli",
   "Update download failed": "更新下载失败",
   "Couldn't restart": "无法重启",
   "Couldn't save snippet": "无法保存代码片段",
@@ -419,6 +483,14 @@ const ZH: Record<string, string> = {
   "Type a command or search…": "输入命令或搜索…",
   Commands: "命令",
   "Search shortcuts…": "搜索快捷键…",
+  "Enable keyboard shortcuts": "启用键盘快捷键",
+  "Off: no shortcut does anything and menus show no keys. Your changes below are kept.":
+    "关闭后所有快捷键都不起作用，菜单也不显示按键。下方的修改会保留。",
+  "Lists and tabs": "列表和标签页",
+  "Rename group": "重命名分组",
+  "Collapse Server Rail": "收起服务器栏",
+  "Expand Server Rail": "展开服务器栏",
+  "Open Terminal in Focused Folder": "在当前文件夹打开终端",
   Unbound: "未绑定",
   "Reset to default": "恢复默认",
   "Reset every shortcut to its default": "将所有快捷键恢复为默认值",
@@ -676,6 +748,44 @@ const ZH: Record<string, string> = {
   "Reset tips": "重置提示",
   "Show tips": "显示提示",
   "Show welcome": "显示欢迎页",
+  // Server rail: duplicate, sort, bulk actions, broken profiles
+  Duplicate: "复制",
+  "Sort: A–Z": "排序：A–Z",
+  "Sort: Z–A": "排序：Z–A",
+  "Sort: Custom order": "排序：自定义顺序",
+  "Move to group": "移动到分组",
+  "New connection…": "新建连接…",
+  "Not paired yet": "尚未配对",
+  "No key file chosen": "未选择密钥文件",
+  "Sign-in failed last time": "上次登录失败",
+  "Key file or path not found last time": "上次找不到密钥文件或路径",
+  "Sorted by name": "已按名称排序",
+  "Switch the sort to Custom order to rearrange servers.": "将排序切换为自定义顺序后即可重新排列服务器。",
+  // Command palette: sections, footer keys, empty states
+  Recent: "最近使用",
+  Servers: "服务器",
+  "All commands": "全部命令",
+  navigate: "选择",
+  jump: "翻页",
+  run: "运行",
+  search: "搜索",
+  clear: "清空",
+  back: "返回",
+  close: "关闭",
+  "Search commands": "搜索命令",
+  "No saved servers yet.": "还没有保存的服务器。",
+  "opens every command": "打开全部命令",
+  "Search snippets": "搜索片段",
+  // Resizable panels and collapsed strips
+  Preview: "预览",
+  "Agent console": "智能代理控制台",
+  "Drag to resize; double-click to reset": "拖动调整大小；双击重置",
+  "Expand Local": "展开本地",
+  "Expand Remote": "展开远程",
+  "Expand Preview": "展开预览",
+  "Expand Terminal": "展开终端",
+  "Expand Agent": "展开智能代理",
+  "Expand Agent console": "展开智能代理控制台",
 };
 
 const ATTRIBUTES = ["title", "aria-label", "placeholder", "alt"];
@@ -687,6 +797,25 @@ function translate(value: string): string {
   if (exact) return value.replace(trimmed, exact);
   const moveTo = normalized.match(/^Move to \"(.+)\"$/);
   if (moveTo) return value.replace(trimmed, `移动到“${moveTo[1]}”`);
+  const bulk = normalized.match(/^(Connect all|Disconnect all|Delete) \((\d+)\)(…?)$/);
+  if (bulk) {
+    const verbs: Record<string, string> = { "Connect all": "全部连接", "Disconnect all": "全部断开", Delete: "删除" };
+    const verb = verbs[bulk[1]];
+    return value.replace(trimmed, `${verb}（${bulk[2]}）${bulk[3]}`);
+  }
+  const duplicated = normalized.match(/^Duplicated as “(.+)”$/);
+  if (duplicated) return value.replace(trimmed, `已复制为“${duplicated[1]}”`);
+  const noMatch = normalized.match(/^No (commands|servers|snippets) match “(.*)”\.$/);
+  if (noMatch) {
+    const what: Record<string, string> = { commands: "命令", servers: "服务器", snippets: "片段" };
+    return value.replace(trimmed, `没有与“${noMatch[2]}”匹配的${what[noMatch[1]]}。`);
+  }
+  const searchFor = normalized.match(/^Search servers for “(.*)”$/);
+  if (searchFor) return value.replace(trimmed, `在服务器中搜索“${searchFor[1]}”`);
+  const why = normalized.match(/^matches: (.+)$/);
+  if (why) return value.replace(trimmed, `匹配：${why[1]}`);
+  const deleteMany = normalized.match(/^Delete (\d+) connections$/);
+  if (deleteMany) return value.replace(trimmed, `删除 ${deleteMany[1]} 个连接`);
   if (normalized === "Folder Sync — keep folders mirrored to your servers") {
     return value.replace(trimmed, "文件夹同步 — 保持文件夹与服务器镜像同步");
   }
@@ -725,6 +854,15 @@ function translate(value: string): string {
   }
   if (/^program not found$/i.test(normalized)) {
     return value.replace(trimmed, "找不到程序");
+  }
+  const stopped = normalized.match(/^(.+) stopped working$/);
+  if (stopped) {
+    return value.replace(trimmed, `${stopped[1]} 已停止工作`);
+  }
+  const failedOn = normalized.match(/^Couldn't (upload|download|delete|save|start transferring) (.+)$/i);
+  if (failedOn) {
+    const verb = { upload: "上传", download: "下载", delete: "删除", save: "保存", "start transferring": "开始传输" }[failedOn[1].toLowerCase()];
+    return value.replace(trimmed, `无法${verb} ${failedOn[2]}`);
   }
   const connectTarget = normalized.match(/^Couldn't connect to (.+)$/i);
   if (connectTarget) {

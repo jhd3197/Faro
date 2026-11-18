@@ -19,11 +19,20 @@ import { useUpdater } from "@/stores/updaterStore";
 import { useDiscovery } from "@/stores/discoveryStore";
 import { useTips } from "@/stores/tipsStore";
 import { useSites } from "@/stores/sitesStore";
+import { useSession } from "@/stores/sessionStore";
+import { useCrashTest } from "@/lib/errorCapture";
+import { useNudges } from "@/stores/nudgeStore";
+import { useEditor } from "@/stores/editorStore";
+import { usePalette } from "@/stores/paletteStore";
+import { usePanelSizes } from "@/stores/panelSizesStore";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "./event";
 import { useCfConnect } from "@/components/CloudflareConnectSheet";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
 import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
 import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocker } from "./docker";
+// window.__primitives: a bench for the shared UI primitives (tests only).
+import "./primitives";
 
 (window as any).__demo = {
   useLayout,
@@ -43,6 +52,17 @@ import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocke
   useDiscovery,
   useTips,
   useSites,
+  // Restored session (split, last server, Settings section) and open edits.
+  useSession,
+  useEditor,
+  // Make a region throw so its recover panel shows: useCrashTest.getState().crash("Terminal").
+  useCrashTest,
+  useNudges,
+  // Palette recent commands.
+  usePalette,
+  usePanelSizes,
+  // Ask the window to close, as the title bar's close button does.
+  requestClose: () => getCurrentWindow().close(),
   // Convenience: focus a server by profile id (connects if needed).
   focusProfile: (profileId: string) =>
     useConnections.getState().connect(profileId),

@@ -73,6 +73,15 @@ async fn recover_in(dir: &Path, fs: &dyn RemoteFs, key: &str, root: &str) -> Res
     Ok(restored)
 }
 
+pub fn cleanup_lock(batch: &str) -> Result<File> {
+    let dir = directory()?;
+    std::fs::create_dir_all(&dir)?;
+    let file = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join(format!("{batch}.lock")))?;
+    file.try_lock().context("This sync file is in use; pause sync before cleanup")?;
+    anyhow::ensure!(!dir.join(format!("{batch}.json")).exists(), "This batch has an unfinished publication; run sync recovery before cleanup");
+    Ok(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,13 +108,4 @@ mod tests {
         assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
         std::fs::remove_dir_all(root).unwrap();
     }
-}
-
-pub fn cleanup_lock(batch: &str) -> Result<File> {
-    let dir = directory()?;
-    std::fs::create_dir_all(&dir)?;
-    let file = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join(format!("{batch}.lock")))?;
-    file.try_lock().context("This sync file is in use; pause sync before cleanup")?;
-    anyhow::ensure!(!dir.join(format!("{batch}.json")).exists(), "This batch has an unfinished publication; run sync recovery before cleanup");
-    Ok(file)
 }

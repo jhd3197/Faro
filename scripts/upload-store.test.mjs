@@ -48,6 +48,7 @@ async function harness(options = {}) {
     },
     './settingsStore': { useSettings: { getState: () => ({ overwritePolicy: 'overwrite', promptOnOverwrite: false }) } },
     './toastStore': { toast: { error() {}, info() {}, success() {} } },
+    './tipsStore': { useTips: { getState: () => ({ trigger() {} }) } },
     './conflictStore': { useConflicts: { getState: () => { throw new Error('unexpected conflict prompt'); } } },
     '@/lib/format': { baseName: path => path.split(/[\\/]/).pop() },
     '@/lib/types': { LOCAL_SESSION: 'local' },

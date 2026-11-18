@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
+import { useNudges } from "./nudgeStore";
 
 // One-time pointers to features, shown inside the real UI the first time they
 // apply (Plan 32 Phase 4). Stored under "discovery*" keys beside the welcome
@@ -60,6 +61,8 @@ export const useTips = create<{
   },
   reset: () => {
     set({ seen: [], enabled: true });
+    // Reset tips also brings back nudges dismissed on single servers.
+    useNudges.getState().reset();
     void ipc.settingsSet(SEEN_KEY, "[]").catch(() => {});
     void ipc.settingsSet(OFF_KEY, "false").catch(() => {});
   },

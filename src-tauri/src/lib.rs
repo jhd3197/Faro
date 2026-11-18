@@ -1,5 +1,8 @@
 // The MCP tool list in bridge.rs is one large `json!` literal.
 #![recursion_limit = "256"]
+// `#[async_trait]` marks its boxed futures `#[must_use]` on top of the
+// future type itself; newer clippy flags every trait method for that.
+#![allow(clippy::double_must_use)]
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -15,6 +18,7 @@ pub mod faro_file;
 pub mod bridge;
 pub mod commands;
 mod agent_host;
+mod cache;
 mod app_updater;
 mod archive_ops;
 pub mod cli_updater;
@@ -60,6 +64,7 @@ mod tls_trust;
 mod transfer;
 mod vela;
 mod virtualfs;
+mod window_state;
 
 pub struct AppState {
     pub sessions: Arc<session::SessionManager>,
@@ -105,8 +110,14 @@ pub struct AppState {
 /// the first paint so there's no theme flash on reload.
 fn build_settings_init_script(db: &db::Db) -> String {
     let mut map = db.settings_get_all().unwrap_or_default();
-    // A fresh install has no rows yet — default the theme so the window still
-    // paints dark (matching the frontend DEFAULTS), not the bare CSS default.
+    // A fresh install follows the OS light/dark setting. Written once, so an
+    // install that predates modes (it has rows) keeps the theme it had.
+    if map.is_empty() {
+        let _ = db.settings_set("themeMode", "\"system\"");
+        map.insert("themeMode".to_string(), "\"system\"".to_string());
+    }
+    // Default the theme so the window still paints dark (matching the
+    // frontend DEFAULTS), not the bare CSS default.
     map.entry("appTheme".to_string())
         .or_insert_with(|| "\"dark\"".to_string());
 
@@ -128,6 +139,10 @@ fn build_settings_init_script(db: &db::Db) -> String {
            var s={obj};\
            window.__FARO_SETTINGS__=s;\
            var el=document.documentElement;\
+           if(s.themeMode==='system'&&window.matchMedia){{\
+             s.appTheme=window.matchMedia('(prefers-color-scheme: dark)').matches\
+               ?(s.darkTheme||'dark'):(s.lightTheme||'light');\
+           }}\
            if(el&&typeof s.appTheme==='string'){{el.setAttribute('data-theme',s.appTheme);}}\
          }}catch(e){{}}}})();"
     )
@@ -142,54 +157,6 @@ fn saved_ui_zoom(db: &db::Db) -> Option<f64> {
         return None;
     }
     Some(pct.clamp(80.0, 200.0) / 100.0)
-}
-
-#[cfg(test)]
-mod init_script_tests {
-    use super::*;
-
-    #[test]
-    fn injects_theme_and_snapshot() {
-        let db = db::Db::open_in_memory().unwrap();
-        db.settings_set("appTheme", "\"nord\"").unwrap();
-        db.settings_set("terminalFontSize", "15").unwrap();
-        let script = build_settings_init_script(&db);
-        assert!(script.contains("window.__FARO_SETTINGS__"));
-        assert!(script.contains("setAttribute('data-theme'"));
-        assert!(script.contains("\"appTheme\":\"nord\""));
-        assert!(script.contains("\"terminalFontSize\":15"));
-    }
-
-    #[test]
-    fn reads_saved_ui_zoom() {
-        let db = db::Db::open_in_memory().unwrap();
-        assert_eq!(saved_ui_zoom(&db), None);
-        db.settings_set("uiZoom", "100").unwrap();
-        assert_eq!(saved_ui_zoom(&db), None);
-        db.settings_set("uiZoom", "125").unwrap();
-        assert_eq!(saved_ui_zoom(&db), Some(1.25));
-        db.settings_set("uiZoom", "900").unwrap();
-        assert_eq!(saved_ui_zoom(&db), Some(2.0));
-    }
-
-    #[test]
-    fn defaults_theme_to_dark_on_empty_db() {
-        let db = db::Db::open_in_memory().unwrap();
-        let script = build_settings_init_script(&db);
-        assert!(script.contains("\"appTheme\":\"dark\""));
-    }
-
-    #[test]
-    fn skips_corrupt_rows_without_breaking() {
-        let db = db::Db::open_in_memory().unwrap();
-        // A value that isn't valid JSON must be dropped, not emitted raw (which
-        // would break the whole object literal and leave the window unthemed).
-        db.settings_set("appTheme", "\"dracula\"").unwrap();
-        db.settings_set("broken", "not json").unwrap();
-        let script = build_settings_init_script(&db);
-        assert!(script.contains("\"appTheme\":\"dracula\""));
-        assert!(!script.contains("not json"));
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -306,16 +273,23 @@ pub fn run() {
             // itself synchronously instead of an async round-trip.
             {
                 let init_script = build_settings_init_script(&db);
-                let main = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                // Built hidden so the saved size/position (and maximized state)
+                // apply before the first frame; painted in the last theme's
+                // background so there's no white flash while the page loads.
+                let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
                     .title("Faro")
                     .inner_size(1280.0, 800.0)
                     .min_inner_size(900.0, 600.0)
                     .decorations(false)
                     .resizable(true)
                     .shadow(true)
-                    .initialization_script(&init_script)
-                    .build()
-                    .expect("failed to create main window");
+                    .visible(false)
+                    .initialization_script(&init_script);
+                if let Some(color) = window_state::saved_background(&db) {
+                    builder = builder.background_color(color);
+                }
+                let main = builder.build().expect("failed to create main window");
+                window_state::restore_and_track(&main, db.clone());
                 // Settings → Appearance → UI zoom, applied before the frontend
                 // loads so a zoomed UI doesn't paint at 100% first.
                 if let Some(scale) = saved_ui_zoom(&db) {
@@ -619,6 +593,8 @@ pub fn run() {
             commands::read_file_preview,
             commands::read_file_head,
             preview::preview_thumbnail,
+            cache::cache_usage,
+            cache::cache_clear,
             commands::open_terminal,
             commands::terminal_write,
             commands::terminal_resize,
@@ -654,6 +630,7 @@ pub fn run() {
             commands::chmod_path,
             commands::reveal_local_path,
             commands::duplicate_path,
+            commands::copy_path,
             commands::start_archive_download,
             commands::compress_paths,
             commands::extract_archive,
@@ -706,4 +683,67 @@ pub fn run() {
                 vela::stop(app);
             }
         });
+}
+
+#[cfg(test)]
+mod init_script_tests {
+    use super::*;
+
+    #[test]
+    fn injects_theme_and_snapshot() {
+        let db = db::Db::open_in_memory().unwrap();
+        db.settings_set("appTheme", "\"nord\"").unwrap();
+        db.settings_set("terminalFontSize", "15").unwrap();
+        let script = build_settings_init_script(&db);
+        assert!(script.contains("window.__FARO_SETTINGS__"));
+        assert!(script.contains("setAttribute('data-theme'"));
+        assert!(script.contains("\"appTheme\":\"nord\""));
+        assert!(script.contains("\"terminalFontSize\":15"));
+    }
+
+    #[test]
+    fn reads_saved_ui_zoom() {
+        let db = db::Db::open_in_memory().unwrap();
+        assert_eq!(saved_ui_zoom(&db), None);
+        db.settings_set("uiZoom", "100").unwrap();
+        assert_eq!(saved_ui_zoom(&db), None);
+        db.settings_set("uiZoom", "125").unwrap();
+        assert_eq!(saved_ui_zoom(&db), Some(1.25));
+        db.settings_set("uiZoom", "900").unwrap();
+        assert_eq!(saved_ui_zoom(&db), Some(2.0));
+    }
+
+    #[test]
+    fn defaults_theme_to_dark_on_empty_db() {
+        let db = db::Db::open_in_memory().unwrap();
+        let script = build_settings_init_script(&db);
+        assert!(script.contains("\"appTheme\":\"dark\""));
+    }
+
+    #[test]
+    fn fresh_install_follows_the_os_but_upgrades_keep_their_theme() {
+        let fresh = db::Db::open_in_memory().unwrap();
+        let script = build_settings_init_script(&fresh);
+        assert!(script.contains("\"themeMode\":\"system\""));
+        assert!(script.contains("prefers-color-scheme: dark"));
+        assert_eq!(fresh.settings_get("themeMode").unwrap().as_deref(), Some("\"system\""));
+
+        let upgraded = db::Db::open_in_memory().unwrap();
+        upgraded.settings_set("appTheme", "\"nord\"").unwrap();
+        let script = build_settings_init_script(&upgraded);
+        assert!(!script.contains("\"themeMode\""));
+        assert!(upgraded.settings_get("themeMode").unwrap().is_none());
+    }
+
+    #[test]
+    fn skips_corrupt_rows_without_breaking() {
+        let db = db::Db::open_in_memory().unwrap();
+        // A value that isn't valid JSON must be dropped, not emitted raw (which
+        // would break the whole object literal and leave the window unthemed).
+        db.settings_set("appTheme", "\"dracula\"").unwrap();
+        db.settings_set("broken", "not json").unwrap();
+        let script = build_settings_init_script(&db);
+        assert!(script.contains("\"appTheme\":\"dracula\""));
+        assert!(!script.contains("not json"));
+    }
 }

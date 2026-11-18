@@ -29,9 +29,11 @@ import {
   Focus,
   LogOut,
   Bug,
+  Palette,
 } from "lucide-react";
 import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
-import { useSettings, stepUiZoom } from "@/stores/settingsStore";
+import { useSettings, stepUiZoom, themeIsDark } from "@/stores/settingsStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useLayout } from "@/stores/layoutStore";
 import { useTransfers } from "@/stores/transfersStore";
 import { useResolvedCommands } from "@/lib/keybindings";
@@ -50,7 +52,8 @@ const REPO_URL = "https://github.com/jhd3197/faro";
 export function TitleBar() {
   const appTheme = useSettings((s) => s.appTheme);
   const frameStyle = useSettings((s) => s.frameStyle);
-  const setAppTheme = useSettings((s) => s.setAppTheme);
+  const toggleLightDark = useSettings((s) => s.toggleLightDark);
+  const openSettings = useLayout((s) => s.openSettings);
   const uiZoom = useSettings((s) => s.uiZoom);
   const setUiZoom = useSettings((s) => s.setUiZoom);
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
@@ -85,8 +88,7 @@ export function TitleBar() {
   const minimize = () => win.minimize();
   const toggleMaximize = () => win.toggleMaximize();
   const close = () => win.close();
-  const switchTheme = () =>
-    setAppTheme(appTheme === "light" ? "dark" : "light");
+  const showsDark = themeIsDark(appTheme);
 
   const menus: MenuSpec[] = [
     {
@@ -178,10 +180,15 @@ export function TitleBar() {
         },
         { kind: "sep" },
         {
-          label: appTheme === "light" ? "Switch to dark theme" : "Switch to light theme",
-          icon: appTheme === "light" ? <Moon size={11} /> : <Sun size={11} />,
+          label: showsDark ? "Switch to light theme" : "Switch to dark theme",
+          icon: showsDark ? <Sun size={11} /> : <Moon size={11} />,
           shortcut: comboOf("switch-theme"),
-          onClick: switchTheme,
+          onClick: toggleLightDark,
+        },
+        {
+          label: "Change theme in Settings…",
+          icon: <Palette size={11} />,
+          onClick: () => openSettings(SETTINGS_ENTRY_POINTS.themeMenu),
         },
         { kind: "sep" },
         {

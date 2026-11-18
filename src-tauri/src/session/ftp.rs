@@ -870,9 +870,9 @@ fn passive_target(pasv: SocketAddr, server_ip: IpAddr) -> SocketAddr {
         }
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
     };
-    if pasv.ip() != server_ip && unroutable(pasv.ip()) && !unroutable(server_ip) {
-        SocketAddr::new(server_ip, pasv.port())
-    } else if pasv.ip().is_unspecified() {
+    if (pasv.ip() != server_ip && unroutable(pasv.ip()) && !unroutable(server_ip))
+        || pasv.ip().is_unspecified()
+    {
         SocketAddr::new(server_ip, pasv.port())
     } else {
         pasv

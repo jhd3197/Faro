@@ -136,9 +136,9 @@ impl S3Namespace {
             )
             .into());
         }
-        Ok(response
+        response
             .error_for_status()
-            .context("S3 namespace response")?)
+            .context("S3 namespace response")
     }
 
     pub async fn list(&self, prefix: &str, delimiter: bool) -> Result<Listing> {

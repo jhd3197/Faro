@@ -79,7 +79,7 @@ export function FilePreview({
   return (
     <aside
       aria-label="File preview"
-      className="flex h-full w-[26rem] max-w-[45%] shrink-0 flex-col border-l border-border bg-bg-panel"
+      className="flex h-full w-full min-w-0 flex-col bg-bg-panel"
     >
       <div className="flex flex-col gap-2 border-b border-border px-4 pb-3 pt-3">
         <div className="flex items-center gap-2">

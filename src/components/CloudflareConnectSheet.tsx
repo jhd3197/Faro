@@ -306,7 +306,7 @@ export function CloudflareConnectSheet() {
                   onClick={() =>
                     navigator.clipboard
                       .writeText(adminNote)
-                      .then(() => toast.success("Note copied", "Send it to the server's admin."))
+                      .then(() => toast.success("Note copied", "Send it to the server's admin.", undefined, { log: false }))
                       .catch(() => {})
                   }
                   className="inline-flex items-center gap-1 rounded border border-border bg-bg-panel px-2 py-1 text-[11px] text-text hover:bg-bg-hover"

@@ -238,7 +238,7 @@ mod tests {
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0; 4096];
-            stream.read(&mut request).await.unwrap();
+            let _request_len = stream.read(&mut request).await.unwrap();
             // The client can close early when the response exceeds its limit.
             let _ = stream.write_all(response.as_bytes()).await;
         });

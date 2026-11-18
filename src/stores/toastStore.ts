@@ -20,29 +20,57 @@ export interface Toast {
   title: string;
   message?: string;
   action?: ToastAction;
+  /** The raw error behind an error toast, for "Copy details". */
+  detail?: string;
+  /** How many times this toast fired in a row (same id, still on screen). */
+  repeat?: number;
   createdAt: number;
 }
 
+/** Options shared by the `toast.*` helpers. */
+export interface ToastOptions {
+  /** Fixed id: a repeat replaces the toast on screen instead of stacking. */
+  id?: string;
+  /** false = an ephemeral confirmation: shown, but kept out of the
+   *  notification centre and the unread count. */
+  log?: boolean;
+  detail?: string;
+  duration?: number;
+}
+
 interface PushArgs {
+  /** Fixed id: a toast with the same id on screen is replaced, not stacked. */
+  id?: string;
   variant: ToastVariant;
   title: string;
   message?: string;
   action?: ToastAction;
   duration?: number; // ms; 0 = sticky until dismissed
+  /** false keeps it out of history and the unread count (copy confirmations). */
+  log?: boolean;
+  /** Raw error text included by "Copy details". */
+  detail?: string;
+  /** false logs it to the notification centre without a card on screen
+   *  (a crash the recover panel already shows, a background error). */
+  show?: boolean;
 }
 
 interface ToastState {
   toasts: Toast[]; // currently on-screen
   history: Toast[]; // bounded, persisted log for the notification center
   unreadCount: number;
+  /** Errors logged after this time count on the status-bar error pill. */
+  errorsSeenAt: number;
 
   push: (args: PushArgs) => string;
   dismiss: (id: string) => void;
+  /** Also marks errors seen: opening the notification centre shows them. */
   markAllRead: () => void;
   clearHistory: () => void;
 }
 
 const HISTORY_KEY = "faro.notifications.v1";
+const ERRORS_SEEN_KEY = "faro.notifications.errorsSeenAt";
 const MAX_HISTORY = 100;
 
 let _seq = 0;
@@ -57,6 +85,19 @@ function loadHistory(): Toast[] {
   }
 }
 
+function loadErrorsSeenAt(): number {
+  try {
+    return Number(localStorage.getItem(ERRORS_SEEN_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Errors in the log the user hasn't looked at yet. */
+export function unseenErrors(history: Toast[], seenAt: number): number {
+  return history.filter((t) => t.variant === "error" && t.createdAt > seenAt).length;
+}
+
 function saveHistory(h: Toast[]) {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
@@ -69,23 +110,44 @@ export const useToasts = create<ToastState>((set, get) => ({
   toasts: [],
   history: loadHistory(),
   unreadCount: 0,
+  errorsSeenAt: loadErrorsSeenAt(),
 
-  push: ({ variant, title, message, action, duration }) => {
-    const item: Toast = { id: nextId(), variant, title, message, action, createdAt: Date.now() };
-    const history = [item, ...get().history].slice(0, MAX_HISTORY);
-    saveHistory(history);
+  push: ({ id, variant, title, message, action, duration, log = true, detail, show = true }) => {
+    const key = id ?? nextId();
+    // A repeat of a toast still on screen replaces it and counts up; it
+    // doesn't stack another card or bump the unread count again.
+    const prev = get().toasts.find((t) => t.id === key);
+    const repeat = prev ? (prev.repeat ?? 1) + 1 : undefined;
+    const item: Toast = { id: key, variant, title, message, action, detail, repeat, createdAt: Date.now() };
+    let history = get().history;
+    if (log) {
+      history = [item, ...history.filter((t) => t.id !== item.id)].slice(0, MAX_HISTORY);
+      saveHistory(history);
+    }
     set((s) => ({
-      toasts: [...s.toasts, item],
+      toasts: show ? [...s.toasts.filter((t) => t.id !== item.id), item] : s.toasts,
       history,
-      unreadCount: s.unreadCount + 1,
+      unreadCount: log && !prev ? s.unreadCount + 1 : s.unreadCount,
     }));
     const ms = duration ?? (variant === "error" ? 8000 : 4000);
-    if (ms > 0) setTimeout(() => get().dismiss(item.id), ms);
+    if (show && ms > 0)
+      setTimeout(() => {
+        // A replacement with the same id runs its own timer.
+        if (get().toasts.some((t) => t === item)) get().dismiss(item.id);
+      }, ms);
     return item.id;
   },
 
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
-  markAllRead: () => set({ unreadCount: 0 }),
+  markAllRead: () => {
+    const errorsSeenAt = Date.now();
+    try {
+      localStorage.setItem(ERRORS_SEEN_KEY, String(errorsSeenAt));
+    } catch {
+      // ignore quota failures
+    }
+    set({ unreadCount: 0, errorsSeenAt });
+  },
   clearHistory: () => {
     saveHistory([]);
     set({ history: [] });
@@ -93,16 +155,28 @@ export const useToasts = create<ToastState>((set, get) => ({
 }));
 
 // Call-from-anywhere helper (stores, ipc handlers, components).
+const make =
+  (variant: ToastVariant) =>
+  (title: string, message?: string, action?: ToastAction, opts?: ToastOptions) =>
+    useToasts.getState().push({ variant, title, message, action, ...opts });
+
 export const toast = {
-  info: (title: string, message?: string, action?: ToastAction) =>
-    useToasts.getState().push({ variant: "info", title, message, action }),
-  success: (title: string, message?: string, action?: ToastAction) =>
-    useToasts.getState().push({ variant: "success", title, message, action }),
-  error: (title: string, message?: string, action?: ToastAction) =>
-    useToasts.getState().push({ variant: "error", title, message, action }),
-  warning: (title: string, message?: string, action?: ToastAction) =>
-    useToasts.getState().push({ variant: "warning", title, message, action }),
+  info: make("info"),
+  success: make("success"),
+  error: make("error"),
+  warning: make("warning"),
 };
+
+/** The full text "Copy details" puts on the clipboard: what failed, the
+ *  message, the raw error, and when. */
+export function toastDetails(t: Pick<Toast, "title" | "message" | "detail" | "createdAt">, version?: string | null): string {
+  const lines = [t.title];
+  if (t.message) lines.push(t.message);
+  if (t.detail && t.detail !== t.message && !t.message?.includes(t.detail)) lines.push("", `Error: ${t.detail}`);
+  lines.push("", `Time: ${new Date(t.createdAt).toISOString()}`);
+  if (version) lines.push(`Faro ${version}`);
+  return lines.join("\n");
+}
 
 /** Follow a toast's link: a settings section in-app, or an external URL. */
 export function followToastAction(action: ToastAction): void {

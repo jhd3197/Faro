@@ -15,6 +15,7 @@ export const SETTINGS_SECTIONS = [
   { id: "cli", label: "faro-cli", keywords: "cli command line updater path" },
   { id: "cloudflare", label: "Cloudflare", keywords: "cloudflare cloudflared access tunnel account" },
   { id: "backup", label: "Backup", keywords: "backup restore export" },
+  { id: "storage", label: "Storage", keywords: "cache clear thumbnails resume disk space" },
   { id: "about", label: "About", keywords: "version notifications about" },
 ] as const;
 
@@ -27,6 +28,8 @@ export const SETTINGS_FOCUS = {
   cloudflared: "settings-cloudflared",
   showPairingCode: "settings-show-pairing-code",
   keyboardSearch: "settings-keyboard-search",
+  themeMode: "settings-theme-mode",
+  transferConcurrency: "settings-transfer-concurrency",
 } as const;
 
 export interface SettingsTarget {
@@ -62,6 +65,8 @@ export const SETTINGS_ENTRY_POINTS = {
   aboutCliInstall: { section: "cli" },
   keyboardCustomize: { section: "keyboard", focus: SETTINGS_FOCUS.keyboardSearch },
   pairingRemoteControl: { section: "remoteControl", focus: SETTINGS_FOCUS.showPairingCode },
+  themeMenu: { section: "appearance", focus: SETTINGS_FOCUS.themeMode },
+  transferPanel: { section: "transfers", focus: SETTINGS_FOCUS.transferConcurrency },
 } as const satisfies Record<string, SettingsTarget>;
 
 export type SettingsEntryPointId = keyof typeof SETTINGS_ENTRY_POINTS;

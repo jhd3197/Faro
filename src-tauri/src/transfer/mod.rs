@@ -334,14 +334,14 @@ enum RetryInfo {
     },
     /// Unit tests drive the runner with a fake copy loop.
     #[cfg(test)]
-    Test(
-        Arc<
-            dyn Fn(Arc<TransferManager>, String) -> futures::future::BoxFuture<'static, Result<u64>>
-                + Send
-                + Sync,
-        >,
-    ),
+    Test(TestCopy),
 }
+
+/// The fake copy loop unit tests hand the runner.
+#[cfg(test)]
+type TestCopy = Arc<
+    dyn Fn(Arc<TransferManager>, String) -> futures::future::BoxFuture<'static, Result<u64>> + Send + Sync,
+>;
 
 /// Default bound on concurrently running transfers (Plan 17); the rest wait
 /// in the FIFO as `Queued`. Overridden by the `transferConcurrency` setting.
@@ -491,6 +491,9 @@ impl ranged::Ctl for TransferCtl {
         self.live.add(bytes);
     }
 
+    // `fetch_update` is deprecated in favour of `try_update` on newer
+    // toolchains, which older ones don't have yet.
+    #[allow(deprecated)]
     fn rewound(&self, bytes: u64) {
         let _ = self
             .live
@@ -559,7 +562,7 @@ async fn sftp_replace_with_part(
 }
 
 fn basename(path: &str) -> String {
-    path.trim_end_matches(['/', '\\']).rsplit(|c| c == '/' || c == '\\')
+    path.trim_end_matches(['/', '\\']).rsplit(['/', '\\'])
         .next()
         .unwrap_or(path)
         .to_string()
@@ -1151,6 +1154,51 @@ impl TransferManager {
                 pauses.remove(id);
             }
         }
+    }
+
+    /// Saved resume records and the bytes their partial downloads hold on
+    /// disk (Settings › Storage).
+    pub async fn resume_usage(&self) -> (u64, u64) {
+        let Some(db) = self.db.get() else { return (0, 0) };
+        let rows = db.resume_list().unwrap_or_default();
+        let bytes = rows
+            .iter()
+            .filter_map(|r| r.part_path.as_deref())
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+        (bytes, rows.len() as u64)
+    }
+
+    /// Discard saved progress for every transfer that isn't running or
+    /// queued: paused and failed ones are canceled and their partial files
+    /// removed. Returns how many records were cleared.
+    pub async fn clear_resume(&self, app: &AppHandle) -> usize {
+        let Some(db) = self.db.get().cloned() else { return 0 };
+        let rows = db.resume_list().unwrap_or_default();
+        let mut cleared = 0;
+        for row in rows {
+            let live = self.get(&row.id).await.is_some_and(|t| {
+                matches!(t.status, TransferStatus::Transferring | TransferStatus::Queued)
+            });
+            if live {
+                continue;
+            }
+            if self.get(&row.id).await.is_some() {
+                if self.cancel(&row.id, app).await.is_err() {
+                    continue;
+                }
+            } else {
+                self.forget_resume(&row.id, true).await;
+            }
+            // A record from an earlier run may name a part file the resume
+            // map never loaded.
+            if let Some(p) = row.part_path.as_deref().filter(|p| p.ends_with(partfile::PART_SUFFIX)) {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+            cleared += 1;
+        }
+        cleared
     }
 
     pub async fn list(&self) -> Vec<Transfer> {

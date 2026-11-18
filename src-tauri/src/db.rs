@@ -653,6 +653,12 @@ impl Db {
         Ok(evicted)
     }
 
+    /// Drop the whole thumbnail index (Settings › Storage › Clear).
+    pub fn thumb_clear_all(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute("DELETE FROM thumb_cache", [])?)
+    }
+
     /// Drop the index rows for a session's thumbnails, returning their `key`s so
     /// the caller can delete the files. Used when a connection is removed.
     pub fn thumb_clear_session(&self, session_id: &str) -> Result<Vec<String>> {

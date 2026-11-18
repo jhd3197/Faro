@@ -2,6 +2,11 @@ import { useEffect } from "react";
 import { Download, Plus, ServerOff } from "lucide-react";
 import { useDiscovery } from "@/stores/discoveryStore";
 import { useLayout } from "@/stores/layoutStore";
+import { useKeyOf } from "@/lib/keybindings";
+import { useBindings } from "@/stores/bindingsStore";
+import { formatCombo } from "@/lib/shortcuts";
+
+const kbd = "rounded border border-border bg-bg-panel px-1 font-mono text-[10px] text-text-muted";
 
 const primary = "inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90";
 const secondary = "inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text hover:bg-bg-hover";
@@ -14,9 +19,19 @@ export function NoConnections({ variant = "pane" }: { variant?: "pane" | "strip"
   useEffect(() => { void useDiscovery.getState().scanImports(); }, []);
   const total = found?.reduce((n, f) => n + f.count, 0) ?? 0;
   const first = found?.[0];
+  // The user's real keys, so a remapped or disabled shortcut never shows a
+  // stale hint.
+  const keyOf = useKeyOf();
+  const newKey = keyOf("new-connection", "mod+n").hint;
+  const paletteKey = useBindings((s) => s.enabled) ? formatCombo("mod+k") : null;
   const actions = <>
-    <button onClick={() => useLayout.getState().openNewConnection()} className={primary}>
+    <button
+      onClick={() => useLayout.getState().openNewConnection()}
+      className={primary}
+      aria-keyshortcuts={newKey}
+    >
       <Plus size={13} /> New connection
+      {newKey && <span data-key-hint="" className="ml-1 font-mono text-[10px] text-white/75">{newKey}</span>}
     </button>
     <button onClick={() => useLayout.getState().openImport(undefined, first?.kind)} className={secondary}>
       <Download size={13} />
@@ -44,6 +59,11 @@ export function NoConnections({ variant = "pane" }: { variant?: "pane" | "strip"
       </div>
       <div className="flex flex-wrap justify-center gap-2">{actions}</div>
       {first && <p className="text-[11px] text-text-dim">From {found!.map((f) => f.label).join(", ")}</p>}
+      {paletteKey && (
+        <p data-palette-hint="" className="text-[11px] text-text-dim">
+          <kbd className={kbd}>{paletteKey}</kbd> opens every command
+        </p>
+      )}
     </div>
   );
 }

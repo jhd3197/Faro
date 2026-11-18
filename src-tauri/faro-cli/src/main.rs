@@ -686,7 +686,7 @@ fn main() {
 async fn async_main() {
     let cli = Cli::parse();
     if let Err(e) = run(cli).await {
-        report_direct_failure(&format!("{e:#}").lines().next().unwrap_or("failed").to_string());
+        report_direct_failure(format!("{e:#}").lines().next().unwrap_or("failed"));
         eprintln!("\x1b[31merror:\x1b[0m {e:#}");
         std::process::exit(1);
     }
@@ -3852,14 +3852,14 @@ fn make_bar(total: u64, name: &str) -> ProgressBar {
 }
 
 fn basename(path: &str) -> String {
-    path.rsplit(|c| c == '/' || c == '\\')
+    path.rsplit(['/', '\\'])
         .next()
         .unwrap_or(path)
         .to_string()
 }
 
 fn parent_of(path: &str) -> String {
-    match path.rfind(|c: char| c == '/' || c == '\\') {
+    match path.rfind(['/', '\\']) {
         Some(0) => "/".to_string(),
         Some(i) => path[..i].to_string(),
         None => ".".to_string(),

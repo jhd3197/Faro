@@ -6,6 +6,7 @@ import {
   stripTrailingNewline,
 } from "@/lib/snippets";
 import type { Snippet } from "@/lib/types";
+import { isComposing } from "@faro/file-ui";
 
 /// The snippet-insert dialog (Plan 11 Phase 4). Shown when a snippet needs
 /// values for its `{{variable}}` placeholders and/or is multi-line — it
@@ -55,7 +56,7 @@ export function VariableDialog({
         onKeyDown={(e) => {
           // Enter submits from a single-line field; Shift+Enter / textareas are
           // untouched. Esc is handled by useDialog.
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          if (e.key === "Enter" && !isComposing(e) && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             submit();
           }

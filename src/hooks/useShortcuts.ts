@@ -1,38 +1,34 @@
 import { useEffect, useRef } from "react";
-import { useResolvedCommands } from "@/lib/keybindings";
+import { useResolvedCommands, isEditableTarget } from "@/lib/keybindings";
 import { useLayout } from "@/stores/layoutStore";
+import { useBindings } from "@/stores/bindingsStore";
 import { keyCombo } from "@/lib/shortcuts";
-
-/** True when the keystroke is being typed into an editable surface — a form
- *  control, a contenteditable, or xterm's hidden helper textarea. Bare-key
- *  shortcuts must never fire here (they'd eat the user's typing); modifier
- *  combos still do, so Ctrl+T etc. keep working from a focused input. */
-function isEditableTarget(el: EventTarget | null): boolean {
-  const t = el as HTMLElement | null;
-  if (!t || !t.tagName) return false;
-  const tag = t.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-  if (t.isContentEditable) return true;
-  // xterm's textarea is a TEXTAREA (caught above), but guard the container too.
-  if (typeof t.closest === "function" && t.closest(".xterm")) return true;
-  return false;
-}
 
 // One global keydown listener dispatching the (override-resolved) command
 // registry. It fires modifier combos everywhere and bare-key combos only when
 // focus isn't in an editable surface (Plan 15 Phase 3). File-browser keys are
 // deliberately absent here — <FilePane> owns those locally so they can't collide
 // with anything global.
+//
+// A key that a focused editor, field or list already handled (it called
+// preventDefault) is left alone, so one keystroke never does two things. The
+// terminal is the exception: xterm marks every key it sends to the shell as
+// handled, and app chords it lets through must still reach the registry.
 export function useShortcuts() {
   const commands = useResolvedCommands();
   const togglePalette = useLayout((s) => s.togglePalette);
+  const enabled = useBindings((s) => s.enabled);
 
   // Keep the latest commands without re-binding the listener every render.
   const ref = useRef(commands);
   ref.current = commands;
 
   useEffect(() => {
+    if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const inTerminal = !!t?.closest?.(".xterm");
+      if (e.defaultPrevented && !inTerminal) return;
       let combo = keyCombo(e);
       // Zoom In is bound to "mod+=", but the same physical key reports "+"
       // when shifted (and the numpad's plus always does) — treat them alike,
@@ -58,5 +54,5 @@ export function useShortcuts() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePalette]);
+  }, [togglePalette, enabled]);
 }

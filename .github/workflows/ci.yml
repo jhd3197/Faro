@@ -1,7 +1,8 @@
 name: ci
 
-# Fast feedback for every push + PR: cargo check across the workspace (GUI
-# lib + bin and the faro-cli crate) and the Vite typecheck + production bundle.
+# Fast feedback for every push + PR: cargo check, tests and clippy across the
+# workspace (GUI lib + bin, faro-cli, the agent crates), the Vite typecheck +
+# production bundle, and the node unit and headless UI tests in scripts/.
 # No bundling, no platform matrix — that's what release.yml is for.
 
 on:
@@ -50,26 +51,32 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
-      - name: Release upload retry and completeness tests
-        run: node --test scripts/release-tools.test.mjs
-
-      - name: Server search and deep-link matching
-        run: node --test scripts/server-search.test.mjs scripts/deep-link-match.test.mjs scripts/deep-link-reuse.test.mjs
-
-      - name: File pane listing and navigation regression tests
-        run: node --test scripts/file-pane.test.mjs
-
-      - name: Folder link icon, sort, open, copy and delete
-        run: node --test scripts/folder-links.test.mjs
-
-      - name: Synchronized browsing and local folder memory
-        run: node --test scripts/sync-browse.test.mjs scripts/site-pairing.test.mjs
-
-      - name: Settings section routing
-        run: node --test scripts/settings-nav.test.mjs scripts/settings-deep-link.test.mjs
+      # Every scripts/*.test.mjs that doesn't drive a browser (release tools,
+      # server search, deep links, settings routing, sync, uploads, ...).
+      - name: Unit tests (node:test)
+        run: npm run test:unit
 
       - name: TypeScript + Vite build
         run: npm run build
+
+      # Every puppeteer test in scripts/ against the mock build, headless, one
+      # file at a time (some pin a port). The runner finds the runner image's
+      # preinstalled Chrome and fails if a file hangs past its timeout.
+      - name: UI tests (headless Chrome, mock build)
+        timeout-minutes: 30
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          "$CHROME_PATH" --version
+          npm run test:ui
+
+      - name: Upload UI test screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-shots
+          path: .shots/
+          if-no-files-found: ignore
 
       - name: cargo check (whole workspace — GUI lib/bin + faro-cli)
         working-directory: src-tauri
@@ -100,7 +107,6 @@ jobs:
           path: src-tauri/target/s3-cli-audit.json
           if-no-files-found: ignore
 
-      - name: cargo clippy (warnings allowed for now)
+      - name: cargo clippy (warnings are errors)
         working-directory: src-tauri
-        run: cargo clippy --workspace -- -D warnings -A clippy::all
-        continue-on-error: true
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings

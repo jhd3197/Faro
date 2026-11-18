@@ -498,11 +498,11 @@ fn spawn(bin: &Path, hostname: &str, port: u16, env: &[(String, String)]) -> Res
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
-        let mut flags = CREATE_NO_WINDOW;
-        #[cfg(not(test))]
-        {
-            flags |= CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS;
-        }
+        let flags = if cfg!(test) {
+            CREATE_NO_WINDOW
+        } else {
+            CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+        };
         cmd.creation_flags(flags);
     }
     let mut child = cmd

@@ -65,7 +65,9 @@ import { ipc, type OAuthApp } from "@/lib/ipc";
 import { messageOf } from "@/lib/errors";
 import { ConnectionHelp } from "@/components/ui/ConnectionHelp";
 import { CopyTextButton } from "@/components/ui/CopyText";
+import { ShowMore } from "@/components/ui/ShowMore";
 import { toast } from "@/stores/toastStore";
+import { isComposing } from "@faro/file-ui";
 
 interface Props {
   profile: ConnectionProfile | null;
@@ -1531,9 +1533,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                   {testResult.ok ? "Connection works" : testResult.title}
                 </div>
                 {!testResult.ok && (
-                  <div className="mt-0.5 max-h-32 select-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] text-text-muted">
+                  <ShowMore lines={4} className="mt-0.5 max-h-48 select-text overflow-y-auto text-[11px] text-text-muted">
                     {testResult.message}
-                  </div>
+                  </ShowMore>
                 )}
                 {!testResult.ok && <AccessGuideLink detail={testResult.message} />}
               </div>
@@ -1827,7 +1829,7 @@ function KeyAuthSection({
       setJustSaved(false);
       const copiedOk = await copyLine(res.publicKey);
       if (copiedOk)
-        toast.success("Public key copied", "Add it to the server's authorized_keys.");
+        toast.success("Public key copied", "Add it to the server's authorized_keys.", undefined, { log: false });
     } catch (e) {
       const msg = String(e);
       toast.error(
@@ -2301,7 +2303,7 @@ function AgentSection({
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && codeValid && host && !pairing) void doPair();
+                if (e.key === "Enter" && !isComposing(e) && codeValid && host && !pairing) void doPair();
               }}
               placeholder="000000"
               inputMode="numeric"
@@ -2945,7 +2947,7 @@ function WordPressSection({
             type="button"
             onClick={() => {
               void navigator.clipboard.writeText(link);
-              toast.success("Link copied");
+              toast.success("Link copied", undefined, undefined, { log: false });
             }}
             className="underline hover:text-text"
           >

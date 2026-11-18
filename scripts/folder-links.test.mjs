@@ -46,13 +46,13 @@ test('folder links: icon, sort, open, copy and delete', { timeout: 90000 }, asyn
     const rows = () => page.evaluate(() => [...document.querySelectorAll('[data-idx]')].map(r => ({
       name: r.innerText.split('\n')[0].trim(),
       icon: r.querySelector('svg')?.getAttribute('class') ?? '',
-      title: r.getAttribute('title') ?? '',
+      title: r.getAttribute('aria-description') ?? '',
     })));
     const openMenu = (name) => page.evaluate(name => {
       const row = [...document.querySelectorAll('[data-idx]')].find(e => e.innerText.startsWith(name));
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40 }));
     }, name);
-    const menuLabels = () => page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].map(b => b.textContent.trim()));
+    const menuLabels = () => page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].map(b => b.querySelector('.flex-1').textContent.trim()));
 
     await resolve(await pending('/links'), listing);
     assert.deepEqual(errors, [], errors.join('\n'));
@@ -85,10 +85,10 @@ test('folder links: icon, sort, open, copy and delete', { timeout: 90000 }, asyn
     assert.equal(mapped.dir.kind, 'directory');
 
     await openMenu('linked-folder');
-    await page.waitForFunction(() => [...document.querySelectorAll('[role="menuitem"]')].some(b => b.textContent.trim() === 'Open'));
+    await page.waitForFunction(() => [...document.querySelectorAll('[role="menuitem"]')].some(b => b.querySelector('.flex-1').textContent.trim() === 'Open'));
     assert.ok((await menuLabels()).includes('Duplicate'));
     assert.ok(!(await menuLabels()).includes('Upload'));
-    await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(b => b.textContent.trim() === 'Duplicate').click());
+    await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(b => b.querySelector('.flex-1').textContent.trim() === 'Duplicate').click());
     await page.waitForFunction(() => window.listingTest.ops.some(o => o.op === 'duplicate'));
     const duplicated = await page.evaluate(() => window.listingTest.ops.find(o => o.op === 'duplicate'));
     assert.equal(duplicated.path, '/links/linked-folder');
@@ -97,12 +97,12 @@ test('folder links: icon, sort, open, copy and delete', { timeout: 90000 }, asyn
 
     await page.evaluate(() => document.body.click());
     await openMenu('linked-folder');
-    await page.waitForFunction(() => [...document.querySelectorAll('[role="menuitem"]')].some(b => b.textContent.trim() === 'Delete'));
-    await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(b => b.textContent.trim() === 'Delete').click());
+    await page.waitForFunction(() => [...document.querySelectorAll('[role="menuitem"]')].some(b => b.querySelector('.flex-1').textContent.trim() === 'Delete'));
+    await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(b => b.querySelector('.flex-1').textContent.trim() === 'Delete').click());
     await page.waitForSelector('[role="dialog"]');
     const dialog = await page.$eval('[role="dialog"]', e => e.innerText);
-    assert.match(dialog, /Delete linked-folder/);
-    assert.doesNotMatch(dialog, /all its contents/, 'deleting a link does not offer to remove the folder');
+    assert.match(dialog, /linked-folder will be permanently deleted/);
+    assert.doesNotMatch(dialog, /everything in it/, 'deleting a link does not offer to remove the folder');
     await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find(b => b.textContent.trim() === 'Delete').click());
     await page.waitForFunction(() => window.listingTest.ops.some(o => o.op === 'remove'));
     const removed = await page.evaluate(() => window.listingTest.ops.find(o => o.op === 'remove'));

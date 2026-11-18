@@ -840,7 +840,7 @@ fn glob_rec(p: &[u8], t: &[u8]) -> bool {
 mod tests {
     use super::{apply_safety, is_excluded, sweep_delta_temps, SyncMode, SyncPair};
     use crate::sync::{self, SyncDirection, SyncStrategy};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU32, Ordering};
 
     fn ex(rel: &str, pats: &[&str]) -> bool {
@@ -884,7 +884,7 @@ mod tests {
         d
     }
 
-    fn write(root: &PathBuf, rel: &str, body: &str) {
+    fn write(root: &Path, rel: &str, body: &str) {
         let p = root.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, body).unwrap();
@@ -944,7 +944,7 @@ mod tests {
         }
     }
 
-    async fn plan_dirs(src: &PathBuf, dst: &PathBuf) -> sync::SyncPlan {
+    async fn plan_dirs(src: &Path, dst: &Path) -> sync::SyncPlan {
         let fs = crate::remotefs::local::LocalFs;
         sync::plan(
             &fs,

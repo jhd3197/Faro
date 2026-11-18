@@ -173,7 +173,7 @@ export function AgentDrawer() {
   return (
     <aside
       aria-label="Agent"
-      className="flex h-full w-[340px] shrink-0 flex-col border-l border-border bg-bg-panel"
+      className="flex h-full w-full min-w-0 flex-col bg-bg-panel"
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         <Radio size={13} className={status.running ? "text-accent" : "text-text-dim"} />

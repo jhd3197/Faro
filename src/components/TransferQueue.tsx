@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -10,14 +10,21 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Settings2,
 } from "lucide-react";
 import { useTransfers } from "@/stores/transfersStore";
+import { useLayout } from "@/stores/layoutStore";
+import { useSettings } from "@/stores/settingsStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import type { Transfer } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { fmtEta, fmtRate } from "@/lib/format";
+import { exactBytes } from "@faro/file-ui";
 import { toastError } from "@/lib/errors";
+import { Elapsed } from "./ui/Elapsed";
+import { ResizablePanel } from "./ResizablePanel";
 
-export function TransferQueue() {
+export function TransferQueue({ containerRef }: { containerRef: RefObject<HTMLElement | null> }) {
   const {
     byId,
     panelOpen,
@@ -37,6 +44,7 @@ export function TransferQueue() {
     retry,
     move,
   } = useTransfers();
+  const concurrency = useSettings((s) => s.transferConcurrency);
 
   useEffect(() => {
     // Listeners first, so a failed initial load can't leave the queue deaf
@@ -48,7 +56,7 @@ export function TransferQueue() {
       if (cancelled) u();
       else unsub = u;
     });
-    loadInitial().catch((e) => toastError(e, "Load transfers"));
+    loadInitial().catch((e) => toastError(e, "Couldn't load saved transfers"));
     return () => {
       cancelled = true;
       unsub?.();
@@ -68,7 +76,19 @@ export function TransferQueue() {
   );
 
   return (
-    <div className="anim-slide-up flex max-h-64 flex-col border-t border-border bg-bg-panel">
+    <ResizablePanel
+      id="transfers"
+      label="Transfers"
+      axis="y"
+      defaultSize={256}
+      min={96}
+      maxFraction={0.7}
+      collapsible={false}
+      fit="max"
+      containerRef={containerRef}
+      className="anim-slide-up"
+    >
+    <div className="flex min-h-0 flex-1 flex-col bg-bg-panel">
       <div className="flex items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1.5">
         <span className="text-xs font-semibold uppercase tracking-wider text-text-muted">
           Transfers
@@ -79,12 +99,21 @@ export function TransferQueue() {
           </span>
         )}
         {totalSpeed > 0 && (
-          <span className="text-[11px] text-text-muted" title="Combined speed of running transfers">
+          <span className="text-[11px] tabular-nums text-text-muted" title="Combined speed of running transfers">
             {fmtRate(totalSpeed)}
           </span>
         )}
         <div className="flex-1" />
         <ThrottleInput value={throttleKbps} onCommit={setThrottle} />
+        <button
+          onClick={() => useLayout.getState().openSettings(SETTINGS_ENTRY_POINTS.transferPanel)}
+          className="rounded p-1 text-text-muted hover:bg-bg-hover hover:text-text"
+          title={`Up to ${concurrency} at once. Change in Settings`}
+          aria-label="Change transfer limits in Settings"
+          data-transfer-settings-link
+        >
+          <Settings2 size={12} />
+        </button>
         <button
           onClick={() => (pausedAll ? resumeAll() : pauseAll())}
           className="rounded p-1 text-text-muted hover:bg-bg-hover hover:text-text"
@@ -133,6 +162,7 @@ export function TransferQueue() {
         ))}
       </div>
     </div>
+    </ResizablePanel>
   );
 }
 
@@ -257,8 +287,8 @@ function Row({
           </div>
         )}
       </div>
-      <div className="w-24 shrink-0 text-right text-[11px] text-text-muted">
-        <div>{fmtSize(t.transferred)}</div>
+      <div className="w-28 shrink-0 text-right text-[11px] tabular-nums text-text-muted">
+        <div title={exactBytes(t.transferred)}>{fmtSize(t.transferred)}</div>
         {t.status === "transferring" && !stalled && t.bytesPerSec !== undefined && (
           <div
             className="text-text-dim"
@@ -272,7 +302,17 @@ function Row({
             {t.etaSecs !== undefined && ` · ${fmtEta(t.etaSecs)}`}
           </div>
         )}
-        <div className={stalled ? "text-warning" : "text-text-dim"}>{statusLabel}</div>
+        <div className={stalled ? "text-warning" : "text-text-dim"}>
+          {statusLabel}
+          {/* From the stored start time, so closing and reopening the panel
+              keeps counting instead of starting over. */}
+          {t.status === "transferring" && t.startedAt > 0 && (
+            <>
+              {" · "}
+              <Elapsed since={t.startedAt} />
+            </>
+          )}
+        </div>
       </div>
       {t.status === "queued" && queuePos >= 0 && (
         <>

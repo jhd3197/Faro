@@ -19,7 +19,7 @@ import { useDiff } from "@/stores/diffStore";
 import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { toast } from "@/stores/toastStore";
-import { LOCAL_SESSION } from "@faro/file-ui";
+import { LOCAL_SESSION, isComposing } from "@faro/file-ui";
 import { ipc } from "@/lib/ipc";
 import type { DiffClass, DiffEntry, SessionId } from "@/lib/types";
 import { fmtSize } from "@/lib/format";
@@ -116,7 +116,7 @@ function DirectoryDiff() {
 
   const copyPath = (path: string) => {
     navigator.clipboard.writeText(path);
-    toast.info("Path copied", path);
+    toast.info("Path copied", path, undefined, { log: false });
   };
 
   // Copy-across reuses the local↔remote transfer engine, so it needs exactly
@@ -194,7 +194,7 @@ function DirectoryDiff() {
             value={sideB.path}
             onChange={(e) => setSideB({ path: e.target.value })}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && sidesReady && !comparing) void run();
+              if (e.key === "Enter" && !isComposing(e) && sidesReady && !comparing) void run();
             }}
             disabled={comparing}
             spellCheck={false}

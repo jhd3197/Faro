@@ -39,7 +39,7 @@ function RootStep({ profile, plan }: { profile: ConnectionProfile; plan: CfInvit
   const copy = () =>
     navigator.clipboard
       .writeText(plan.rootCommand)
-      .then(() => toast.success("Command copied", `Paste it into a root console on ${profile.name}.`));
+      .then(() => toast.success("Command copied", `Paste it into a root console on ${profile.name}.`, undefined, { log: false }));
   return (
     <div className="rounded-md border border-border px-2.5 py-2" data-testid="invite-root-step">
       <div className="mb-1 flex items-center gap-1.5 text-[11.5px] text-text">
@@ -149,7 +149,7 @@ export function InviteDialog({ ids, onClose }: Props) {
   const copyLink = (p: ConnectionProfile) =>
     navigator.clipboard
       .writeText(connectLink(p))
-      .then(() => toast.success("Invite link copied", "Send it to them; it carries no password or key."));
+      .then(() => toast.success("Invite link copied", "Send it to them; it carries no password or key.", undefined, { log: false }));
 
   const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 

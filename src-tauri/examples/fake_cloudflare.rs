@@ -212,7 +212,7 @@ fn handle(fake: &Fake, method: &str, path: &str, query: &str, auth: &str, body: 
                     query.split('&').all(|q| match q.split_once('=') {
                         Some(("name", v)) => i["name"] == v,
                         Some(("account.id", v)) => i["account"]["id"] == v,
-                        Some(("is_deleted", "false")) => i.get("deleted_at").map_or(true, Value::is_null),
+                        Some(("is_deleted", "false")) => i.get("deleted_at").is_none_or(Value::is_null),
                         _ => true,
                     })
                 })

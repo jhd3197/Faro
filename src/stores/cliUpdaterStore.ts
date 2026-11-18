@@ -42,7 +42,7 @@ export const useCliUpdater = create<CliUpdaterState>((set, get) => ({
       const status = await ipc.cliUpdaterCheck();
       set({ status });
     } catch (e) {
-      toast.error(`CLI check failed: ${e}`);
+      toast.error("Couldn't check faro-cli", String(e), undefined, { id: "cli-check", detail: String(e) });
     }
   },
 
@@ -54,7 +54,7 @@ export const useCliUpdater = create<CliUpdaterState>((set, get) => ({
       set({ status, dismissed: true });
       toast.success(status.message ?? "faro-cli updated");
     } catch (e) {
-      toast.error(`faro-cli update failed: ${e}`);
+      toast.error("Couldn't update faro-cli", String(e), undefined, { id: "cli-update", detail: String(e) });
     } finally {
       set({ busy: false });
     }
@@ -66,7 +66,7 @@ export const useCliUpdater = create<CliUpdaterState>((set, get) => ({
       const status = await ipc.cliUpdaterSetMode(mode);
       set({ status });
     } catch (e) {
-      toast.error(`Couldn't change setting: ${e}`);
+      toast.error("Couldn't change the faro-cli update setting", String(e), undefined, { detail: String(e) });
     } finally {
       set({ busy: false });
     }

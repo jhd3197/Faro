@@ -3,6 +3,7 @@ import { Activity, Loader2, MonitorOff, X } from "lucide-react";
 import { useServerView, type ServerTab } from "@/stores/serverViewStore";
 import { useConnections } from "@/stores/connectionsStore";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Deferred } from "@faro/file-ui";
 import { cn } from "@/lib/cn";
 import type { HostProbe } from "@/lib/types";
 import { OverviewTab } from "./server/OverviewTab";
@@ -140,10 +141,12 @@ function ServerView() {
       </div>
 
       {probing && (
-        <div className="flex flex-1 items-center justify-center gap-2 text-xs text-text-muted">
-          <Loader2 size={14} className="animate-spin text-accent" />
-          Checking what this server offers…
-        </div>
+        <Deferred>
+          <div className="flex flex-1 items-center justify-center gap-2 text-xs text-text-muted">
+            <Loader2 size={14} className="animate-spin text-accent" />
+            Checking what this server offers…
+          </div>
+        </Deferred>
       )}
 
       {probeError && (

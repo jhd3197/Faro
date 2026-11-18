@@ -86,6 +86,8 @@ test('Server view: live charts, probe-driven tabs, sampler lifecycle, confirmed 
     assert.deepEqual((await calls()).actions[0], { unit: 'nginx.service', action: 'restart', elevate: 'sudo' });
 
     // --- Logs drawer: the unit's journal, followed live (Plan 31).
+    // The service list re-renders after the restart; wait for the row again.
+    await page.waitForSelector('button[aria-label="Logs for nginx.service"]');
     await page.click('button[aria-label="Logs for nginx.service"]');
     await page.waitForFunction(() => document.querySelector('aside[aria-label="Logs for nginx.service"] .xterm-rows')?.innerText.includes('nginx: handled request'));
 

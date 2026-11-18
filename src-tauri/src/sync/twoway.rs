@@ -71,6 +71,27 @@ pub fn choice_key(pair: &str, relative: &str) -> String {
     format!("two-way:{pair}:choice:{:x}", Sha256::digest(relative.as_bytes()))
 }
 
+/// Inspect without following directory symlinks; missing ancestors mean absent.
+pub async fn check_source(fs: &dyn crate::remotefs::RemoteFs, root: &str, path: &str, expected: Option<&FileState>) -> anyhow::Result<()> {
+    super::recovery::validate_relative(path)?;
+    let parts: Vec<_> = path.split('/').collect();
+    let mut parent = root.to_string();
+    let mut found = None;
+    for (i, part) in parts.iter().enumerate() {
+        let entries = fs.list_dir(&parent).await?;
+        let Some(entry) = entries.iter().find(|e| e.name == *part) else { break; };
+        if i + 1 == parts.len() {
+            anyhow::ensure!(entry.kind == crate::remotefs::FileKind::File, "Sync source changed type; re-plan");
+            found = Some(FileState { size: entry.size, modified: entry.modified.unwrap_or(0), etag: entry.etag.clone() });
+        } else {
+            anyhow::ensure!(entry.kind == crate::remotefs::FileKind::Directory, "Sync source parent changed type; re-plan");
+            parent = super::join(&parent, part);
+        }
+    }
+    anyhow::ensure!(found.as_ref() == expected, "Sync source changed since planning; retry before replacing or deleting another version");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,25 +136,4 @@ mod tests {
         assert_eq!(decide(&before, None, true), Decision::Conflict);
         assert_eq!(decide(&before, Some(&before), true), Decision::Unchanged);
     }
-}
-
-/// Inspect without following directory symlinks; missing ancestors mean absent.
-pub async fn check_source(fs: &dyn crate::remotefs::RemoteFs, root: &str, path: &str, expected: Option<&FileState>) -> anyhow::Result<()> {
-    super::recovery::validate_relative(path)?;
-    let parts: Vec<_> = path.split('/').collect();
-    let mut parent = root.to_string();
-    let mut found = None;
-    for (i, part) in parts.iter().enumerate() {
-        let entries = fs.list_dir(&parent).await?;
-        let Some(entry) = entries.iter().find(|e| e.name == *part) else { break; };
-        if i + 1 == parts.len() {
-            anyhow::ensure!(entry.kind == crate::remotefs::FileKind::File, "Sync source changed type; re-plan");
-            found = Some(FileState { size: entry.size, modified: entry.modified.unwrap_or(0), etag: entry.etag.clone() });
-        } else {
-            anyhow::ensure!(entry.kind == crate::remotefs::FileKind::Directory, "Sync source parent changed type; re-plan");
-            parent = super::join(&parent, part);
-        }
-    }
-    anyhow::ensure!(found.as_ref() == expected, "Sync source changed since planning; retry before replacing or deleting another version");
-    Ok(())
 }

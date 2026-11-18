@@ -226,14 +226,14 @@ export function MoveToCloudflareDialog({ profileId, onClose }: Props) {
       if (failed.length) toast.warning("Undo left some things behind", failed.join("\n"));
       else toast.success("Undone", `Everything Faro created in Cloudflare was deleted.${serverNote}`);
     } catch (e) {
-      toastError(e, "Undo failed");
+      toastError(e, "Couldn't undo the Cloudflare setup");
     } finally {
       setBusy(false);
     }
   };
 
   const copy = (text: string, what: string) =>
-    navigator.clipboard.writeText(text).then(() => toast.success(`${what} copied`));
+    navigator.clipboard.writeText(text).then(() => toast.success(`${what} copied`, undefined, undefined, { log: false }));
 
   const order: Step[] = ["form", "cloudflare", "server", "connect", "ports", "done"];
   const at = order.indexOf(step);

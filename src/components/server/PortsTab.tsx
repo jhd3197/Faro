@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ipc } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import type { ListeningPort } from "@/lib/types";
+import { useConnections } from "@/stores/connectionsStore";
+import { nudgeId, useNudgeDismissed, useNudges } from "@/stores/nudgeStore";
 import {
   AskSudoButton,
   FilterInput,
@@ -31,6 +33,10 @@ export function PortsTab() {
   const [filter, setFilter] = useState("");
   const [askSudo, setAskSudo] = useState(false);
   const tool = probe?.ports;
+  // "Needs root" is remembered per server: hiding it on one keeps it elsewhere.
+  const profileId = useConnections((s) => s.sessions.find((x) => x.sessionId === sessionId)?.profileId);
+  const rootNudge = profileId ? nudgeId("ports-root", profileId) : null;
+  const rootNudgeDismissed = useNudgeDismissed(rootNudge);
 
   // Elevated reads are logged by sudo on the server, so this tab loads when
   // opened and on Refresh, not on a timer.
@@ -80,8 +86,11 @@ export function PortsTab() {
 
       {error && <Notice tone="error">{error}</Notice>}
       {note && <Notice>{note}</Notice>}
-      {!root && unnamed && (
-        <Notice action={canAsk ? <AskSudoButton onClick={() => setAskSudo(true)} /> : undefined}>
+      {!root && unnamed && !rootNudgeDismissed && (
+        <Notice
+          action={canAsk ? <AskSudoButton onClick={() => setAskSudo(true)} /> : undefined}
+          onDismiss={rootNudge ? () => useNudges.getState().dismiss(rootNudge) : undefined}
+        >
           Sockets owned by other users show no process name without root.
         </Notice>
       )}

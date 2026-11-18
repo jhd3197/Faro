@@ -2,6 +2,7 @@
 // data so the whole UI renders populated without the Rust backend. Unhandled
 // commands resolve to null, which is harmless for the screens we capture.
 import * as data from "./data";
+import * as vfs from "./vfs";
 import * as transfers from "./transfers";
 import * as sysmon from "./sysmon";
 import * as docker from "./docker";
@@ -63,6 +64,13 @@ function pathStatus() {
     detail: null as string | null,
   };
 }
+
+// Settings › Storage demo sizes. Clearing zeroes one until the page reloads.
+const mockCaches: Record<string, { bytes: number; items: number }> = {
+  thumbnails: { bytes: 48_734_208, items: 1_204 },
+  transferResume: { bytes: 734_003_200, items: 2 },
+  editCopies: { bytes: 2_621_440, items: 3 },
+};
 
 // Demo Access forwards. postgres and admin start listening; redis reports a
 // port conflict so the rail can show that state.
@@ -163,7 +171,9 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "settings_get_all":
       return JSON.parse(sessionStorage.getItem("faro-mock-discovery") ?? '{"discoverySeenVersion":"1.3.22"}');
     case "settings_set": {
-      if (String(a.key).startsWith("discovery")) {
+      // Rows the demo keeps across reloads (in this tab): discovery state and
+      // the restored-session/window rows the restore test reads back.
+      if (String(a.key).startsWith("discovery") || ["sessionSnapshot", "windowBackground", "palette.recent", "layout.panels"].includes(String(a.key))) {
         const settings = JSON.parse(sessionStorage.getItem("faro-mock-discovery") ?? '{"discoverySeenVersion":"1.3.22"}');
         settings[a.key] = a.value;
         sessionStorage.setItem("faro-mock-discovery", JSON.stringify(settings));
@@ -240,9 +250,11 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
 
     // ---- files ----
     case "list_directory":
-      return data.listDir(a.sessionId, a.path);
+      return vfs.list(a.sessionId, a.path);
     case "browse_directory":
-      return { entries: data.listDir(a.sessionId, a.path), skippedEntries: 0 };
+      // window.__listDelay (ms) slows listings so the deferred skeleton shows.
+      { const ms = Number((window as unknown as { __listDelay?: number }).__listDelay) || 0; if (ms) await new Promise((r) => setTimeout(r, ms)); }
+      return { entries: vfs.list(a.sessionId, a.path), skippedEntries: 0 };
     case "capabilities":
       return data.capabilities(a.sessionId);
     case "read_file_preview":
@@ -257,11 +269,26 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       // A valid 8×8 RGBA PNG so the mock harness can exercise the remote-preview
       // UI (toggle → thumbnail render → downscale) without a real backend.
       return "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAANElEQVR42n3EQQEAEAAEwY0jhBDe3kIIIYQQQmjFJdjHDKXfZ6jJ0JJhJMNMhpUMOxlOMh/OWKPBK+ZUdQAAAABJRU5ErkJggg==";
+    case "cache_usage":
+      return Object.entries(mockCaches).map(([id, c]) => ({ id, ...c }));
+    case "cache_clear": {
+      const c = mockCaches[String(a.id)];
+      if (!c) throw new Error(`unknown cache ${a.id}`);
+      c.bytes = 0;
+      c.items = 0;
+      return { id: a.id, ...c };
+    }
     case "rename_path":
+      return vfs.rename(a.sessionId, a.from, a.to), null;
     case "delete_path":
+      return vfs.remove(a.sessionId, a.path), null;
     case "create_directory":
-    case "chmod_path":
+      return vfs.mkdir(a.sessionId, a.path), null;
     case "duplicate_path":
+      return vfs.duplicate(a.sessionId, a.path), null;
+    case "copy_path":
+      return vfs.copy(a.sessionId, a.from, a.to), null;
+    case "chmod_path":
       return null;
     case "start_archive_download":
       return "t-archive";
@@ -326,6 +353,13 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     }
     case "start_upload":
       return transfers.start("upload", a.localPath, a.remoteDir);
+    case "inspect_upload_paths":
+      // What an upload would send: one entry per picked path (a name with an
+      // extension is a file, anything else a folder).
+      return (a.paths as string[]).map((p) => {
+        const dir = !/\.[^\\/.]+$/.test(p);
+        return { path: p, kind: dir ? "directory" : "file", files: dir ? 0 : 1, directories: dir ? 1 : 0, directoryPaths: [], fingerprint: `mock:${p}`, size: dir ? 0 : 1204 };
+      });
     case "start_archive":
       return "t-new";
     case "start_directory_download":
@@ -522,6 +556,23 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       // `window.__diag = "auth"` makes the check fail at sign-in (screenshots).
       const diag = (window as unknown as { __diag?: string }).__diag;
       await new Promise((r) => setTimeout(r, diag ? 900 : 0));
+      // `"long"`: a multi-line failure, for the Show more toggle.
+      if (diag === "long")
+        return {
+          ok: false,
+          steps: [
+            {
+              label: "Destination connection and sign-in",
+              ok: false,
+              detail:
+                "ssh: handshake failed: no matching host key type found. Their offer: ssh-rsa,ssh-dss\n" +
+                "Tried: C:\\Users\\demo\\.ssh\\id_ed25519, C:\\Users\\demo\\.ssh\\id_rsa, agent (2 keys)\n" +
+                "Server said: Permission denied (publickey,password).\n" +
+                "The server only offers legacy host key types. Enable ssh-rsa for this host in the connection's Advanced settings, or update the server's sshd_config.",
+              elapsedMs: 1412,
+            },
+          ],
+        };
       if (diag === "auth")
         return {
           ok: false,

@@ -4,7 +4,7 @@
 // wrap the tree in <FileUiProvider>, and render <FilePane>. The components never
 // import a transport — they talk only to the injected adapter.
 
-export { FilePane } from "./components/FilePane";
+export { FilePane, type FocusedFileItem } from "./components/FilePane";
 export { FileUiProvider, useFileUi } from "./context";
 export type {
   FileSystemAdapter,
@@ -38,14 +38,48 @@ export { materialIconUrl } from "./lib/materialIcons";
 export {
   DEFAULT_FILE_BROWSER_KEYBINDINGS,
   comboFromEvent,
+  formatCombo,
+  isMacPlatform,
+  isComposing,
+  shouldConfirmOnEnter,
   type FileBrowserAction,
 } from "./lib/keys";
+export { InlineRename } from "./components/InlineRename";
 
 // Hooks + utils.
 export { usePathHistory } from "./hooks/usePathHistory";
 export { useDialog } from "./hooks/useDialog";
+export {
+  useDeferredLoading,
+  Deferred,
+  LOADING_DELAY_MS,
+  NOT_FOUND_DELAY_MS,
+} from "./hooks/useDeferredLoading";
 export { cn } from "./lib/cn";
+export {
+  DEFAULT_COLUMN_WIDTHS,
+  COLUMN_MIN_PX,
+  resizeColumns,
+  columnTemplate,
+  type ColumnId,
+  type ColumnWidths,
+} from "./lib/columns";
 export { fmtSize, fmtMtime, formatMode } from "./lib/format";
+export {
+  baseName,
+  parentOf,
+  joinPath,
+  samePath,
+  isSameOrInside,
+  pasteProblem,
+  uniqueName,
+  renameClash,
+  isCaseOnlyRename,
+  describeKinds,
+  describeItems,
+  exactBytes,
+} from "./lib/fileOps";
+export { getFileClipboard, setFileClipboard, type FileClipboard } from "./lib/fileClipboard";
 
 // Types.
 export {

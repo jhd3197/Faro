@@ -21,11 +21,17 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Search,
   Fullscreen,
   Focus,
   PanelRight,
   Activity,
+  PanelLeft,
 } from "lucide-react";
 import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
 import { useConnections } from "@/stores/connectionsStore";
@@ -38,10 +44,13 @@ import {
 } from "@/stores/settingsStore";
 import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
-import { useTerminals } from "@/stores/terminalsStore";
+import { useTerminals, sessionTabsOf } from "@/stores/terminalsStore";
 import { useServerView } from "@/stores/serverViewStore";
-import { TERMINAL_CHORDS } from "@/lib/terminalChords";
+import { TERMINAL_CHORDS, termTabCommandId } from "@/lib/terminalChords";
 import { SETTINGS_SECTIONS, settingsCommandId } from "@/lib/settingsNav";
+import { COMMAND_COMBOS } from "@/lib/bindingCatalog";
+import { useFocusedItem } from "@/stores/focusStore";
+import { toast } from "@/stores/toastStore";
 
 export interface Command {
   id: string;
@@ -51,6 +60,8 @@ export interface Command {
   combo?: string; // canonical, e.g. "mod+t"
   keywords?: string;
   enabled?: boolean; // default true
+  /** Listed in Settings › Keyboard even without a default combo. */
+  bindable?: boolean;
   run: () => void;
 }
 
@@ -86,6 +97,16 @@ export function useCommands(): Command[] {
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const supportsTerminal = activeProfile?.protocol === "sftp";
   const serverViewOpen = useServerView((s) => s.open);
+  const railExpanded = useSettings((s) => s.railExpanded);
+  const setRailExpanded = useSettings((s) => s.setRailExpanded);
+  const focused = useFocusedItem((s) => s.item);
+  const focusedSession = focused?.kind === "file" ? focused.sessionId : null;
+  const sessions = useConnections((s) => s.sessions);
+  const focusedProfileId = sessions.find((x) => x.sessionId === focusedSession)?.profileId;
+  const focusedShell =
+    focused?.kind === "file" &&
+    focused.isDir &&
+    profiles.find((p) => p.id === focusedProfileId)?.protocol === "sftp";
 
   const cmds: Command[] = [
     {
@@ -202,9 +223,33 @@ export function useCommands(): Command[] {
       title: "Toggle Terminal",
       group: "View",
       icon: <TerminalSquare size={14} />,
-      combo: "mod+`",
+      combo: COMMAND_COMBOS["toggle-terminal"],
       enabled: !!activeSessionId && supportsTerminal,
       run: toggleTerminal,
+    },
+    {
+      id: "open-terminal-here",
+      title: "Open Terminal in Focused Folder",
+      group: "View",
+      icon: <TerminalSquare size={14} />,
+      keywords: "terminal shell here cd folder focused",
+      bindable: true,
+      enabled: !!focusedShell,
+      run: () => {
+        if (focused?.kind !== "file" || !focused.isDir) return;
+        useLayout.getState().setTerminalOpen(true);
+        const quoted = "'" + focused.path.replace(/'/g, "'\\''") + "'";
+        useTerminals.getState().openTab(focused.sessionId, `cd ${quoted}\n`);
+      },
+    },
+    {
+      id: "toggle-rail",
+      title: railExpanded ? "Collapse Server Rail" : "Expand Server Rail",
+      group: "View",
+      icon: <PanelLeft size={14} />,
+      combo: COMMAND_COMBOS["toggle-rail"],
+      keywords: "rail sidebar servers collapse expand pin",
+      run: () => setRailExpanded(!railExpanded),
     },
     {
       id: "server-view",
@@ -253,7 +298,7 @@ export function useCommands(): Command[] {
       group: "View",
       icon: <SunMoon size={14} />,
       combo: "mod+shift+t",
-      run: () => setAppTheme(appTheme === "light" ? "dark" : "light"),
+      run: () => useSettings.getState().toggleLightDark(),
     },
     {
       id: "zoom-in",
@@ -344,6 +389,97 @@ export function useCommands(): Command[] {
     }
   );
 
+  // Terminal tab strip: reopen, jump, cycle, move. Same rule as the split
+  // chords — live only while the terminal is on screen, and kept from the
+  // shell by terminalChords.
+  const strip = () => {
+    const t = useTerminals.getState();
+    const tabs = activeSessionId ? sessionTabsOf(t.tabs, activeSessionId) : [];
+    return { t, tabs, at: tabs.findIndex((x) => x.id === t.activeId) };
+  };
+  const goTo = (pick: (n: number, at: number) => number) => {
+    const { t, tabs, at } = strip();
+    if (tabs.length === 0) return;
+    const tab = tabs[pick(tabs.length, at)];
+    if (tab) t.setActive(tab.id);
+  };
+  const shift = (by: number) => {
+    const { t, tabs, at } = strip();
+    if (at >= 0) t.moveTab(tabs[at].id, at + by);
+  };
+  cmds.push({
+    id: "term-reopen-tab",
+    title: "Terminal: Reopen closed tab",
+    group: "Terminal",
+    icon: <RotateCcw size={14} />,
+    combo: TERMINAL_CHORDS.reopenTab,
+    keywords: "undo close restore tab shell",
+    enabled: terminalActive,
+    run: () => {
+      if (!activeSessionId) return;
+      const tab = useTerminals.getState().reopenClosed(activeSessionId);
+      if (!tab) toast.info("No closed tabs to reopen");
+    },
+  });
+  for (let n = 1; n <= 8; n++) {
+    cmds.push({
+      id: termTabCommandId(n),
+      title: `Terminal: Go to tab ${n}`,
+      group: "Terminal",
+      icon: <TerminalSquare size={14} />,
+      combo: `mod+${n}`,
+      enabled: terminalActive,
+      run: () => goTo((len) => (n <= len ? n - 1 : -1)),
+    });
+  }
+  cmds.push(
+    {
+      id: "term-tab-last",
+      title: "Terminal: Go to last tab",
+      group: "Terminal",
+      icon: <TerminalSquare size={14} />,
+      combo: TERMINAL_CHORDS.lastTab,
+      enabled: terminalActive,
+      run: () => goTo((len) => len - 1),
+    },
+    {
+      id: "term-tab-prev",
+      title: "Terminal: Previous tab",
+      group: "Terminal",
+      icon: <ChevronLeft size={14} />,
+      combo: TERMINAL_CHORDS.prevTab,
+      enabled: terminalActive,
+      run: () => goTo((len, at) => (at - 1 + len) % len),
+    },
+    {
+      id: "term-tab-next",
+      title: "Terminal: Next tab",
+      group: "Terminal",
+      icon: <ChevronRight size={14} />,
+      combo: TERMINAL_CHORDS.nextTab,
+      enabled: terminalActive,
+      run: () => goTo((len, at) => (at + 1) % len),
+    },
+    {
+      id: "term-tab-move-left",
+      title: "Terminal: Move tab left",
+      group: "Terminal",
+      icon: <ChevronsLeft size={14} />,
+      bindable: true,
+      enabled: terminalActive,
+      run: () => shift(-1),
+    },
+    {
+      id: "term-tab-move-right",
+      title: "Terminal: Move tab right",
+      group: "Terminal",
+      icon: <ChevronsRight size={14} />,
+      bindable: true,
+      enabled: terminalActive,
+      run: () => shift(1),
+    }
+  );
+
   if (activeSessionId) {
     cmds.push({
       id: "disconnect",
@@ -357,7 +493,7 @@ export function useCommands(): Command[] {
       title: "Reconnect",
       group: "Connection",
       icon: <RefreshCw size={14} />,
-      combo: "mod+shift+r",
+      combo: COMMAND_COMBOS.reconnect,
       run: () => reconnect().catch(() => {}),
     });
   }

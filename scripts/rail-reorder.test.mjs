@@ -47,7 +47,12 @@ test('sidebar order works without native browser drag events', { timeout: 120000
     await t.test('actual pointer drag changes protocol/alphabetic order and survives reload', async () => {
       await drag('p-ftp', row('p-api'));
       assert.equal((await order())[0], 'p-ftp');
-      assert.equal(await page.evaluate(() => window.railTest.reorderCalls), 1);
+      // One drop = one organize write, carrying the new on-screen order.
+      assert.equal(await page.evaluate(() => window.railTest.organizeCalls), 1);
+      const [write] = await page.evaluate(() => window.railTest.organizeLog);
+      const written = write.filter(c => c.sortOrder !== undefined).sort((a, b) => a.sortOrder - b.sortOrder).map(c => c.id);
+      assert.deepEqual(written, await order());
+      assert.equal(write.find(c => c.id === 'p-ftp').group, undefined);
       assert.equal(await page.evaluate(() => window.railTest.nativeDragStarts), 0);
       assert.equal(await page.$('[role="menu"]'), null, 'releasing a drag must not click the server');
       await page.reload();
@@ -82,15 +87,20 @@ test('sidebar order works without native browser drag events', { timeout: 120000
 
     await t.test('failed persistence restores saved order and reports the error', async () => {
       const before = await order();
-      await page.evaluate(() => { window.railTest.failReorder = true; });
+      const history = await page.evaluate(() => window.railTest.useConnections.getState().organizationHistory.length);
+      await page.evaluate(() => { window.railTest.failOrganize = true; });
       await drag('p-ftp', row('p-api'), 0.8);
       assert.deepEqual(await order(), before);
-      await page.waitForFunction(() => document.body.innerText.includes("Couldn't save server order"));
-      await page.evaluate(() => { window.railTest.failReorder = false; });
+      await page.waitForFunction(() => document.body.innerText.includes("Couldn't update organization"));
+      // Nothing was saved, so there is nothing to undo.
+      assert.equal(await page.evaluate(() => window.railTest.useConnections.getState().organizationHistory.length), history);
+      await page.evaluate(() => { window.railTest.failOrganize = false; });
     });
 
     await t.test('move up/down options offer a keyboard alternative', async () => {
       await page.click(`${row('p-ftp')} button`, { button: 'right' });
+      await clickText('Organize');
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Move down'));
       await clickText('Move down');
       await page.waitForFunction(() => !window.railTest.useConnections.getState().reordering);
       assert.deepEqual((await order()).slice(0, 2), ['p-api', 'p-ftp']);
@@ -121,10 +131,11 @@ test('sidebar order works without native browser drag events', { timeout: 120000
       await page.evaluate(async () => {
         const c = window.railTest.useConnections.getState();
         const template = c.profiles.find(p => p.id === 'p-api');
-        await c.saveProfiles(Array.from({ length: 25 }, (_, i) => ({ ...template, id: `extra-${i}`, name: `Server ${i}`, autoConnect: false, sortOrder: 100 + i })));
+        // New profiles are created with saveProfile; saveProfiles only re-files existing ones.
+        for (let i = 0; i < 25; i++) await c.saveProfile({ ...template, id: `extra-${i}`, name: `Server ${i}`, autoConnect: false, sortOrder: 100 + i });
       });
       await page.$eval('[data-rail-scroll]', e => { e.scrollTop = 0; });
-      const before = await page.evaluate(() => window.railTest.reorderCalls);
+      const before = await page.evaluate(() => window.railTest.organizeCalls);
       const source = await box(row('p-ftp'));
       const area = await box('[data-rail-scroll]');
       await page.mouse.move(source.x + 24, source.y + 20);
@@ -133,7 +144,7 @@ test('sidebar order works without native browser drag events', { timeout: 120000
       await page.waitForFunction(() => document.querySelector('[data-rail-scroll]').scrollTop > 150);
       await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1 })));
       await page.mouse.up();
-      assert.equal(await page.evaluate(() => window.railTest.reorderCalls), before);
+      assert.equal(await page.evaluate(() => window.railTest.organizeCalls), before);
       assert.equal(await page.evaluate(() => document.body.style.userSelect), '');
     });
     assert.deepEqual(errors, []);

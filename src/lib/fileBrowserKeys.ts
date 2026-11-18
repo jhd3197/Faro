@@ -32,17 +32,29 @@ export const FILE_BROWSER_KEYS: FileBrowserKeySpec[] = [
   { id: "fb.quickInfo", action: "quickInfo", title: "Quick info (properties)", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.quickInfo },
   { id: "fb.newFolder", action: "newFolder", title: "New folder", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.newFolder },
   { id: "fb.refresh", action: "refresh", title: "Refresh", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.refresh },
+  { id: "fb.back", action: "back", title: "Back", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.back },
+  { id: "fb.forward", action: "forward", title: "Forward", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.forward },
+  { id: "fb.focusPath", action: "focusPath", title: "Edit the folder path", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.focusPath },
+  { id: "fb.focusFilter", action: "focusFilter", title: "Filter this folder", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.focusFilter },
+  { id: "fb.copy", action: "copy", title: "Copy selected files", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.copy },
+  { id: "fb.cut", action: "cut", title: "Cut selected files", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.cut },
+  { id: "fb.paste", action: "paste", title: "Paste files here", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.paste },
 ];
 
 /** Compute the effective per-action combo map for <FilePane>. An unbound action
  *  (`effectiveCombo` → undefined) is passed as "" so the pane's default doesn't
  *  quietly re-apply. */
 export function fileBrowserKeyBindings(
-  overrides: Record<string, string>
+  overrides: Record<string, string>,
+  enabled = true
 ): Partial<Record<FileBrowserAction, string>> {
   const out: Partial<Record<FileBrowserAction, string>> = {};
   for (const spec of FILE_BROWSER_KEYS) {
-    out[spec.action] = effectiveCombo(spec.id, spec.defaultCombo, overrides) ?? "";
+    // Shortcuts off: every action unbound, so the pane binds nothing and its
+    // menus show no hints.
+    out[spec.action] = enabled
+      ? effectiveCombo(spec.id, spec.defaultCombo, overrides) ?? ""
+      : "";
   }
   return out;
 }
@@ -51,5 +63,6 @@ export function useFileBrowserKeyBindings(): Partial<
   Record<FileBrowserAction, string>
 > {
   const overrides = useBindings((s) => s.overrides);
-  return useMemo(() => fileBrowserKeyBindings(overrides), [overrides]);
+  const enabled = useBindings((s) => s.enabled);
+  return useMemo(() => fileBrowserKeyBindings(overrides, enabled), [overrides, enabled]);
 }

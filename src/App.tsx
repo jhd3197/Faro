@@ -1,16 +1,17 @@
 import { UploadReports } from "./components/UploadReports";
 import { DiscoveryDialog } from "./components/DiscoveryDialog";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { TipStrip } from "./components/TipStrip";
 import { useDiscovery } from "./stores/discoveryStore";
 import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { ServerRail } from "./components/ServerRail";
 import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
 import { FileUiBridge } from "./components/FileUiBridge";
 import { TerminalDock } from "./components/Terminal";
 import { TransferQueue } from "./components/TransferQueue";
+import { ResizablePanel } from "./components/ResizablePanel";
 import { CliUpdatePrompt } from "./components/CliUpdatePrompt";
 import { UpdatePrompt } from "./components/UpdatePrompt";
 import { Settings } from "./components/Settings";
@@ -49,7 +50,7 @@ import {
   ArrowUpCircle,
 } from "lucide-react";
 import { useEditor } from "./stores/editorStore";
-import { followToastAction, toast, useToasts, type Toast, type ToastVariant } from "./stores/toastStore";
+import { followToastAction, toast, toastDetails, unseenErrors, useToasts, type Toast, type ToastVariant } from "./stores/toastStore";
 import { CopyTextButton, notificationText } from "./components/ui/CopyText";
 import { useBridge } from "./stores/bridgeStore";
 import { useSync } from "./stores/syncStore";
@@ -64,6 +65,7 @@ import { useSites } from "./stores/sitesStore";
 import type { DeepLink, Protocol, ConnectionProfile } from "./lib/types";
 import { PROTOCOL_DEFAULT_PORT } from "./lib/types";
 import { Toaster } from "./components/ui/Toaster";
+import { Popover } from "./components/ui/Popover";
 import { OverwriteDialogHost } from "./components/OverwriteModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { KeyboardShortcutsDialog } from "./components/KeyboardShortcutsDialog";
@@ -86,6 +88,8 @@ import { formatCombo } from "./lib/shortcuts";
 import { toggleZen } from "./lib/windowMode";
 import { relTime } from "./lib/format";
 import { cn } from "./lib/cn";
+import { QuitGate } from "./components/QuitGate";
+import { useSession } from "./stores/sessionStore";
 
 export default function App() {
   const activeSessionId = useConnections((s) => s.activeSessionId);
@@ -94,6 +98,9 @@ export default function App() {
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const supportsTerminal = activeProfile?.protocol === "sftp";
 
+  // Containers the docked panels measure against (their size caps).
+  const columnRef = useRef<HTMLDivElement>(null);
+  const workRowRef = useRef<HTMLDivElement>(null);
   const terminalOpen = useLayout((s) => s.terminalOpen);
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
   const terminalVisible = !!activeSessionId && terminalOpen && supportsTerminal;
@@ -123,6 +130,10 @@ export default function App() {
   useShortcuts();
 
   useEffect(() => { void useDiscovery.getState().init(); }, []);
+
+  // Pick up where the last run left off (focused server, split, Settings
+  // section). Saving the session snapshot starts only after this finishes.
+  useEffect(() => { void useSession.getState().restore(); }, []);
 
   // Boot the Folder Sync store: fetch the current pairs and attach the
   // "foldersync://changed" listener so background syncs keep the UI live.
@@ -176,8 +187,16 @@ export default function App() {
     <div className="flex h-screen w-screen flex-col">
       {zen ? <ZenExit /> : <TitleBar />}
       <DeepLinkListener />
-      {(dialog === "welcome" || dialog === "whatsNew") && <DiscoveryDialog key={dialog} mode={dialog} />}
-      {dialog === "settings" && <Settings onClose={closeDialog} />}
+      {(dialog === "welcome" || dialog === "whatsNew") && (
+        <ErrorBoundary region={dialog === "welcome" ? "Welcome" : "What's new"} className="fixed inset-0 z-modal bg-black/60">
+          <DiscoveryDialog key={dialog} mode={dialog} />
+        </ErrorBoundary>
+      )}
+      {dialog === "settings" && (
+        <ErrorBoundary region="Settings" className="fixed inset-0 z-modal bg-black/60">
+          <Settings onClose={closeDialog} />
+        </ErrorBoundary>
+      )}
       {dialog === "newConnection" && (
         <ProfileEditor
           profile={null}
@@ -198,6 +217,7 @@ export default function App() {
       <HostKeyModal />
       <AuthPromptModal />
       <Toaster />
+      <QuitGate />
       <AgentBridgeHost />
       <OverwriteDialogHost />
       <DirectoryDiffHost />
@@ -209,13 +229,15 @@ export default function App() {
       <KeyboardShortcutsDialog />
       <div className="flex flex-1 overflow-hidden">
         {!zen && <ServerRail />}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="relative flex flex-1 overflow-hidden">
+        <div ref={columnRef} className="flex min-w-0 flex-1 flex-col">
+          <div ref={workRowRef} className="relative flex min-h-[160px] flex-1 overflow-hidden">
             {/* The Agent Bridge page covers the work area (panes stay mounted
                 underneath so their paths survive opening it). */}
             {dialog === "agentBridge" && <AgentBridgePage onClose={closeDialog} />}
             <DiskUsageHost />
-            <ServerViewHost />
+            <ErrorBoundary region="Server view" className="absolute inset-0 z-[6]">
+              <ServerViewHost />
+            </ErrorBoundary>
             {/* While a full-page view covers the work area, hide the panes:
                 their own stacked controls (the split divider at z-raised)
                 would otherwise draw and stay hoverable over the page. */}
@@ -223,33 +245,47 @@ export default function App() {
               className={cn("min-w-0 flex-1 overflow-hidden", workAreaCovered && "invisible")}
               aria-hidden={workAreaCovered || undefined}
             >
-              <FileUiBridge>
-                {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
-              </FileUiBridge>
+              <ErrorBoundary region="File browser" className="h-full">
+                <FileUiBridge>
+                  {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
+                </FileUiBridge>
+              </ErrorBoundary>
             </div>
-            {agentDrawerOpen && !zen && <AgentDrawer />}
+            {agentDrawerOpen && !zen && (
+              <ResizablePanel id="agentDrawer" label="Agent" axis="x" defaultSize={340} min={280} maxFraction={0.5} containerRef={workRowRef}>
+                <AgentDrawer />
+              </ResizablePanel>
+            )}
           </div>
           {consoleOpen && !zen && (
-            <div className="h-64 border-t border-border">
+            <ResizablePanel id="console" label="Agent console" axis="y" defaultSize={256} min={120} maxFraction={0.7} containerRef={columnRef}>
               <AgentConsoleDock />
-            </div>
+            </ResizablePanel>
           )}
           {/* The terminal dock stays mounted even when hidden so background
               shells survive connection-tab switches and toggling it closed;
               visibility is CSS, not mount/unmount. */}
-          <div
-            className={cn(
-              terminalVisible ? "h-72 border-t border-border" : "h-0 overflow-hidden"
-            )}
+          <ResizablePanel
+            id="terminal"
+            label="Terminal"
+            axis="y"
+            defaultSize={288}
+            min={120}
+            maxFraction={0.75}
+            containerRef={columnRef}
+            hidden={!terminalVisible}
+            keepMounted
           >
-            <TerminalDock
-              sessionId={supportsTerminal ? activeSessionId : null}
-              visible={terminalVisible}
-            />
-          </div>
+            <ErrorBoundary region="Terminal">
+              <TerminalDock
+                sessionId={supportsTerminal ? activeSessionId : null}
+                visible={terminalVisible}
+              />
+            </ErrorBoundary>
+          </ResizablePanel>
           <NativeFileDrop />
           <UploadReports />
-          <TransferQueue />
+          <TransferQueue containerRef={columnRef} />
           <UpdatePrompt />
           <CliUpdatePrompt />
           {!zen && <TipStrip />}
@@ -329,7 +365,12 @@ function StatusBar({
   const unread = useToasts((s) => s.unreadCount);
   const markAllRead = useToasts((s) => s.markAllRead);
   const clearHistory = useToasts((s) => s.clearHistory);
+  const errorsSeenAt = useToasts((s) => s.errorsSeenAt);
+  const errorCount = unseenErrors(history, errorsSeenAt);
   const [notifOpen, setNotifOpen] = useState(false);
+  /** The error pill opens the notification centre showing only errors. */
+  const [notifFilter, setNotifFilter] = useState<"all" | "errors">("all");
+  const shownHistory = notifFilter === "errors" ? history.filter((n) => n.variant === "error") : history;
 
   const bridgeRunning = useBridge((s) => s.status.running);
   const waiting = useBridge((s) => s.approvals.length);
@@ -350,35 +391,10 @@ function StatusBar({
   const installedVersion = useDiscovery((s) => s.version);
   const discoveryOpen = useLayout((s) => s.dialog === "whatsNew");
 
-  // Dismiss the status-bar popovers on Escape or a click outside, matching how
-  // every other overlay closes (the hover-leave behavior stays as a bonus).
+  // The status-bar popovers close on Escape or a click outside (Popover),
+  // and when the pointer leaves them.
   const editsWrapRef = useRef<HTMLDivElement>(null);
   const notifWrapRef = useRef<HTMLDivElement>(null);
-  const editsPopRef = useRef<HTMLDivElement>(null);
-  const notifPopRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!notifOpen && !editsMenuOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setNotifOpen(false);
-      onCloseEditsMenu();
-    };
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      const outside = (...els: (HTMLElement | null)[]) =>
-        !els.some((el) => el?.contains(t));
-      if (notifOpen && outside(notifWrapRef.current, notifPopRef.current))
-        setNotifOpen(false);
-      if (editsMenuOpen && outside(editsWrapRef.current, editsPopRef.current))
-        onCloseEditsMenu();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onDown);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onDown);
-    };
-  }, [notifOpen, editsMenuOpen, onCloseEditsMenu]);
 
   return (
     <div className="flex h-7 min-w-0 shrink-0 items-center gap-2 overflow-hidden border-t border-border bg-bg-panel px-2 text-[11px]">
@@ -444,8 +460,7 @@ function StatusBar({
           {editsMenuOpen && (
             <StatusPopover
               anchorRef={editsWrapRef}
-              popRef={editsPopRef}
-              onMouseLeave={onCloseEditsMenu}
+              onClose={onCloseEditsMenu}
             >
               <div className="border-b border-border bg-bg-subtle px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
                 Live edits — saves upload automatically
@@ -491,12 +506,29 @@ function StatusBar({
           )}
         </div>
       )}
-      <div className="relative" ref={notifWrapRef}>
+      <div className="relative flex items-center gap-1" ref={notifWrapRef}>
+        {errorCount > 0 && (
+          <PillButton
+            data-error-pill=""
+            danger
+            onClick={() => {
+              setNotifFilter("errors");
+              setNotifOpen(true);
+              markAllRead();
+            }}
+            icon={<AlertCircle size={11} />}
+            badge={errorCount}
+            title="Show errors"
+          >
+            {errorCount === 1 ? "Error" : "Errors"}
+          </PillButton>
+        )}
         <PillButton
           active={notifOpen}
           onClick={() => {
             const next = !notifOpen;
             setNotifOpen(next);
+            setNotifFilter("all");
             if (next) markAllRead();
           }}
           icon={<Bell size={11} />}
@@ -506,13 +538,26 @@ function StatusBar({
         {notifOpen && (
           <StatusPopover
             anchorRef={notifWrapRef}
-            popRef={notifPopRef}
-            onMouseLeave={() => setNotifOpen(false)}
+            onClose={() => setNotifOpen(false)}
           >
             <div className="flex items-center justify-between border-b border-border bg-bg-subtle px-3 py-1.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                Notifications
-              </span>
+              <div className="flex items-center gap-1" role="tablist" aria-label="Show">
+                {(["all", "errors"] as const).map((f) => (
+                  <button
+                    key={f}
+                    role="tab"
+                    aria-selected={notifFilter === f}
+                    data-notif-filter={f}
+                    onClick={() => setNotifFilter(f)}
+                    className={cn(
+                      "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                      notifFilter === f ? "bg-bg-hover text-text" : "text-text-dim hover:text-text"
+                    )}
+                  >
+                    {f === "all" ? "Notifications" : "Errors"}
+                  </button>
+                ))}
+              </div>
               {history.length > 0 && (
                 <button
                   onClick={clearHistory}
@@ -522,13 +567,13 @@ function StatusBar({
                 </button>
               )}
             </div>
-            {history.length === 0 ? (
+            {shownHistory.length === 0 ? (
               <div className="px-3 py-6 text-center text-[11px] text-text-dim">
-                No notifications yet
+                {notifFilter === "errors" ? "No errors" : "No notifications yet"}
               </div>
             ) : (
               <div className="max-h-72 overflow-y-auto">
-                {history.slice(0, 50).map((n) => (
+                {shownHistory.slice(0, 50).map((n) => (
                   <NotificationRow key={n.id} n={n} />
                 ))}
               </div>
@@ -645,35 +690,29 @@ function StatusBar({
   );
 }
 
-/// Status-bar popover, portaled to <body>: the bar clips its overflow (so it
-/// never scrolls sideways on narrow windows), which would hide an absolutely
-/// positioned child. Anchored above the pill's wrapper, right-aligned to it.
+/// Status-bar popover: portaled (the bar clips its overflow), above the
+/// pill's wrapper and right-aligned to it.
 function StatusPopover({
   anchorRef,
-  popRef,
-  onMouseLeave,
+  onClose,
   children,
 }: {
   anchorRef: React.RefObject<HTMLDivElement>;
-  popRef: React.RefObject<HTMLDivElement>;
-  onMouseLeave: () => void;
+  onClose: () => void;
   children: React.ReactNode;
 }) {
-  const r = anchorRef.current?.getBoundingClientRect();
-  if (!r) return null;
-  return createPortal(
-    <div
-      ref={popRef}
-      style={{
-        bottom: window.innerHeight - r.top + 6,
-        right: Math.max(8, window.innerWidth - r.right),
-      }}
-      className="anim-modal fixed z-dropdown w-80 overflow-hidden rounded-md border border-border bg-bg-panel shadow-elev-3"
-      onMouseLeave={onMouseLeave}
+  return (
+    <Popover
+      open
+      anchorRef={anchorRef}
+      onClose={onClose}
+      onMouseLeave={onClose}
+      placement="top-end"
+      layer="dropdown"
+      className="w-80"
     >
       {children}
-    </div>,
-    document.body
+    </Popover>
   );
 }
 
@@ -947,6 +986,7 @@ function sshRouteFromLink(dl: DeepLink): Partial<ConnectionProfile> {
 /// with a Copy button; collapsed rows still offer Copy on the right.
 function NotificationRow({ n }: { n: Toast }) {
   const [open, setOpen] = useState(false);
+  const version = useDiscovery((s) => s.version);
   return (
     <div
       role="button"
@@ -993,7 +1033,10 @@ function NotificationRow({ n }: { n: Toast }) {
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
         <span className="text-[9px] text-text-dim">{relTime(n.createdAt)}</span>
-        <CopyTextButton text={notificationText(n)} label={open} />
+        <CopyTextButton
+          text={n.variant === "error" ? toastDetails(n, version) : notificationText(n)}
+          label={n.variant === "error" && open ? "Copy details" : open}
+        />
       </div>
     </div>
   );

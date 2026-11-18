@@ -388,6 +388,38 @@ pub async fn restore(fs: &dyn RemoteFs, root: &str, entry: &RecoveryEntry) -> Re
 #[path = "staging_tests.rs"]
 mod staging_tests;
 
+/// Bind a journal to the endpoint as well as its saved id; changing a profile's
+/// server must never replay another server's unfinished publication.
+pub fn destination_key(p: &crate::profiles::ConnectionProfile, local: bool) -> String {
+    if local { return "local".into(); }
+    use sha2::{Digest, Sha256};
+    let data = serde_json::to_vec(&(&p.id, &p.protocol, &p.host, p.port, &p.username, &p.bucket, &p.endpoint, &p.account, &p.agent_key)).unwrap();
+    format!("{:x}", Sha256::digest(data))
+}
+
+/// Permanently remove only the old reserved files shown in a cleanup preview.
+/// No recursive deletion and no fallback to deleting an original path.
+pub async fn purge(fs: &dyn RemoteFs, root: &str, staging: bool, days: u32, entries: &[RecoveryEntry]) -> Result<usize> {
+    ensure!(days >= 7, "Keep at least seven days of sync history");
+    validate_root(root)?;
+    let cutoff = crate::db::now_ms() / 1000 - i64::from(days) * 86400;
+    let area = if staging { STAGING } else { DIRECTORY };
+    let mut removed = 0;
+    for entry in entries {
+        validate_relative(&entry.relative)?;
+        validate_relative(&entry.batch)?;
+        ensure!(!entry.batch.contains('/'), "Invalid recovery batch");
+        let created: i64 = entry.batch.split('-').next().context("Invalid batch timestamp")?.parse()?;
+        ensure!(created > 0 && created < cutoff, "File is newer than the retention cutoff");
+        let _lock = super::journal::cleanup_lock(&entry.batch)?;
+        let relative = format!("{area}/{}/{}", entry.batch, entry.relative);
+        ensure!(current_state(fs, root, &relative).await?.as_ref() == Some(&entry.state), "Cleanup preview is stale; refresh before deleting");
+        fs.delete(&join(root, &relative), false).await?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,36 +694,4 @@ mod tests {
         let target = restore(&LocalFs, root, &entries[0]).await.unwrap();
         assert!(std::fs::metadata(target).unwrap().len() > 0);
     }
-}
-
-/// Bind a journal to the endpoint as well as its saved id; changing a profile's
-/// server must never replay another server's unfinished publication.
-pub fn destination_key(p: &crate::profiles::ConnectionProfile, local: bool) -> String {
-    if local { return "local".into(); }
-    use sha2::{Digest, Sha256};
-    let data = serde_json::to_vec(&(&p.id, &p.protocol, &p.host, p.port, &p.username, &p.bucket, &p.endpoint, &p.account, &p.agent_key)).unwrap();
-    format!("{:x}", Sha256::digest(data))
-}
-
-/// Permanently remove only the old reserved files shown in a cleanup preview.
-/// No recursive deletion and no fallback to deleting an original path.
-pub async fn purge(fs: &dyn RemoteFs, root: &str, staging: bool, days: u32, entries: &[RecoveryEntry]) -> Result<usize> {
-    ensure!(days >= 7, "Keep at least seven days of sync history");
-    validate_root(root)?;
-    let cutoff = crate::db::now_ms() / 1000 - i64::from(days) * 86400;
-    let area = if staging { STAGING } else { DIRECTORY };
-    let mut removed = 0;
-    for entry in entries {
-        validate_relative(&entry.relative)?;
-        validate_relative(&entry.batch)?;
-        ensure!(!entry.batch.contains('/'), "Invalid recovery batch");
-        let created: i64 = entry.batch.split('-').next().context("Invalid batch timestamp")?.parse()?;
-        ensure!(created > 0 && created < cutoff, "File is newer than the retention cutoff");
-        let _lock = super::journal::cleanup_lock(&entry.batch)?;
-        let relative = format!("{area}/{}/{}", entry.batch, entry.relative);
-        ensure!(current_state(fs, root, &relative).await?.as_ref() == Some(&entry.state), "Cleanup preview is stale; refresh before deleting");
-        fs.delete(&join(root, &relative), false).await?;
-        removed += 1;
-    }
-    Ok(removed)
 }

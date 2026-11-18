@@ -1119,6 +1119,7 @@ async fn exec_dry_run_verdict(
 /// Opt-in check → policy/approval gate. On success the caller proceeds; on
 /// failure it returns the contained `(status, json)` response. Denials are
 /// logged here so callers only log their own success/error paths.
+#[allow(clippy::too_many_arguments)]
 async fn gate(
     app: &AppHandle,
     state: &Arc<BridgeState>,
@@ -1254,7 +1255,7 @@ async fn handle_direct_authorize(app: &AppHandle, state: &Arc<BridgeState>, body
             .copied()
             .unwrap_or_else(|| default_access(&policy))
     };
-    let exec = (class == OpClass::Exec).then(|| ExecText::Command(command.as_str()));
+    let exec = (class == OpClass::Exec).then_some(ExecText::Command(command.as_str()));
     match state.decide_with(access, class, exec).await {
         AccessLevel::Auto => {}
         AccessLevel::Off => {
@@ -4882,7 +4883,7 @@ async fn op_history(
     entries.reverse(); // newest-first
     let out: Vec<Value> = entries
         .into_iter()
-        .filter(|e| filter_id.as_deref().map_or(true, |id| e.session_id == id))
+        .filter(|e| filter_id.as_deref().is_none_or(|id| e.session_id == id))
         .take(limit)
         .map(|e| {
             json!({

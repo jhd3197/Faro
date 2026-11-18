@@ -230,7 +230,7 @@ export const useDiskScan = create<DiskScanStoreState>((set, get) => ({
     } catch (e) {
       // `deletePath` rejects with a structured {kind, message} error (Plan 12
       // Phase 3) — toast keyed off the kind.
-      toastError(e, "Delete failed");
+      toastError(e, `Couldn't delete ${node.name}`);
       return;
     }
     set({ tree: pruneNode(tree, node.path) });

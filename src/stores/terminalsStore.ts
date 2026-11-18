@@ -41,12 +41,39 @@ export interface TerminalTab {
   initialCommand?: string;
 }
 
+/** What it takes to reopen a closed tab: a fresh shell on the same session,
+ *  same title, and the same starting folder when the tab was opened in one. */
+export interface ClosedTab {
+  sessionId: SessionId;
+  title: string;
+  initialCommand?: string;
+}
+
+/** How many closed tabs "Reopen closed tab" remembers. */
+export const CLOSED_TAB_LIMIT = 20;
+
 interface TerminalsState {
   tabs: TerminalTab[];
   activeId: string | null;
+  /** Recently closed tabs, newest last. */
+  closed: ClosedTab[];
 
-  openTab: (sessionId: SessionId, initialCommand?: string) => TerminalTab;
-  closeTab: (id: string) => void;
+  openTab: (
+    sessionId: SessionId,
+    initialCommand?: string,
+    opts?: { title?: string }
+  ) => TerminalTab;
+  /** Close a tab. Closing the active one focuses its right-hand neighbour in
+   *  the same session (else the left one). `remember: false` keeps it off the
+   *  reopen stack (a pane handed to its own window isn't "closed"). */
+  closeTab: (id: string, opts?: { remember?: boolean }) => void;
+  /** Close several tabs; if the active one goes, `focus` (when still open)
+   *  takes over. */
+  closeTabs: (ids: string[], focus?: string) => void;
+  /** Reopen the most recently closed tab of a session. Null when none. */
+  reopenClosed: (sessionId: SessionId) => TerminalTab | null;
+  /** Move a tab to `index` among its session's tabs. */
+  moveTab: (id: string, index: number) => void;
   setActive: (id: string) => void;
   renameTab: (id: string, title: string) => void;
   /** Drop all tabs for a session (called on disconnect). */
@@ -56,7 +83,7 @@ interface TerminalsState {
   /** Split the given tab's active pane; the new pane becomes active. */
   splitActivePane: (tabId: string, dir: SplitDir) => void;
   /** Close one pane; collapses its split, or closes the tab if it was last. */
-  closePane: (tabId: string, paneId: string) => void;
+  closePane: (tabId: string, paneId: string, opts?: { remember?: boolean }) => void;
   /** Focus a pane within a tab. */
   setPaneActive: (tabId: string, paneId: string) => void;
   /** Toggle "zoom" on the active pane (full-size, siblings hidden). */
@@ -107,17 +134,23 @@ function setRatio(node: PaneNode, splitId: string, ratio: number): PaneNode {
   return a === node.a && b === node.b ? node : { ...node, a, b };
 }
 
+/** Tabs of one session, in strip order. */
+export function sessionTabsOf(tabs: TerminalTab[], sessionId: SessionId): TerminalTab[] {
+  return tabs.filter((t) => t.sessionId === sessionId);
+}
+
 export const useTerminals = create<TerminalsState>((set, get) => ({
   tabs: [],
   activeId: null,
+  closed: [],
 
-  openTab: (sessionId, initialCommand) => {
+  openTab: (sessionId, initialCommand, opts) => {
     const sessionCount = get().tabs.filter((t) => t.sessionId === sessionId).length;
     const paneId = genId();
     const tab: TerminalTab = {
       id: genId(),
       sessionId,
-      title: `Shell ${sessionCount + 1}`,
+      title: opts?.title ?? `Shell ${sessionCount + 1}`,
       root: { kind: "leaf", paneId },
       activePaneId: paneId,
       zoomedPaneId: null,
@@ -128,7 +161,7 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     return tab;
   },
 
-  closeTab: (id) => {
+  closeTab: (id, opts) => {
     const s = get();
     const tab = s.tabs.find((t) => t.id === id);
     if (!tab) return;
@@ -137,13 +170,66 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     const tabs = s.tabs.filter((t) => t.id !== id);
     let activeId = s.activeId;
     if (s.activeId === id) {
+      // The neighbour that slides under the pointer: right, else left.
+      const peers = sessionTabsOf(s.tabs, tab.sessionId);
+      const at = peers.findIndex((t) => t.id === id);
       const sibling =
-        tabs.filter((t) => t.sessionId === tab.sessionId).pop() ??
-        tabs[tabs.length - 1] ??
-        null;
+        peers[at + 1] ?? peers[at - 1] ?? tabs[tabs.length - 1] ?? null;
       activeId = sibling ? sibling.id : null;
     }
-    set({ tabs, activeId });
+    const closed =
+      opts?.remember === false
+        ? s.closed
+        : [
+            ...s.closed,
+            {
+              sessionId: tab.sessionId,
+              title: tab.title,
+              initialCommand: tab.initialCommand,
+            },
+          ].slice(-CLOSED_TAB_LIMIT);
+    set({ tabs, activeId, closed });
+  },
+
+  closeTabs: (ids, focus) => {
+    const before = get().activeId;
+    for (const id of ids) get().closeTab(id);
+    if (focus && before && ids.includes(before) && get().tabs.some((t) => t.id === focus)) {
+      set({ activeId: focus });
+    }
+  },
+
+  reopenClosed: (sessionId) => {
+    const s = get();
+    let at = -1;
+    for (let i = s.closed.length - 1; i >= 0; i--) {
+      if (s.closed[i].sessionId === sessionId) {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) return null;
+    const entry = s.closed[at];
+    set({ closed: s.closed.filter((_, i) => i !== at) });
+    return get().openTab(sessionId, entry.initialCommand, { title: entry.title });
+  },
+
+  moveTab: (id, index) => {
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === id);
+    if (!tab) return;
+    const peers = sessionTabsOf(s.tabs, tab.sessionId);
+    const from = peers.findIndex((t) => t.id === id);
+    const to = clamp(Math.round(index), 0, peers.length - 1);
+    if (from === to) return;
+    const order = peers.slice();
+    order.splice(from, 1);
+    order.splice(to, 0, tab);
+    // Write the new session order back into the slots the session already
+    // holds in the global list, so other sessions' tabs don't move.
+    let k = 0;
+    const tabs = s.tabs.map((t) => (t.sessionId === tab.sessionId ? order[k++] : t));
+    set({ tabs });
   },
 
   setActive: (id) => set({ activeId: id }),
@@ -187,12 +273,12 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
       }),
     })),
 
-  closePane: (tabId, paneId) => {
+  closePane: (tabId, paneId, opts) => {
     const tab = get().tabs.find((t) => t.id === tabId);
     if (!tab) return;
     // Last pane in the tab → close the whole tab (handles disposal + active).
     if (leafIds(tab.root).length <= 1) {
-      get().closeTab(tabId);
+      get().closeTab(tabId, opts);
       return;
     }
     disposePane(paneId);

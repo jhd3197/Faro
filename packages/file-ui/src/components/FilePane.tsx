@@ -1,5 +1,12 @@
 import { memo, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import {
+  COLUMN_LABELS,
+  columnTemplate,
+  resizeColumns,
+  type ColumnId,
+  type ColumnWidths,
+} from "../lib/columns";
+import {
   ArrowUp,
   ArrowLeft,
   ArrowRight,
@@ -41,6 +48,9 @@ import {
   Wrench,
   PackageOpen,
   Loader2,
+  Scissors,
+  Files,
+  ClipboardPaste,
 } from "lucide-react";
 import type {
   Capabilities,
@@ -61,9 +71,28 @@ import { materialIconUrl } from "../lib/materialIcons";
 import {
   DEFAULT_FILE_BROWSER_KEYBINDINGS,
   comboFromEvent,
+  formatCombo,
+  isComposing,
   type FileBrowserAction,
 } from "../lib/keys";
+import {
+  baseName,
+  caseInsensitiveFor,
+  describeItems,
+  describeKinds,
+  exactBytes,
+  isWindowsPath,
+  joinPath,
+  parentOf,
+  pasteProblem,
+  renameClash,
+  samePath,
+  uniqueName,
+} from "../lib/fileOps";
+import { getFileClipboard, setFileClipboard, useFileClipboard } from "../lib/fileClipboard";
+import { endDragPill, setDragPillHint, startDragPill } from "../lib/dragPill";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { InlineRename } from "./InlineRename";
 import { PromptModal } from "./PromptModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PropertiesModal } from "./PropertiesModal";
@@ -74,14 +103,6 @@ import { Thumbnail } from "./Thumbnail";
 interface Segment {
   label: string;
   path: string;
-}
-
-// A drive-letter (C:\ or C:/) or UNC (\\server\share) path is Windows-style
-// regardless of whether the session is local — a Faro Agent on a Windows host
-// serves these too, so the separator must be inferred from the path itself,
-// never from the session kind.
-function isWindowsPath(path: string): boolean {
-  return /^[a-zA-Z]:/.test(path) || path.startsWith("\\\\");
 }
 
 // Path separators for `path`: on POSIX a backslash is an ordinary filename
@@ -136,6 +157,14 @@ interface DragPayload {
   entries: DirEntry[];
 }
 
+// The drag in flight, readable during dragover (the dataTransfer payload is
+// hidden until drop), so a folder row can decide whether it's a target.
+let activeDrag: DragPayload | null = null;
+
+/** A drop that would copy rather than move: Ctrl (Windows/Linux) or
+ *  Alt/Option held. */
+const wantsCopy = (e: React.DragEvent) => e.ctrlKey || e.altKey;
+
 interface Props {
   paneId: string;
   title: string;
@@ -187,11 +216,27 @@ const COMPRESS_FORMATS: Array<{ format: CompressFormat; label: string; ext: stri
   { format: "7z", label: "7-Zip (.7z)", ext: ".7z", remoteOnly: true },
 ];
 
+/** The file row (or folder) that has keyboard focus in a pane, announced on
+ *  `window` as a "faro:focused-item" CustomEvent so app-level commands can act
+ *  on it (e.g. "Open terminal here" on the focused folder). `null` detail =
+ *  nothing focused in that pane any more. */
+export interface FocusedFileItem {
+  paneId: string;
+  sessionId: SessionId;
+  path: string;
+  name: string;
+  isDir: boolean;
+}
+
+// The pane the user last worked in. Pane shortcuts that have an obvious
+// target even with nothing focused (Ctrl+L, Ctrl+F, Alt+←/→) go there.
+let lastActivePane: string | null = null;
+const GLOBAL_PANE_ACTIONS = new Set<FileBrowserAction>(["back", "forward", "focusPath", "focusFilter"]);
+
 type ModalState =
-  | { type: "rename"; entry: DirEntry }
   | { type: "compress"; entries: DirEntry[]; format: CompressFormat; ext: string }
   | { type: "extractTo"; entry: DirEntry; stem: string }
-  | { type: "mkdir" }
+  | { type: "mkdir"; parent?: string }
   | { type: "chmod"; entry: DirEntry }
   | { type: "delete"; entries: DirEntry[] }
   | { type: "props"; entry: DirEntry }
@@ -230,21 +275,39 @@ export function FilePane({
     remoteImagePreviews,
     setRemoteImagePreviews,
     keyBindings,
+    columnWidths: savedColumnWidths,
+    setColumnWidths,
   } = settings;
+  // Column widths: the host's saved value (or this pane's own when the host
+  // doesn't persist them), overridden live while a header handle is dragged.
+  const [localColumnWidths, setLocalColumnWidths] = useState<ColumnWidths | null>(null);
+  const [liveColumnWidths, setLiveColumnWidths] = useState<ColumnWidths | null>(null);
+  const [resizingCol, setResizingCol] = useState<number | null>(null);
+  const columnWidths =
+    liveColumnWidths ?? (setColumnWidths ? savedColumnWidths ?? null : localColumnWidths);
+  const commitColumnWidths = (w: ColumnWidths | null) =>
+    setColumnWidths ? setColumnWidths(w) : setLocalColumnWidths(w);
+  const headerRef = useRef<HTMLDivElement>(null);
 
   // Effective in-pane key combos: host overrides layered over the built-in
   // defaults, indexed combo→action so the keydown handler is a single lookup.
   // Memoized on the combo values (not object identity) so a host that rebuilds
   // the settings object each render doesn't thrash the listener.
-  const comboToAction = useMemo(() => {
+  const [comboToAction, actionCombo] = useMemo(() => {
     const merged = { ...DEFAULT_FILE_BROWSER_KEYBINDINGS, ...keyBindings };
     const map: Record<string, FileBrowserAction> = {};
     for (const [action, combo] of Object.entries(merged)) {
       if (combo) map[combo] = action as FileBrowserAction;
     }
-    return map;
+    return [map, merged as Record<FileBrowserAction, string>] as const;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify({ ...DEFAULT_FILE_BROWSER_KEYBINDINGS, ...keyBindings })]);
+  /** A menu item's shortcut, live from the effective bindings: an unbound
+   *  action shows no hint and has no key. */
+  const keyOf = (action: FileBrowserAction) => {
+    const combo = actionCombo[action];
+    return combo ? { combo, hint: formatCombo(combo) } : {};
+  };
 
   // Re-key the thumbnail loader whenever the remote-preview toggle flips, so
   // already-mounted Thumbnails re-run their effect the moment the user clicks
@@ -288,8 +351,16 @@ export function FilePane({
     items: MenuItem[];
   } | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
+  // The row being renamed in place (by path).
+  const [renaming, setRenaming] = useState<string | null>(null);
+  // The folder row a same-pane drag would drop into (tinted), by path.
+  const [dropFolder, setDropFolder] = useState<string | null>(null);
+  // A confirmation shown in the pane when the host has no toasts.
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const clipboard = useFileClipboard();
   const dragCounter = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
   const typeBufRef = useRef("");
   const typeAtRef = useRef(0);
 
@@ -307,6 +378,7 @@ export function FilePane({
     setDraftPath(path);
     setEditingPath(false);
     setFilter("");
+    setRenaming(null);
   }, [path]);
 
   const load = useCallback(
@@ -366,6 +438,10 @@ export function FilePane({
     };
   }, [sessionId, fs]);
 
+  // Copy within one connection needs a server-side copy: the local disk, or a
+  // shell (cp) on the server. Elsewhere Copy still feeds a cross-pane paste.
+  const canServerCopy = !!fs.copy && (sessionId === LOCAL_SESSION || !!caps?.hasShell);
+
   // Apply hidden-file rule + in-pane name filter + sort from settings. Memoized
   // so a big directory isn't re-filtered and re-sorted on every unrelated render
   // (selection, hover, pane-resize); only the inputs below trigger recompute.
@@ -391,6 +467,28 @@ export function FilePane({
       });
   }, [entries, showHiddenFiles, filter, sortField, sortDirection]);
 
+  // Pane actions that make sense from anywhere in the pane, a text box included.
+  const runGlobalAction = (action: FileBrowserAction, e: KeyboardEvent) => {
+    if (!sessionId) return;
+    e.preventDefault();
+    switch (action) {
+      case "back":
+        history.back();
+        break;
+      case "forward":
+        history.forward();
+        break;
+      case "focusPath":
+        setDraftPath(path);
+        setEditingPath(true);
+        break;
+      case "focusFilter":
+        filterRef.current?.focus();
+        filterRef.current?.select();
+        break;
+    }
+  };
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -398,31 +496,53 @@ export function FilePane({
       anchor ? visible.find((v) => v.path === anchor) ?? null : null;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      // An inline rename and an open menu own their keys; something that
+      // already handled the key (defaultPrevented) wins too.
+      if (e.defaultPrevented) return;
+      if (target?.closest?.('[data-inline-rename], [role="menu"]')) return;
       const typing =
         !!target &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
+      const inFilter = !!target?.closest?.("[data-pane-filter]");
       if (e.key === "Escape") {
-        // Filter first, then selection — least-surprising unwind order. Escape
-        // is intentionally not remappable (it's the universal cancel key).
+        // Esc peels one layer at a time: filter text, then the filter box
+        // itself, then the selection. Not remappable (the universal cancel).
+        if (typing && !inFilter) return; // the path box handles its own Esc
         if (filter) {
           setFilter("");
-          if (typing) (target as HTMLInputElement).blur();
+        } else if (inFilter) {
+          containerRef.current?.focus();
         } else {
           setSelected(new Set());
           setAnchor(null);
         }
         return;
       }
-      if (typing) return; // don't hijack keys while editing text
+      const combo = comboFromEvent(e);
+      const action = comboToAction[combo];
+      if (typing) {
+        // Only the "go somewhere" chords work from a text box, and only with a
+        // modifier, so typing is never hijacked.
+        const hasMod = e.ctrlKey || e.metaKey || e.altKey;
+        if (!hasMod || !action || !GLOBAL_PANE_ACTIONS.has(action)) return;
+        runGlobalAction(action, e);
+        return;
+      }
       // Only run list nav when the pane/list area is focused, not a toolbar btn.
-      if (target && target.closest('button, a, [role="button"]')) return;
+      if (target && target.closest('button, a, [role="button"]')) {
+        if (action && GLOBAL_PANE_ACTIONS.has(action)) runGlobalAction(action, e);
+        return;
+      }
 
       // Remappable in-pane actions (F2/Enter/Delete/Backspace/mod+A/Space/
       // mod+shift+N/F5, all overridable by the host). One combo → one action.
-      const action = comboToAction[comboFromEvent(e)];
       if (action) {
+        if (GLOBAL_PANE_ACTIONS.has(action)) {
+          runGlobalAction(action, e);
+          return;
+        }
         switch (action) {
           case "selectAll":
             e.preventDefault();
@@ -437,7 +557,7 @@ export function FilePane({
             const item = anchorItem();
             if (item) {
               e.preventDefault();
-              setModal({ type: "rename", entry: item });
+              setRenaming(item.path);
             }
             return;
           }
@@ -452,7 +572,12 @@ export function FilePane({
           case "newFolder":
             if (sessionId && caps?.hasDirectories !== false) {
               e.preventDefault();
-              setModal({ type: "mkdir" });
+              // A focused folder row is where the new folder goes.
+              const item = anchorItem();
+              setModal({
+                type: "mkdir",
+                parent: item && opensAsFolder(item) && selected.has(item.path) ? item.path : undefined,
+              });
             }
             return;
           case "refresh":
@@ -472,6 +597,21 @@ export function FilePane({
           case "parentDir":
             e.preventDefault();
             goUp();
+            return;
+          case "copy":
+          case "cut": {
+            const items = visible.filter((v) => selected.has(v.path));
+            if (items.length > 0) {
+              e.preventDefault();
+              clipSelection(action, items);
+            }
+            return;
+          }
+          case "paste":
+            if (getFileClipboard()) {
+              e.preventDefault();
+              void doPaste(pasteTargetFor(anchorItem()));
+            }
             return;
         }
       }
@@ -509,9 +649,42 @@ export function FilePane({
         }
       }
     };
+    // Nothing focused at all (focus fell back to <body>): the pane the user
+    // last worked in still answers Ctrl+L / Ctrl+F / Alt+←/→.
+    const onWindowKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || lastActivePane !== paneId) return;
+      const active = document.activeElement;
+      if (active && active !== document.body) return;
+      const action = comboToAction[comboFromEvent(e)];
+      if (action && GLOBAL_PANE_ACTIONS.has(action)) runGlobalAction(action, e);
+    };
+    const onFocusIn = () => { lastActivePane = paneId; };
     el.addEventListener("keydown", handler);
-    return () => el.removeEventListener("keydown", handler);
+    el.addEventListener("focusin", onFocusIn);
+    window.addEventListener("keydown", onWindowKey);
+    return () => {
+      el.removeEventListener("keydown", handler);
+      el.removeEventListener("focusin", onFocusIn);
+      window.removeEventListener("keydown", onWindowKey);
+    };
   }, [visible, selected, filter, anchor, comboToAction, caps, path, sessionId]);
+
+  // Tell the app which row has keyboard focus here, so commands such as
+  // "Open terminal here" can act on it.
+  const anchorEntry = anchor ? visible.find((v) => v.path === anchor) ?? null : null;
+  useEffect(() => {
+    const detail: FocusedFileItem | null =
+      sessionId && anchorEntry
+        ? {
+            paneId,
+            sessionId,
+            path: anchorEntry.path,
+            name: anchorEntry.name,
+            isDir: opensAsFolder(anchorEntry),
+          }
+        : null;
+    window.dispatchEvent(new CustomEvent("faro:focused-item", { detail: detail ?? { paneId, cleared: true } }));
+  }, [paneId, sessionId, anchorEntry]);
 
   // Watch this pane's width and pick a column tier. Content-driven, not
   // viewport-driven: only re-renders when crossing a threshold, not per pixel.
@@ -547,12 +720,6 @@ export function FilePane({
     else if (isRelative) next = parts.join("/");
     else next = "/" + parts.join("/");
     onPathChange(next || (isRelative ? "." : "/"));
-  };
-
-  const joinPath = (parent: string, name: string) => {
-    const sep = isWindowsPath(parent) ? "\\" : "/";
-    if (parent.endsWith(sep) || parent.endsWith("/")) return `${parent}${name}`;
-    return `${parent}${sep}${name}`;
   };
 
   const onRowClick = (entry: DirEntry, e: React.MouseEvent) => {
@@ -606,33 +773,101 @@ export function FilePane({
     }
     const payload: DragPayload = { paneId, entries: dragSet };
     e.dataTransfer.setData(DRAG_MIME, JSON.stringify(payload));
-    e.dataTransfer.effectAllowed = "copy";
+    // Copy to the other pane; move (or Ctrl-copy) onto a folder in this one.
+    e.dataTransfer.effectAllowed = "copyMove";
+    activeDrag = payload;
+    startDragPill(e.nativeEvent, describeKinds(dragSet, ", "));
+  };
+
+  const endDrag = () => {
+    activeDrag = null;
+    endDragPill();
+    setDropFolder(null);
+  };
+
+  /** Why the in-flight drag can't land in folder row `target`, or null. Only
+   *  drags that started in this pane are moves; others keep the pane-wide
+   *  transfer drop. */
+  const folderDropProblem = (drag: DragPayload, target: DirEntry, copy: boolean): string | null => {
+    if (drag.entries.some((d) => samePath(d.path, target.path))) return "itself";
+    if (pasteProblem(drag.entries, target.path)) return "inside itself";
+    if (copy && !canServerCopy) return "no copy";
+    if (!copy && caps?.canRename === false) return "no move";
+    return null;
+  };
+
+  const onRowDragOver = (e: React.DragEvent, target: DirEntry) => {
+    const drag = activeDrag;
+    if (!drag || drag.paneId !== paneId || !sessionId) return;
+    // Everything in this pane is decided here; the pane-wide transfer drop
+    // never applies to a drag that started in it.
+    e.stopPropagation();
+    const copy = wantsCopy(e);
+    if (!opensAsFolder(target) || folderDropProblem(drag, target, copy)) {
+      // Not a target: no tint, and no preventDefault, so the pointer shows
+      // the not-allowed cursor.
+      e.dataTransfer.dropEffect = "none";
+      if (dropFolder) setDropFolder(null);
+      setDragPillHint(null);
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = copy ? "copy" : "move";
+    if (dropFolder !== target.path) setDropFolder(target.path);
+    setDragPillHint(`${copy ? "Copy" : "Move"} to ${target.name}`);
+  };
+
+  const onRowDrop = (e: React.DragEvent, target: DirEntry) => {
+    const drag = activeDrag;
+    if (!drag || drag.paneId !== paneId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const copy = wantsCopy(e);
+    endDrag();
+    dragCounter.current = 0;
+    if (!opensAsFolder(target) || folderDropProblem(drag, target, copy)) return;
+    void moveOrCopy(drag.entries, target.path, copy ? "copy" : "move");
   };
 
   const isOurDrag = (e: React.DragEvent) =>
     Array.from(e.dataTransfer.types).includes(DRAG_MIME);
+  // A drag that started in this pane can only land on one of its folders.
+  const isOwnDrag = () => activeDrag?.paneId === paneId;
 
   const onPaneDragEnter = (e: React.DragEvent) => {
     if (!isOurDrag(e)) return;
-    e.preventDefault();
     dragCounter.current++;
+    if (isOwnDrag()) return;
+    e.preventDefault();
     setIsDropTarget(true);
   };
   const onPaneDragOver = (e: React.DragEvent) => {
     if (!isOurDrag(e)) return;
+    if (isOwnDrag()) {
+      e.dataTransfer.dropEffect = "none";
+      if (dropFolder) setDropFolder(null);
+      setDragPillHint(null);
+      return;
+    }
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
   };
   const onPaneDragLeave = (e: React.DragEvent) => {
     if (!isOurDrag(e)) return;
     dragCounter.current = Math.max(0, dragCounter.current - 1);
-    if (dragCounter.current === 0) setIsDropTarget(false);
+    if (dragCounter.current === 0) {
+      setIsDropTarget(false);
+      setDropFolder(null);
+    }
   };
   const onPaneDrop = (e: React.DragEvent) => {
     if (!isOurDrag(e)) return;
     e.preventDefault();
     dragCounter.current = 0;
     setIsDropTarget(false);
+    setDropFolder(null);
+    endDragPill();
+    activeDrag = null;
     const raw = e.dataTransfer.getData(DRAG_MIME);
     if (!raw) return;
     let payload: DragPayload;
@@ -646,9 +881,132 @@ export function FilePane({
     onDrop?.(payload.entries);
   };
 
+  // --- Clipboard: copy / cut / paste, and drag-to-move ---
+
+  /** A short confirmation: a host toast when there is one, else the pane's
+   *  own status line. */
+  const say = (text: string, variant: "info" | "success" | "error" = "success") => {
+    if (fs.notify) fs.notify(text, variant);
+    else setNotice({ text, error: variant === "error" });
+  };
+
+  const clipSelection = (mode: "copy" | "cut", items: DirEntry[]) => {
+    if (!sessionId || items.length === 0) return;
+    setFileClipboard({ mode, sessionId, paneId, entries: items });
+    const what = describeItems(items);
+    say(mode === "copy" ? `Copied ${what}` : `Cut ${what}. Paste to move ${items.length === 1 ? "it" : "them"}.`, "info");
+  };
+
+  /** Where Paste goes: the focused folder row, unless that folder is itself
+   *  on the clipboard (then the folder being shown). */
+  const pasteTargetFor = (item: DirEntry | null): string => {
+    const clip = getFileClipboard();
+    if (
+      item &&
+      opensAsFolder(item) &&
+      selected.has(item.path) &&
+      !clip?.entries.some((c) => samePath(c.path, item.path))
+    ) {
+      return item.path;
+    }
+    return path;
+  };
+
+  /** Move (rename) or copy `items` into `destDir` on this connection, each
+   *  under a free name ("notes (2).txt" when the name is taken). */
+  const moveOrCopy = async (
+    items: DirEntry[],
+    destDir: string,
+    op: "move" | "copy",
+    doneVerb = op === "move" ? "Moved" : "Copied"
+  ): Promise<boolean> => {
+    if (!sessionId || items.length === 0) return false;
+    const problem = pasteProblem(items, destDir);
+    if (problem) {
+      say(problem, "error");
+      return false;
+    }
+    if (op === "copy" && !canServerCopy) {
+      say("This connection can't copy files in place. Paste them into the other pane to transfer them.", "error");
+      return false;
+    }
+    const pending = op === "move" ? items.filter((it) => !samePath(parentOf(it.path), destDir)) : items;
+    if (pending.length === 0) {
+      say(items.length === 1 ? `${items[0].name} is already in this folder.` : "Those items are already in this folder.", "info");
+      return true;
+    }
+    let taken: string[];
+    try {
+      taken = samePath(destDir, path)
+        ? entries.map((e) => e.name)
+        : (await fs.listDirectory(sessionId, destDir)).map((e) => e.name);
+    } catch (e) {
+      say(`Couldn't open ${baseName(destDir) || destDir}: ${errorText(e)}`, "error");
+      return false;
+    }
+    const caseInsensitive = caseInsensitiveFor(destDir);
+    const placed: string[] = [];
+    setWorking(`${op === "move" ? "Moving" : "Copying"} ${describeItems(pending)}…`);
+    try {
+      for (const it of pending) {
+        const name = uniqueName(it.name, taken, { isDir: it.kind === "directory", caseInsensitive });
+        if (!name) throw new Error(`too many copies of ${it.name} already exist`);
+        const to = joinPath(destDir, name);
+        if (op === "move") await fs.rename(sessionId, it.path, to);
+        else await fs.copy!(sessionId, it.path, to);
+        taken.push(name);
+        placed.push(to);
+      }
+    } catch (e) {
+      say(`Couldn't ${op} ${describeItems(pending)}: ${errorText(e)}`, "error");
+      await load(path);
+      return false;
+    } finally {
+      setWorking(null);
+    }
+    await load(path);
+    if (samePath(destDir, path)) {
+      setSelected(new Set(placed));
+      setAnchor(placed[placed.length - 1] ?? null);
+    }
+    const where = samePath(destDir, path) ? "" : ` to ${baseName(destDir) || destDir}`;
+    say(`${doneVerb} ${describeItems(pending)}${where}`);
+    return true;
+  };
+
+  const doPaste = async (destDir: string) => {
+    const clip = getFileClipboard();
+    if (!clip || !sessionId) return;
+    if (clip.sessionId !== sessionId) {
+      // Another connection: the other pane's items arrive as a transfer
+      // into this folder, the same as dropping them here.
+      if (clip.paneId !== paneId && onDrop) {
+        onDrop(clip.entries);
+        say(`Transferring ${describeItems(clip.entries)}${clip.mode === "cut" ? ". The originals are kept." : ""}`, "info");
+      } else {
+        say("Those items are on another connection. Paste them in the pane showing it.", "error");
+      }
+      return;
+    }
+    const ok = await moveOrCopy(clip.entries, destDir, clip.mode === "cut" ? "move" : "copy", clip.mode === "cut" ? "Moved" : "Pasted");
+    if (ok && clip.mode === "cut") setFileClipboard(null);
+  };
+
+  /** Whether Paste can do anything with `clip` here. */
+  const canPaste = (clip: NonNullable<ReturnType<typeof getFileClipboard>>) =>
+    clip.sessionId === sessionId
+      ? clip.mode === "cut" || canServerCopy
+      : clip.paneId !== paneId && !!onDrop;
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
   // --- Context menu ---
 
-  const copyPaths = (items: DirEntry[]) => {
+  const copyPaths =(items: DirEntry[]) => {
     navigator.clipboard.writeText(items.map((e) => e.path).join("\n"));
   };
   const copyNames = (items: DirEntry[]) => {
@@ -705,6 +1063,7 @@ export function FilePane({
     if (single) {
       items.push({
         label: opensAsFolder(single) ? "Open" : transferLabel,
+        hint: opensAsFolder(single) && actionCombo.open ? formatCombo(actionCombo.open) : undefined,
         icon: opensAsFolder(single) ? <FolderOpen size={14} /> : sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onRowActivate(single),
       });
@@ -840,7 +1199,8 @@ export function FilePane({
       items.push({
         label: "Rename",
         icon: <Edit3 size={12} />,
-        onClick: () => setModal({ type: "rename", entry: single }),
+        ...keyOf("rename"),
+        onClick: () => setRenaming(single.path),
         separatorAfter: true,
       });
     } else {
@@ -852,10 +1212,28 @@ export function FilePane({
       });
       if (compressItem) items.push({ ...compressItem, separatorAfter: true });
     }
+    // Cut / Copy the selection; Paste into a folder row once something is on
+    // the clipboard.
+    items.push(
+      { label: "Cut", icon: <Scissors size={14} />, ...keyOf("cut"), onClick: () => clipSelection("cut", selectedItems) },
+      { label: "Copy", icon: <Files size={14} />, ...keyOf("copy"), onClick: () => clipSelection("copy", selectedItems) }
+    );
+    const clip = getFileClipboard();
+    if (clip && single && opensAsFolder(single) && !clip.entries.some((c) => samePath(c.path, single.path))) {
+      items.push({
+        label: `Paste into “${single.name}”`,
+        icon: <ClipboardPaste size={14} />,
+        ...keyOf("paste"),
+        disabled: !canPaste(clip),
+        onClick: () => void doPaste(single.path),
+      });
+    }
+    items[items.length - 1].separatorAfter = true;
     items.push({
       label: `Delete${selectedItems.length > 1 ? ` (${selectedItems.length})` : ""}`,
       icon: <Trash2 size={12} />,
       destructive: true,
+      ...keyOf("delete"),
       onClick: () => setModal({ type: "delete", entries: selectedItems }),
       separatorAfter: true,
     });
@@ -885,6 +1263,7 @@ export function FilePane({
       items.push({
         label: "Properties",
         icon: <Info size={12} />,
+        ...keyOf("quickInfo"),
         onClick: () => setModal({ type: "props", entry: single }),
       });
     }
@@ -894,7 +1273,7 @@ export function FilePane({
     const deleteItem = items.find((item) => item.destructive);
     const properties = items.find((item) => item.label === "Properties");
     const organized = items.filter((item) => !toolItems.includes(item) && !copyItems.includes(item) && item !== deleteItem && item !== properties);
-    if (copyItems.length) organized.push({ label: "Copy", icon: <Copy size={14} />, onClick: () => {}, children: copyItems, separatorAfter: true });
+    if (copyItems.length) organized.push({ label: "Copy as text", icon: <Copy size={14} />, onClick: () => {}, children: copyItems, separatorAfter: true });
     if (single && sessionId === LOCAL_SESSION && fs.revealLocal) {
       organized.push({ label: navigator.userAgent.includes("Windows") ? "Reveal in File Explorer" : navigator.userAgent.includes("Mac") ? "Reveal in Finder" : "Reveal in file manager", icon: <FolderSearch size={14} />, onClick: () => { fs.revealLocal!(single.path).catch((e) => setError(errorText(e))); } });
     }
@@ -911,6 +1290,17 @@ export function FilePane({
     if (!sessionId) return;
     e.preventDefault();
     const items: MenuItem[] = [];
+    const clip = getFileClipboard();
+    if (clip) {
+      items.push({
+        label: "Paste",
+        icon: <ClipboardPaste size={14} />,
+        ...keyOf("paste"),
+        disabled: !canPaste(clip),
+        onClick: () => void doPaste(path),
+        separatorAfter: true,
+      });
+    }
     if (sessionId !== LOCAL_SESSION && onSaveSite) {
       items.push({ label: "Save as site…", icon: <BookmarkPlus size={12} />, onClick: () => onSaveSite(path), separatorAfter: true });
     }
@@ -918,6 +1308,7 @@ export function FilePane({
       items.push({
         label: "New folder…",
         icon: <FolderPlus size={12} />,
+        ...keyOf("newFolder"),
         onClick: () => setModal({ type: "mkdir" }),
         separatorAfter: true,
       });
@@ -925,6 +1316,7 @@ export function FilePane({
     items.push({
       label: "Refresh",
       icon: <RefreshCw size={12} />,
+      ...keyOf("refresh"),
       onClick: () => load(path),
     });
     setMenu({ x: e.clientX, y: e.clientY, items });
@@ -932,6 +1324,8 @@ export function FilePane({
 
   // --- File op handlers ---
 
+  // Inline rename: a failure is thrown back to the row's editor, which keeps
+  // it open with the message, instead of replacing the whole listing.
   const doRename = async (entry: DirEntry, newName: string) => {
     if (!sessionId) return;
     const parentEnd = isWindowsPath(entry.path)
@@ -939,12 +1333,25 @@ export function FilePane({
       : entry.path.lastIndexOf("/");
     const parent = entry.path.slice(0, parentEnd);
     const to = joinPath(parent, newName);
+    // Never rename over a different entry (a local rename would replace it).
+    // On Windows "Notes.txt" → "notes.txt" is the same entry: allowed.
+    if (renameClash(entry.name, newName, entries.map((e) => e.name), caseInsensitiveFor(entry.path))) {
+      throw new Error(`${newName} already exists in this folder.`);
+    }
     try {
       await fs.rename(sessionId, entry.path, to);
-      await load(path);
     } catch (e) {
-      setError(errorText(e));
+      throw new Error(`Couldn't rename ${entry.name}: ${errorText(e)}`);
     }
+    await load(path);
+    setSelected(new Set([to]));
+    setAnchor(to);
+  };
+  const renameProblem = (name: string) =>
+    /[/\\]/.test(name) ? "A name can't contain / or \\." : name === "." || name === ".." ? "That name is reserved." : null;
+  const endRename = () => {
+    setRenaming(null);
+    containerRef.current?.focus();
   };
 
   const doDelete = async (items: DirEntry[]) => {
@@ -997,10 +1404,10 @@ export function FilePane({
     );
   };
 
-  const doMkdir = async (name: string) => {
+  const doMkdir = async (name: string, parent = path) => {
     if (!sessionId) return;
     try {
-      await fs.mkdir(sessionId, joinPath(path, name));
+      await fs.mkdir(sessionId, joinPath(parent, name));
       await load(path);
     } catch (e) {
       setError(errorText(e));
@@ -1032,14 +1439,61 @@ export function FilePane({
   // Modified drops below ~360px, Perms shows only when the pane is wide.
   const showModified = paneTier !== "narrow";
   const showPermsCol = hasPerms && paneTier === "wide";
-  const cols = [
-    "minmax(0,1fr)",
-    showModified ? "7.5rem" : null,
-    "5.5rem",
-    showPermsCol ? "5.5rem" : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const visibleCols = (["name", showModified && "modified", "size", showPermsCol && "perms"] as const)
+    .filter((c): c is ColumnId => !!c);
+  const cols = columnWidths
+    ? columnTemplate(visibleCols, columnWidths)
+    : [
+        "minmax(0,1fr)",
+        showModified ? "7.5rem" : null,
+        "5.5rem",
+        showPermsCol ? "5.5rem" : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+  // Drag the boundary after visible column `index`: only it and its right
+  // neighbour change. Moves under 3px don't count; listeners sit on the
+  // document so the drag survives leaving the header.
+  const startColumnResize = (e: React.PointerEvent, index: number) => {
+    if (e.button !== 0 || !e.isPrimary) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const cells = Array.from(headerRef.current?.children ?? []) as HTMLElement[];
+    const px = cells.map((c) => c.getBoundingClientRect().width);
+    if (px.length !== visibleCols.length) return;
+    const startX = e.clientX;
+    const base = columnWidths;
+    let moved = false;
+    let last: ColumnWidths | null = null;
+    const body = document.body.style;
+    const prev = { cursor: body.cursor, select: body.userSelect };
+    const move = (ev: PointerEvent) => {
+      const delta = ev.clientX - startX;
+      if (!moved && Math.abs(delta) < 3) return;
+      if (!moved) {
+        moved = true;
+        body.cursor = "col-resize";
+        body.userSelect = "none";
+        setResizingCol(index);
+      }
+      last = resizeColumns(visibleCols, px, index, delta, base);
+      setLiveColumnWidths(last);
+    };
+    const end = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+      body.cursor = prev.cursor;
+      body.userSelect = prev.select;
+      if (last) commitColumnWidths(last);
+      setLiveColumnWidths(null);
+      setResizingCol(null);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
+  };
   const selectedBytes = visible
     .filter((e) => selected.has(e.path))
     .reduce((a, e) => a + (e.kind === "file" ? e.size : 0), 0);
@@ -1062,8 +1516,13 @@ export function FilePane({
     setEditingPath(false);
   };
 
-  const rowHandlers = useRef({ onRowClick, onRowActivate, onRowDragStart, openRowMenu });
-  rowHandlers.current = { onRowClick, onRowActivate, onRowDragStart, openRowMenu };
+  const rowHandlers = useRef({ onRowClick, onRowActivate, onRowDragStart, onRowDragOver, onRowDrop, endDrag, openRowMenu, doRename, renameProblem, endRename });
+  rowHandlers.current = { onRowClick, onRowActivate, onRowDragStart, onRowDragOver, onRowDrop, endDrag, openRowMenu, doRename, renameProblem, endRename };
+  // Rows on the clipboard after Cut are dimmed until they're pasted.
+  const cutPaths = useMemo(
+    () => (clipboard?.mode === "cut" && clipboard.paneId === paneId ? new Set(clipboard.entries.map((e) => e.path)) : null),
+    [clipboard, paneId]
+  );
 
   return (
     <div
@@ -1082,7 +1541,7 @@ export function FilePane({
       onDrop={onPaneDrop}
       onContextMenu={openPaneMenu}
       className={cn(
-        "flex h-full min-w-0 flex-1 flex-col bg-bg-panel outline-none transition-colors",
+        "group/pane flex h-full min-w-0 flex-1 flex-col bg-bg-panel outline-none transition-colors",
         "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40",
         isDropTarget && "ring-2 ring-inset ring-accent/60 bg-accent/5"
       )}
@@ -1223,10 +1682,12 @@ export function FilePane({
         {editingPath ? (
           <input
             autoFocus
+            onFocus={(e) => e.currentTarget.select()}
+            aria-label="Folder path"
             value={draftPath}
             onChange={(e) => setDraftPath(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commitPath();
+              if (e.key === "Enter" && !isComposing(e)) commitPath();
               else if (e.key === "Escape") cancelPathEdit();
             }}
             onBlur={commitPath}
@@ -1354,10 +1815,13 @@ export function FilePane({
             className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-dim"
           />
           <input
+            ref={filterRef}
+            data-pane-filter
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             disabled={!sessionId}
             placeholder="Filter"
+            aria-label="Filter this folder"
             className="w-32 rounded border border-border bg-bg-subtle py-1 pl-7 pr-6 text-xs outline-none focus:border-accent disabled:opacity-50"
           />
           {filter && (
@@ -1374,34 +1838,45 @@ export function FilePane({
 
       {sessionId && paneViewMode === "details" && (
         <div
+          ref={headerRef}
           className="grid items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
           style={{ gridTemplateColumns: cols }}
         >
-          <SortHeader
-            label="Name"
-            field="name"
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSort={onSort}
-          />
-          {showModified && (
-            <SortHeader
-              label="Modified"
-              field="modified"
-              sortField={sortField}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-          )}
-          <SortHeader
-            label="Size"
-            field="size"
-            align="right"
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSort={onSort}
-          />
-          {showPermsCol && <span className="text-right">Perms</span>}
+          {visibleCols.map((id, i) => (
+            <div key={id} data-col={id} className={cn("relative flex min-w-0", id === "name" || id === "modified" ? "justify-start" : "justify-end")}>
+              {id === "perms" ? (
+                <span className="text-right">Perms</span>
+              ) : (
+                <SortHeader
+                  label={COLUMN_LABELS[id]}
+                  field={id}
+                  align={id === "size" ? "right" : "left"}
+                  sortField={sortField}
+                  sortDirection={sortDirection}
+                  onSort={onSort}
+                />
+              )}
+              {i < visibleCols.length - 1 && (
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label={`Resize ${COLUMN_LABELS[id]} column`}
+                  title="Drag to resize; double-click to reset"
+                  onPointerDown={(e) => startColumnResize(e, i)}
+                  onDoubleClick={() => { setLiveColumnWidths(null); commitColumnWidths(null); }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="group/colh absolute -right-[8px] -top-1 -bottom-1 z-[1] flex w-2 cursor-col-resize touch-none justify-center"
+                >
+                  <span
+                    className={cn(
+                      "w-px group-hover/colh:bg-accent",
+                      resizingCol === i ? "bg-accent" : "bg-border"
+                    )}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -1477,6 +1952,10 @@ export function FilePane({
                 sessionId={sessionId}
                 loadThumb={loadThumb}
                 handlers={rowHandlers}
+                renaming={renaming === entry.path}
+                focused={anchor === entry.path}
+                cut={!!cutPaths?.has(entry.path)}
+                dropTarget={dropFolder === entry.path}
               />
             ))}
           </div>
@@ -1497,6 +1976,10 @@ export function FilePane({
               sessionId={sessionId}
               loadThumb={loadThumb}
               handlers={rowHandlers}
+              renaming={renaming === entry.path}
+              focused={anchor === entry.path}
+              cut={!!cutPaths?.has(entry.path)}
+              dropTarget={dropFolder === entry.path}
             />
           ))
         )}
@@ -1513,7 +1996,22 @@ export function FilePane({
           {selectionCount > 0 && (
             <span className="text-text-muted">
               · {selectionCount} selected
-              {selectedBytes > 0 ? ` · ${fmtSize(selectedBytes)}` : ""}
+              {selectedBytes > 0 && (
+                <>
+                  {" · "}
+                  <span title={exactBytes(selectedBytes)}>{fmtSize(selectedBytes)}</span>
+                </>
+              )}
+            </span>
+          )}
+          {notice && (
+            <span
+              role="status"
+              data-pane-notice
+              className={cn("min-w-0 truncate", notice.error ? "text-danger" : "text-text-muted")}
+              title={notice.text}
+            >
+              · {notice.text}
             </span>
           )}
           <div className="flex-1" />
@@ -1532,24 +2030,14 @@ export function FilePane({
         />
       )}
 
-      {modal?.type === "rename" && (
-        <PromptModal
-          title={`Rename ${modal.entry.name}`}
-          label="New name"
-          initialValue={modal.entry.name}
-          okLabel="Rename"
-          onClose={() => setModal(null)}
-          onSubmit={(v) => doRename(modal.entry, v)}
-        />
-      )}
       {modal?.type === "mkdir" && (
         <PromptModal
           title="New folder"
-          label={`In ${path}`}
+          label={`In ${modal.parent ?? path}`}
           initialValue=""
           okLabel="Create"
           onClose={() => setModal(null)}
-          onSubmit={(v) => doMkdir(v)}
+          onSubmit={(v) => doMkdir(v, modal.parent ?? path)}
         />
       )}
       {modal?.type === "chmod" && (
@@ -1607,23 +2095,32 @@ export function FilePane({
         <ConfirmModal
           title={
             modal.entries.length === 1
-              ? `Delete ${modal.entries[0].name}?`
-              : `Delete ${modal.entries.length} items?`
+              ? `Delete this ${modal.entries[0].kind === "directory" ? "folder" : "file"}?`
+              : `Delete ${describeKinds(modal.entries)}?`
           }
           message={
-            modal.entries.length === 1
-              ? `Path: ${modal.entries[0].path}${
-                  modal.entries[0].kind === "directory"
-                    ? "\nThis directory and all its contents will be removed."
-                    : ""
-                }`
-              : modal.entries
-                  .slice(0, 5)
-                  .map((e) => e.path)
-                  .join("\n") +
-                (modal.entries.length > 5
-                  ? `\n…and ${modal.entries.length - 5} more`
-                  : "")
+            modal.entries.length === 1 ? (
+              <span data-delete-summary>
+                <strong className="font-semibold text-text [overflow-wrap:anywhere]">{modal.entries[0].name}</strong>
+                {modal.entries[0].kind === "directory"
+                  ? " and everything in it will be permanently deleted."
+                  : " will be permanently deleted."}
+                <span className="mt-1 block font-mono text-xs text-text-dim [overflow-wrap:anywhere]">{modal.entries[0].path}</span>
+              </span>
+            ) : (
+              <span data-delete-summary>
+                {modal.entries.some((e) => e.kind === "directory")
+                  ? "These items, and everything inside the folders, will be permanently deleted:"
+                  : "These items will be permanently deleted:"}
+                <span className="mt-1 block font-mono text-xs text-text-dim [overflow-wrap:anywhere]">
+                  {modal.entries
+                    .slice(0, 5)
+                    .map((e) => e.name)
+                    .join("\n")}
+                  {modal.entries.length > 5 ? `\n…and ${modal.entries.length - 5} more` : ""}
+                </span>
+              </span>
+            )
           }
           destructive
           confirmLabel="Delete"
@@ -1642,7 +2139,13 @@ type RowHandlers = React.MutableRefObject<{
   onRowClick: (entry: DirEntry, e: React.MouseEvent) => void;
   onRowActivate: (entry: DirEntry) => void;
   onRowDragStart: (e: React.DragEvent, entry: DirEntry) => void;
+  onRowDragOver: (e: React.DragEvent, entry: DirEntry) => void;
+  onRowDrop: (e: React.DragEvent, entry: DirEntry) => void;
+  endDrag: () => void;
   openRowMenu: (e: React.MouseEvent, entry: DirEntry) => void;
+  doRename: (entry: DirEntry, name: string) => Promise<void>;
+  renameProblem: (name: string) => string | null;
+  endRename: () => void;
 }>;
 
 const Row = memo(function Row({
@@ -1659,6 +2162,10 @@ const Row = memo(function Row({
   sessionId,
   loadThumb,
   handlers,
+  renaming,
+  focused,
+  cut,
+  dropTarget,
 }: {
   paneId: string;
   entry: DirEntry;
@@ -1677,20 +2184,67 @@ const Row = memo(function Row({
     signal?: AbortSignal
   ) => Promise<Blob | null>;
   handlers: RowHandlers;
+  renaming: boolean;
+  /** The keyboard cursor (anchor) row: ringed while the pane has focus. */
+  focused: boolean;
+  /** On the clipboard after Cut: dimmed until pasted. */
+  cut: boolean;
+  /** A same-pane drag would drop into this folder: tinted. */
+  dropTarget: boolean;
 }) {
   const onClick = (e: React.MouseEvent) => handlers.current.onRowClick(entry, e);
   const onActivate = () => handlers.current.onRowActivate(entry);
   const onDragStart = (e: React.DragEvent) => handlers.current.onRowDragStart(e, entry);
   const onContextMenu = (e: React.MouseEvent) => handlers.current.openRowMenu(e, entry);
+  const onDragOver = (e: React.DragEvent) => handlers.current.onRowDragOver(e, entry);
+  const onDrop = (e: React.DragEvent) => handlers.current.onRowDrop(e, entry);
+  const onDragEnd = () => handlers.current.endDrag();
+  // Shared by all three layouts.
+  const rowProps = {
+    "data-idx": index,
+    "data-path": entry.path,
+    "data-upload-directory": entry.kind === "directory" ? entry.path : undefined,
+    "data-anchor": focused || undefined,
+    "data-cut": cut || undefined,
+    "data-drop-target": dropTarget || undefined,
+    // Spoken, not a hover tooltip: the name alone gets a tooltip, and only
+    // when it's cut off.
+    "aria-description": opensAsFolder(entry)
+      ? "Double-click to open • Right-click for more"
+      : "Double-click to transfer • Right-click for more",
+    role: "option",
+    id: `${paneId}-row-${index}`,
+    "aria-selected": selected,
+    onClick,
+    onDoubleClick: onActivate,
+    onContextMenu,
+    draggable: !renaming,
+    onDragStart,
+    onDragOver,
+    onDrop,
+    onDragEnd,
+  };
+  // Row states: selected rows are tinted, the keyboard cursor row gets a ring
+  // while the pane has focus, a drop target gets a stronger tint and ring, and
+  // cut rows are dimmed.
+  const stateCls = cn(
+    focused && "group-focus-within/pane:ring-1 group-focus-within/pane:ring-inset group-focus-within/pane:ring-accent/70",
+    dropTarget && "!bg-accent/25 ring-1 ring-inset ring-accent",
+    cut && "opacity-50"
+  );
+  const sizeEl = (cls: string) =>
+    entry.kind === "file" ? (
+      <span className={cls} title={exactBytes(entry.size)}>
+        {fmtSize(entry.size)}
+      </span>
+    ) : (
+      <span className={cls} />
+    );
   const { Icon, className: iconColor } = icon;
   const pad = density === "compact" ? "py-0.5 text-xs" : "py-1 text-sm";
   const sel = selected
     ? "bg-accent/15 hover:bg-accent/20"
     : "hover:bg-bg-hover";
-  const title =
-    !opensAsFolder(entry)
-      ? "Double-click to transfer • Right-click for more"
-      : "Double-click to open • Right-click for more";
   // Prefer a Material Icon Theme SVG for known file types; fall back to the
   // lucide glyph for folders, symlinks, and unmatched files.
   const matUrl = entry.kind === "file" ? materialIconUrl(entry.name) : undefined;
@@ -1708,6 +2262,22 @@ const Row = memo(function Row({
       <Icon size={size} className={cn("shrink-0", iconColor)} />
     );
   const iconEl = glyph(13);
+  // The name, or its inline editor while this row is being renamed.
+  const nameEl = (cls: string) =>
+    renaming ? (
+      <InlineRename
+        value={entry.name}
+        selectStem={entry.kind === "file"}
+        aria-label={`Rename ${entry.name}`}
+        validate={(n) => handlers.current.renameProblem(n)}
+        onSubmit={(n) => handlers.current.doRename(entry, n)}
+        onDone={() => handlers.current.endRename()}
+      />
+    ) : (
+      <span className={cls} onMouseEnter={titleIfTruncated}>
+        {entry.name}
+      </span>
+    );
   // Show a real image preview when the adapter can supply bytes. The adapter
   // gates the (expensive, network) remote kind on the `remoteImagePreviews`
   // setting — when it's off it returns null fast and the icon fallback shows,
@@ -1733,23 +2303,15 @@ const Row = memo(function Row({
     const bigIcon = glyph(30);
     return (
       <div
-        data-idx={index}
-        data-upload-directory={entry.kind === "directory" ? entry.path : undefined}
-        role="option"
-        id={`${paneId}-row-${index}`}
-        aria-selected={selected}
-        onClick={onClick}
-        onDoubleClick={onActivate}
-        onContextMenu={onContextMenu}
-        draggable
-        onDragStart={onDragStart}
-        title={title}
+        {...rowProps}
         className={cn(
           "flex cursor-default select-none flex-col items-center gap-1.5 rounded-lg border p-2.5 text-center",
-          "[content-visibility:auto] [contain-intrinsic-size:auto_92px]",
+          // Containment clips overflow; the rename error must show below.
+          !renaming && "[content-visibility:auto] [contain-intrinsic-size:auto_92px]",
           selected
             ? "border-accent/40 bg-accent/15"
-            : "border-transparent hover:border-border-subtle hover:bg-bg-hover"
+            : "border-transparent hover:border-border-subtle hover:bg-bg-hover",
+          stateCls
         )}
       >
         {canThumb && sessionId ? (
@@ -1763,9 +2325,7 @@ const Row = memo(function Row({
         ) : (
           bigIcon
         )}
-        <span className="line-clamp-2 w-full break-words text-xs leading-tight">
-          {entry.name}
-        </span>
+        {nameEl("line-clamp-2 w-full break-words text-xs leading-tight")}
       </div>
     );
   }
@@ -1773,66 +2333,46 @@ const Row = memo(function Row({
   if (viewMode === "list") {
     return (
       <div
-        data-idx={index}
-        data-upload-directory={entry.kind === "directory" ? entry.path : undefined}
-        role="option"
-        id={`${paneId}-row-${index}`}
-        aria-selected={selected}
-        onClick={onClick}
-        onDoubleClick={onActivate}
-        onContextMenu={onContextMenu}
-        draggable
-        onDragStart={onDragStart}
-        title={title}
+        {...rowProps}
         className={cn(
           "flex cursor-default select-none items-center gap-2 border-b border-border-subtle px-3",
-          "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
+          // Containment clips overflow; the rename error must show below.
+          !renaming && "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
           pad,
-          sel
+          sel,
+          stateCls
         )}
       >
         {rowThumb}
-        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-        <span className="shrink-0 text-xs tabular-nums text-text-dim">
-          {entry.kind === "file" ? fmtSize(entry.size) : ""}
-        </span>
+        {nameEl("min-w-0 flex-1 truncate")}
+        {sizeEl("shrink-0 text-xs tabular-nums text-text-dim")}
       </div>
     );
   }
 
   return (
     <div
-      data-idx={index}
-        data-upload-directory={entry.kind === "directory" ? entry.path : undefined}
-      role="option"
-      id={`${paneId}-row-${index}`}
-      aria-selected={selected}
-      onClick={onClick}
-      onDoubleClick={onActivate}
-      onContextMenu={onContextMenu}
-      draggable
-      onDragStart={onDragStart}
-      title={title}
+      {...rowProps}
       style={{ gridTemplateColumns: cols }}
       className={cn(
         "grid cursor-default select-none items-center gap-2 border-b border-border-subtle px-3",
-        "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
+        // Containment clips overflow; the rename error must show below.
+        !renaming && "[content-visibility:auto] [contain-intrinsic-size:auto_28px]",
         pad,
-        sel
+        sel,
+        stateCls
       )}
     >
       <span className="flex min-w-0 items-center gap-2">
         {rowThumb}
-        <span className="truncate">{entry.name}</span>
+        {nameEl("truncate")}
       </span>
       {showModified && (
         <span className="truncate text-xs text-text-dim">
           {fmtMtime(entry.modified)}
         </span>
       )}
-      <span className="text-right text-xs tabular-nums text-text-dim">
-        {entry.kind === "file" ? fmtSize(entry.size) : ""}
-      </span>
+      {sizeEl("text-right text-xs tabular-nums text-text-dim")}
       {showPermsCol && (
         <span
           className="text-right font-mono text-[10px] text-text-dim"
@@ -1844,6 +2384,14 @@ const Row = memo(function Row({
     </div>
   );
 });
+
+/** Show the full name as a tooltip only when it's cut off on screen. */
+function titleIfTruncated(e: React.MouseEvent<HTMLElement>) {
+  const el = e.currentTarget;
+  const cut = el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+  if (cut) el.title = el.textContent ?? "";
+  else el.removeAttribute("title");
+}
 
 function SortHeader({
   label,

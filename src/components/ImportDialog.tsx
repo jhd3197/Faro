@@ -22,6 +22,9 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { toast } from "@/stores/toastStore";
 import { useDialog } from "@/hooks/useDialog";
+import { SelectAll } from "@/components/ui/SelectAll";
+import { ShowMore } from "@/components/ui/ShowMore";
+import { matchesQuery } from "@/components/ui/Menu";
 import type {
   ImportNeed,
   ImportResolution,
@@ -31,6 +34,7 @@ import type {
   Protocol,
 } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { isComposing } from "@faro/file-ui";
 
 interface Props {
   onClose: () => void;
@@ -133,6 +137,7 @@ function ImporterTab({
   const [pathTouched, setPathTouched] = useState(!!initialPath);
   const [previews, setPreviews] = useState<ProfilePreview[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState("");
   const [resolutions, setResolutions] = useState<Record<string, ImportResolution>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -253,10 +258,15 @@ function ImporterTab({
       return next;
     });
 
-  const allSelected = useMemo(
-    () => previews !== null && previews.every((p) => selected.has(p.previewId)),
-    [previews, selected]
+  // The filter narrows the list; Select all acts on what it shows.
+  const shown = useMemo(
+    () =>
+      (previews ?? []).filter((p) =>
+        matchesQuery({ label: p.name, keywords: `${p.username} ${p.host} ${p.note ?? ""}` }, query)
+      ),
+    [previews, query]
   );
+  const shownIds = useMemo(() => shown.map((p) => p.previewId), [shown]);
 
   // What Import will actually save: ticked rows, minus duplicates set to Skip.
   const toImport = useMemo(
@@ -317,7 +327,7 @@ function ImporterTab({
               setLocked(false);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && path) scan();
+              if (e.key === "Enter" && !isComposing(e) && path) scan();
             }}
             disabled={isRegistry}
             className="w-full rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 font-mono text-[11.5px] outline-none focus:border-accent disabled:opacity-60"
@@ -384,7 +394,7 @@ function ImporterTab({
       {error && (
         <div role="alert" className="mb-2 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-2 text-[11.5px] text-text">
           <AlertTriangle size={12} className="mt-0.5 shrink-0 text-danger" />
-          <span className="break-all">{error}</span>
+          <ShowMore lines={3} className="min-w-0">{error}</ShowMore>
         </div>
       )}
 
@@ -434,21 +444,30 @@ function ImporterTab({
         {previews && previews.length > 0 && (
           <>
             <div className="sticky top-0 z-sticky flex items-center gap-2 border-b border-border bg-bg-panel px-3 py-1.5 text-[11px] text-text-muted">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    setSelected(new Set(previews.map((p) => p.previewId)));
-                  } else {
-                    setSelected(new Set());
-                  }
-                }}
-                className="accent-accent"
+              <SelectAll
+                visible={shownIds}
+                selected={selected}
+                onChange={setSelected}
+                label={query ? "Select all shown" : "Select all"}
               />
-              <span>
+              <span data-testid="import-count" className="shrink-0">
                 {selected.size} of {previews.length} selected
               </span>
+              {previews.length > 5 && (
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDownCapture={(e) => {
+                    if (e.key === "Escape" && query) {
+                      e.stopPropagation();
+                      setQuery("");
+                    }
+                  }}
+                  placeholder="Filter"
+                  aria-label="Filter connections"
+                  className="ml-1 w-32 min-w-0 rounded border border-border bg-bg-subtle px-1.5 py-0.5 text-[11px] text-text outline-none focus:border-accent"
+                />
+              )}
               <div className="flex-1" />
               {kind === "faro" && (
                 <span className="text-text-dim">{withSecrets ? "with secrets" : "no secrets in this file"}</span>
@@ -459,7 +478,10 @@ function ImporterTab({
                 </span>
               )}
             </div>
-            {previews.map((p) => (
+            {shown.length === 0 && (
+              <Empty>No connections match “{query}”.</Empty>
+            )}
+            {shown.map((p) => (
               <PreviewRow
                 key={p.previewId}
                 preview={p}

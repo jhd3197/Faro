@@ -35,6 +35,9 @@ import {
   Globe,
   Stethoscope,
   MoreHorizontal,
+  TextCursorInput,
+  TriangleAlert,
+  ArrowUpDown,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useBridge } from "@/stores/bridgeStore";
@@ -43,7 +46,10 @@ import { useServerView } from "@/stores/serverViewStore";
 import { useSettings } from "@/stores/settingsStore";
 import { ProfileEditor } from "./ProfileEditor";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
-import { formatCombo } from "@/lib/shortcuts";
+import { keyCombo } from "@/lib/shortcuts";
+import { useKeyOf, useKeybinding } from "@/lib/keybindings";
+import { useFocusedItem } from "@/stores/focusStore";
+import { InlineRename } from "@faro/file-ui";
 import { ConfirmModal } from "./ConfirmModal";
 import { Tooltip } from "./ui/Tooltip";
 import { useDialog } from "@/hooks/useDialog";
@@ -68,6 +74,15 @@ import { useConnectionCheck } from "./ConnectionCheckDialog";
 import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
 import { effectiveAccess, accessSummary } from "@/lib/agentAccess";
 import { searchRank } from "@/lib/serverSearch";
+import { isClipped } from "@/lib/truncation";
+import {
+  applySort,
+  copyName,
+  nextSort,
+  profileProblem,
+  rangeBetween,
+  sortItemLabel,
+} from "@/lib/railOps";
 import type { ProfileAccess } from "@/lib/types";
 
 type RowState = "focused" | "connected" | "connecting" | "error" | "idle";
@@ -146,10 +161,10 @@ export function ServerRail() {
     reordering,
     undoOrganization,
     organizationHistory,
+    connectFailures,
   } = useConnections();
   const setTerminalOpen = useLayout((s) => s.setTerminalOpen);
   const openDialog = useLayout((s) => s.openDialog);
-  const openNewConnection = useLayout((s) => s.openNewConnection);
   const openExport = useLayout((s) => s.openExport);
   const openImport = useLayout((s) => s.openImport);
   const openInvite = useLayout((s) => s.openInvite);
@@ -163,6 +178,8 @@ export function ServerRail() {
   const setRailExpanded = useSettings((s) => s.setRailExpanded);
   const collapsedGroups = useSettings((s) => s.railCollapsedGroups);
   const toggleRailGroup = useSettings((s) => s.toggleRailGroup);
+  const railSort = useSettings((s) => s.railSort);
+  const setRailSort = useSettings((s) => s.setRailSort);
 
   const enabledSessions = useBridge((s) => s.status.enabledSessions);
   const bridgeRunning = useBridge((s) => s.status.running);
@@ -199,7 +216,7 @@ export function ServerRail() {
   );
   // Naming/renaming a group happens through a small prompt dialog.
   const [groupPrompt, setGroupPrompt] = useState<
-    | { kind: "assign"; profile: ConnectionProfile }
+    | { kind: "assign"; profiles: ConnectionProfile[] }
     | { kind: "rename"; from: string }
     | null
   >(null);
@@ -207,11 +224,23 @@ export function ServerRail() {
   // the OS keychain too) — the context menu arms this instead of deleting
   // outright, and a ConfirmModal does the rest.
   const [pendingDelete, setPendingDelete] = useState<ConnectionProfile | null>(null);
+  const [pendingBulkDelete, setPendingBulkDelete] = useState<ConnectionProfile[] | null>(null);
+  // Multi-selection of servers (Ctrl-click, Shift-click). Held as profile ids,
+  // so a group picked along with some of its members still counts each
+  // server once. `anchor` is where a Shift-click range starts.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const anchorRef = useRef<string | null>(null);
+  const clearSelection = () => setSelected((cur) => (cur.size ? new Set() : cur));
+  // In-place rename of a server's display name or a group's name (F2).
+  const [renaming, setRenaming] = useState<
+    { kind: "server"; id: string } | { kind: "group"; name: string } | null
+  >(null);
+  const keyOf = useKeyOf();
 
   // Effective expanded state. Open when pinned, while hovering the collapsed
   // rail, while a rail menu / search popover is up (so the flyout doesn't
   // collapse out from under what you're clicking), or mid-drag.
-  const expanded = pinned || hovering || !!menu || siteMenuOpen || searchOpen || !!dragId;
+  const expanded = pinned || hovering || !!menu || siteMenuOpen || searchOpen || !!dragId || !!renaming;
 
   const onRailEnter = () => {
     if (pinned) return;
@@ -258,24 +287,8 @@ export function ServerRail() {
     };
   }, [loadProfiles]);
 
-  // "/" opens the search popover from anywhere (unless already typing).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
-          t.isContentEditable)
-      )
-        return;
-      e.preventDefault();
-      setSearchOpen(true);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  // "/" (remappable) opens the search popover from anywhere unless typing.
+  useKeybinding("rail.search", () => setSearchOpen(true));
 
   const connectedIds = useMemo(
     () => new Set(sessions.map((s) => s.profileId)),
@@ -328,6 +341,9 @@ export function ServerRail() {
       }),
     [profiles]
   );
+  // A–Z / Z–A is a view over the custom order, never a rewrite of it.
+  const shown = useMemo(() => applySort(ordered, railSort), [ordered, railSort]);
+  const sorted = railSort === "az" || railSort === "za";
 
   // Rail sections: ungrouped servers first, then one folder per group name (in
   // order of each group's first member). Groups exist purely as `profile.group`
@@ -335,13 +351,18 @@ export function ServerRail() {
   const sections = useMemo(() => {
     const ungrouped: ConnectionProfile[] = [];
     const groups = new Map<string, ConnectionProfile[]>();
-    for (const p of ordered) {
+    for (const p of shown) {
       if (!p.group) ungrouped.push(p);
       else if (groups.has(p.group)) groups.get(p.group)!.push(p);
       else groups.set(p.group, [p]);
     }
-    return { ungrouped, groups: [...groups.entries()] };
-  }, [ordered]);
+    const entries = [...groups.entries()];
+    // Sorted views order the folders by name too.
+    const byName = sorted
+      ? applySort(entries.map(([name, items]) => ({ name, items })), railSort).map((g) => [g.name, g.items] as [string, ConnectionProfile[]])
+      : entries;
+    return { ungrouped, groups: byName };
+  }, [shown, sorted, railSort]);
   const groupNames = useMemo(
     () => sections.groups.map(([name]) => name),
     [sections]
@@ -386,6 +407,13 @@ export function ServerRail() {
           break;
         }
       }
+    }
+    // A sorted view has no positions to save — keep the custom order intact
+    // and only file the server into its new folder, if it changed.
+    if (sorted) {
+      if ((dragged.group || undefined) !== group) void saveProfiles([{ ...dragged, group }]);
+      else toast.info("Sorted by name", "Switch the sort to Custom order to rearrange servers.");
+      return;
     }
     const ids = [
       ...rest.slice(0, at).map((p) => p.id),
@@ -437,17 +465,31 @@ export function ServerRail() {
     const cf = isSftp && p.proxyCommand?.kind === "cloudflare";
     const items: MenuItem[] = [];
 
+    // A profile that can't work as saved gets only what fixes it.
+    if (!connected && problemOf(p)) {
+      return [
+        { label: "Edit…", icon: <Pencil size={14} />, onClick: () => setEditing(p) },
+        {
+          label: "Test connection…",
+          icon: <Stethoscope size={14} />,
+          onClick: () => useConnectionCheck.getState().open(p, () => setEditing(p)),
+          separatorAfter: true,
+        },
+        { label: "Delete…", icon: <Trash2 size={14} />, ...keyOf("rail.delete"), destructive: true, onClick: () => setPendingDelete(p) },
+      ];
+    }
+
     // 1. Now. Clicking a connected server already switches to it.
     // Global shortcuts act on the active server, so their hint shows only here.
     const active = !!sid && sid === activeSessionId;
     if (!connected) {
-      items.push({ label: "Connect", icon: <Plug size={14} />, hint: "Enter", onClick: () => doConnect(p.id) });
+      items.push({ label: "Connect", icon: <Plug size={14} />, ...keyOf("rail.connect"), onClick: () => doConnect(p.id) });
     }
     if (isSftp) {
       items.push({
         label: connected ? "Open shell" : "Connect & open shell",
         icon: <TerminalSquare size={14} />,
-        hint: active ? formatCombo("mod+`") : undefined,
+        ...(active ? keyOf("toggle-terminal") : {}),
         onClick: () => openShell(p.id),
       });
     }
@@ -476,7 +518,7 @@ export function ServerRail() {
       items.push({
         label: "Reconnect",
         icon: <RefreshCw size={14} />,
-        hint: active ? formatCombo("mod+shift+r") : undefined,
+        ...(active ? keyOf("reconnect") : {}),
         onClick: () => {
           setPendingId(p.id);
           reconnect(sid)
@@ -494,7 +536,8 @@ export function ServerRail() {
 
     // 2. This connection
     items.push(
-      { label: "Edit…", icon: <Pencil size={14} />, hint: "F2", onClick: () => setEditing(p) },
+      { label: "Rename", icon: <TextCursorInput size={14} />, ...keyOf("focus.rename"), onClick: () => setRenaming({ kind: "server", id: p.id }) },
+      { label: "Edit…", icon: <Pencil size={14} />, onClick: () => setEditing(p) },
       {
         label: "Test connection…",
         icon: <Stethoscope size={14} />,
@@ -544,19 +587,20 @@ export function ServerRail() {
           icon: <Folder size={14} />,
           onClick: () => saveProfiles([{ ...p, group: g }]),
         })),
-      { label: "New group…", icon: <FolderPlus size={14} />, onClick: () => setGroupPrompt({ kind: "assign", profile: p }) },
+      { label: "New group…", icon: <FolderPlus size={14} />, onClick: () => setGroupPrompt({ kind: "assign", profiles: [p] }) },
       ...(p.group
         ? [{ label: "Remove from group", icon: <FolderMinus size={14} />, onClick: () => saveProfiles([{ ...p, group: undefined }]) }]
         : []),
     ];
     organize[organize.length - 1].separatorAfter = true;
     organize.push(
-      { label: "Move up", icon: <ArrowUp size={14} />, disabled: reordering || position <= 0, onClick: () => move(-1) },
-      { label: "Move down", icon: <ArrowDown size={14} />, disabled: reordering || position >= siblings.length - 1, onClick: () => move(1) }
+      { label: "Move up", icon: <ArrowUp size={14} />, disabled: sorted || reordering || position <= 0, onClick: () => move(-1) },
+      { label: "Move down", icon: <ArrowDown size={14} />, disabled: sorted || reordering || position >= siblings.length - 1, onClick: () => move(1), separatorAfter: true },
+      sortItem()
     );
 
     const more: MenuItem[] = [
-      { label: "Duplicate…", icon: <Copy size={14} />, hint: formatCombo("mod+d"), onClick: () => duplicateProfile(p) },
+      { label: "Duplicate", icon: <Copy size={14} />, ...keyOf("rail.duplicate"), onClick: () => void duplicateProfile(p) },
     ];
     if (isSftp && !p.jumpProfile && !p.proxyCommand && !p.proxy) {
       more.push({ label: "Move behind Cloudflare…", icon: <Cloud size={14} />, onClick: () => openMoveToCloudflare(p.id) });
@@ -577,47 +621,245 @@ export function ServerRail() {
     items.push(
       { label: "Share", icon: <Link2 size={14} />, submenu: share },
       { label: "Organize", icon: <Folder size={14} />, submenu: organize },
-      { label: "More", icon: <MoreHorizontal size={14} />, submenu: more }
+      { label: "More", icon: <MoreHorizontal size={14} />, submenu: more, separatorAfter: true },
+      // Delete is always last, and red.
+      { label: "Delete…", icon: <Trash2 size={14} />, ...keyOf("rail.delete"), destructive: true, onClick: () => setPendingDelete(p) }
     );
-    more[more.length - 1].separatorAfter = true;
-    more.push({ label: "Delete…", icon: <Trash2 size={14} />, hint: "Del", destructive: true, onClick: () => setPendingDelete(p) });
     return items;
   };
 
-  // A copy seeded from this profile, so a sibling login (same host, different
-  // user/password) is a quick edit.
-  const duplicateProfile = (p: ConnectionProfile) => {
-    const { id: _id, sortOrder: _so, ...rest } = p;
+  const problemOf = (p: ConnectionProfile) => profileProblem(p, connectFailures[p.id]);
+
+  // One cycling item; its label names the state it switches to.
+  const sortItem = (): MenuItem => ({
+    label: sortItemLabel(railSort),
+    icon: <ArrowUpDown size={14} />,
+    onClick: () => setRailSort(nextSort(railSort)),
+  });
+
+  // ---- Multi-selection ----
+
+  /** Servers as they sit on screen: closed folders hide their members. */
+  const visibleIds = () => [
+    ...sections.ungrouped.map((p) => p.id),
+    ...sections.groups.flatMap(([name, items]) =>
+      collapsedGroups.includes(name) ? [] : items.map((p) => p.id)
+    ),
+  ];
+  const selectedProfiles = () => shown.filter((p) => selected.has(p.id));
+
+  /** Ctrl/Cmd-click toggles, Shift-click selects a range (Ctrl+Shift adds
+   *  it). Returns false for a plain click, which the caller handles. */
+  const selectClick = (e: React.MouseEvent, p: ConnectionProfile): boolean => {
+    const toggle = e.ctrlKey || e.metaKey;
+    if (e.shiftKey) {
+      const range = rangeBetween(visibleIds(), anchorRef.current, p.id);
+      setSelected((cur) => new Set(toggle ? [...cur, ...range] : range));
+      if (!anchorRef.current) anchorRef.current = p.id;
+      return true;
+    }
+    if (toggle) {
+      setSelected((cur) => {
+        const next = new Set(cur);
+        if (next.has(p.id)) next.delete(p.id);
+        else next.add(p.id);
+        return next;
+      });
+      anchorRef.current = p.id;
+      return true;
+    }
+    clearSelection();
+    anchorRef.current = p.id;
+    return false;
+  };
+
+  /** Ctrl/Shift-click on a folder picks all of its servers, or drops them
+   *  when they're all picked already. */
+  const selectGroupClick = (e: React.MouseEvent, name: string): boolean => {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return false;
+    const ids = (sections.groups.find(([g]) => g === name)?.[1] ?? []).map((m) => m.id);
+    setSelected((cur) => {
+      const all = ids.every((id) => cur.has(id));
+      const next = new Set(cur);
+      for (const id of ids) {
+        if (all) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+    return true;
+  };
+
+  // Esc clears the selection (an open menu takes its own Esc first).
+  useEffect(() => {
+    if (!selected.size || menu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      clearSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, menu]);
+
+  // Deleted servers drop out of the selection.
+  useEffect(() => {
+    setSelected((cur) => {
+      if (!cur.size) return cur;
+      const next = new Set([...cur].filter((id) => profiles.some((p) => p.id === id)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [profiles]);
+
+  const connectAll = async (ps: ConnectionProfile[]) => {
+    // One at a time, so host-key and password prompts queue instead of racing.
+    for (const p of ps) {
+      if (useConnections.getState().sessions.some((s) => s.profileId === p.id)) continue;
+      setPendingId(p.id);
+      try {
+        await connect(p.id, { focus: false });
+      } catch {
+        // connect() already reported it.
+      }
+    }
+    setPendingId(null);
+  };
+
+  const bulkMenuItems = (ps: ConnectionProfile[]): MenuItem[] => {
+    const offline = ps.filter((p) => !connectedIds.has(p.id));
+    const live = ps.flatMap((p) => sessions.filter((s) => s.profileId === p.id));
+    const moveTo: MenuItem[] = [
+      ...groupNames
+        .filter((g) => ps.some((p) => p.group !== g))
+        .map((g) => ({
+          label: `"${g}"`,
+          icon: <Folder size={14} />,
+          onClick: () => void saveProfiles(ps.map((p) => ({ ...p, group: g }))),
+        })),
+      { label: "New group…", icon: <FolderPlus size={14} />, onClick: () => setGroupPrompt({ kind: "assign", profiles: ps }) },
+      ...(ps.some((p) => p.group)
+        ? [{ label: "Remove from group", icon: <FolderMinus size={14} />, onClick: () => void saveProfiles(ps.map((p) => ({ ...p, group: undefined }))) }]
+        : []),
+    ];
+    return [
+      {
+        label: `Connect all (${offline.length})`,
+        icon: <Plug size={14} />,
+        disabled: offline.length === 0,
+        onClick: () => void connectAll(offline),
+      },
+      {
+        label: `Disconnect all (${live.length})`,
+        icon: <Unplug size={14} />,
+        disabled: live.length === 0,
+        onClick: () => {
+          for (const s of live) void disconnect(s.sessionId);
+        },
+        separatorAfter: true,
+      },
+      { label: "Move to group", icon: <Folder size={14} />, submenu: moveTo },
+      {
+        label: "Export…",
+        icon: <Upload size={14} />,
+        onClick: () => openExport({ ids: ps.map((p) => p.id), format: "faro", label: `${ps.length} servers` }),
+        separatorAfter: true,
+      },
+      {
+        label: `Delete (${ps.length})…`,
+        icon: <Trash2 size={14} />,
+        destructive: true,
+        onClick: () => setPendingBulkDelete(ps),
+      },
+    ];
+  };
+
+  const deleteMany = async (ps: ConnectionProfile[]) => {
+    const failed: string[] = [];
+    for (const p of ps) {
+      try {
+        await deleteProfile(p.id);
+      } catch {
+        failed.push(p.name);
+      }
+    }
+    clearSelection();
+    if (failed.length) toast.error(`Couldn't delete ${failed.join(", ")}`);
+    else toast.success(`Deleted ${ps.length} servers`);
+  };
+
+  // One step, no dialog: the copy is saved right away as "X copy" (then
+  // "X copy 2"…), in the same folder. It keeps the original's sortOrder, so
+  // it lands right after it. Edit it afterwards for a sibling login.
+  const duplicateProfile = async (p: ConnectionProfile) => {
     const oauthAccount =
       p.protocol === "dropbox" ||
       p.protocol === "onedrive" ||
       p.protocol === "gdrive" ||
       p.protocol === "box" ||
       p.protocol === "dynamics";
-    openNewConnection({
-      ...rest,
-      name: `${p.name} (copy)`,
+    const name = copyName(p.name, useConnections.getState().profiles.map((x) => x.name));
+    const copy: ConnectionProfile = {
+      ...p,
+      id: crypto.randomUUID(),
+      name,
       autoConnect: undefined,
       // OAuth tokens are keyed by profile id — the copy must sign in anew.
       account: oauthAccount ? undefined : p.account,
-    });
+    };
+    try {
+      await saveProfile(copy);
+      toast.success(`Duplicated as “${name}”`, undefined, undefined, { log: false });
+    } catch (e) {
+      toastError(e, `Couldn't duplicate ${p.name}`);
+    }
   };
 
-  // The menu's shortcuts, on the focused server in the rail.
+  // The menu's shortcuts, on the focused server in the rail. Row-level: they
+  // only fire while that bubble has focus, and follow the user's bindings.
   const onBubbleKeyDown = (e: React.KeyboardEvent, p: ConnectionProfile) => {
-    const mod = e.ctrlKey || e.metaKey;
-    if (e.key === "Enter" && !mod && !connectedIds.has(p.id)) doConnect(p.id);
-    else if (e.key === "F2" && !mod) setEditing(p);
-    else if (e.key === "Delete" && !mod) setPendingDelete(p);
-    else if (mod && !e.shiftKey && e.key.toLowerCase() === "d") duplicateProfile(p);
+    if (e.defaultPrevented) return;
+    const combo = keyCombo(e.nativeEvent);
+    if (combo === keyOf("rail.connect").combo) {
+      if (connectedIds.has(p.id)) return; // Enter on a live server just clicks it
+      if (problemOf(p)) openMenuAt(e, bubbleMenuItems(p));
+      else doConnect(p.id);
+    } else if (combo === keyOf("focus.rename").combo) setRenaming({ kind: "server", id: p.id });
+    else if (combo === keyOf("rail.delete").combo) {
+      // Delete on a server inside a multi-selection deletes the selection.
+      if (selected.size > 1 && selected.has(p.id)) setPendingBulkDelete(selectedProfiles());
+      else setPendingDelete(p);
+    } else if (combo === keyOf("rail.duplicate").combo) duplicateProfile(p);
     else return;
     e.preventDefault();
     e.stopPropagation();
   };
 
+  const renameServer = async (p: ConnectionProfile, name: string) => {
+    if (profiles.some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`A server named “${name}” already exists`);
+    }
+    try {
+      await saveProfile({ ...p, name });
+    } catch (e) {
+      throw new Error(`Couldn't rename ${p.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  const renameGroup = async (from: string, to: string) => {
+    const members = sections.groups.find(([g]) => g === from)?.[1] ?? [];
+    await saveProfiles(members.map((m) => ({ ...m, group: to })));
+    if (collapsedGroups.includes(from)) toggleRailGroup(from);
+  };
+  // Hand focus back to the row that was renamed, so the keyboard carries on.
+  const endRename = (selector: string) => {
+    setRenaming(null);
+    requestAnimationFrame(() =>
+      scrollRef.current?.querySelector<HTMLElement>(`${selector} button`)?.focus()
+    );
+  };
+
   // The reconciled click rule: connected → switch; auto-connect → connect;
   // otherwise open the bubble menu (Connect is the first item).
   const onBubbleClick = (e: React.MouseEvent, p: ConnectionProfile) => {
+    if (selectClick(e, p)) return;
     leaveSiteNavigation();
     useSites.getState().select(p.id);
     setBrowseLocal(false);
@@ -626,14 +868,26 @@ export function ServerRail() {
       setActiveSession(sid);
       return;
     }
-    if (p.autoConnect) {
+    if (p.autoConnect && !problemOf(p)) {
       doConnect(p.id);
       return;
     }
     openMenuAt(e, bubbleMenuItems(p));
   };
 
-  const openMenuAt = (e: React.MouseEvent, items: MenuItem[]) => {
+  // Right-click inside a multi-selection acts on all of it; anywhere else it
+  // drops the selection and opens that server's own menu.
+  const onBubbleContextMenu = (e: React.MouseEvent, p: ConnectionProfile) => {
+    e.preventDefault();
+    if (selected.size > 1 && selected.has(p.id)) {
+      openMenuAt(e, bulkMenuItems(selectedProfiles()));
+      return;
+    }
+    clearSelection();
+    openMenuAt(e, bubbleMenuItems(p));
+  };
+
+  const openMenuAt = (e: React.MouseEvent | React.KeyboardEvent, items: MenuItem[]) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setMenu({ x: r.right + 6, y: r.top, items });
   };
@@ -641,6 +895,12 @@ export function ServerRail() {
   const groupMenu = (e: React.MouseEvent, name: string) => {
     e.preventDefault();
     const members = sections.groups.find(([g]) => g === name)?.[1] ?? [];
+    // A folder whose servers are all in the selection opens the bulk menu.
+    if (selected.size > 1 && members.length && members.every((m) => selected.has(m.id))) {
+      openMenuAt(e, bulkMenuItems(selectedProfiles()));
+      return;
+    }
+    clearSelection();
     openMenuAt(e, [
       {
         label: collapsedGroups.includes(name) ? "Expand group" : "Collapse group",
@@ -653,17 +913,18 @@ export function ServerRail() {
         separatorAfter: true,
       },
       {
-        label: "Rename group…",
-        icon: <Pencil size={14} />,
-        onClick: () => setGroupPrompt({ kind: "rename", from: name }),
+        label: "Rename group",
+        icon: <TextCursorInput size={14} />,
+        ...keyOf("focus.rename"),
+        onClick: () => setRenaming({ kind: "group", name }),
       },
       {
         label: "Ungroup servers",
         icon: <FolderMinus size={14} />,
         onClick: () =>
           void saveProfiles(members.map((m) => ({ ...m, group: undefined }))),
-        separatorAfter: true,
       },
+      { ...sortItem(), separatorAfter: true },
       {
         label: "Export group…",
         icon: <Upload size={14} />,
@@ -686,7 +947,7 @@ export function ServerRail() {
     setGroupPrompt(null);
     if (!prompt) return;
     if (prompt.kind === "assign") {
-      void saveProfiles([{ ...prompt.profile, group: name }]);
+      void saveProfiles(prompt.profiles.map((p) => ({ ...p, group: name })));
     } else {
       const members =
         sections.groups.find(([g]) => g === prompt.from)?.[1] ?? [];
@@ -704,6 +965,48 @@ export function ServerRail() {
     else doConnect(p.id);
     setSearchOpen(false);
   };
+
+  // Right-click on the rail's empty space: rail-wide actions.
+  const railMenu = (e: React.MouseEvent) => {
+    if ((e.target as Element).closest("[data-rail-profile-id],[data-rail-group],button")) return;
+    e.preventDefault();
+    clearSelection();
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { ...sortItem(), separatorAfter: true },
+        { label: "New connection…", icon: <Plus size={14} />, onClick: () => setEditing("new") },
+        { label: "Import connections…", icon: <Download size={14} />, onClick: () => openImport() },
+      ],
+    });
+  };
+  // A click on empty rail space drops the selection.
+  const onRailBackgroundClick = (e: React.MouseEvent) => {
+    if ((e.target as Element).closest("[data-rail-profile-id],[data-rail-group],button")) return;
+    clearSelection();
+  };
+
+  // When the focused session changes from anywhere (palette, deep link, a
+  // tab), open its folder and bring its bubble into view — only scrolling if
+  // it isn't already visible.
+  useEffect(() => {
+    if (!activeProfileId) return;
+    const p = useConnections.getState().profiles.find((x) => x.id === activeProfileId);
+    if (!p) return;
+    if (p.group && useSettings.getState().railCollapsedGroups.includes(p.group)) toggleRailGroup(p.group);
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => {
+        const box = scrollRef.current;
+        const el = box?.querySelector<HTMLElement>(`[data-rail-profile-id="${CSS.escape(p.id)}"]`);
+        if (!box || !el) return;
+        const r = el.getBoundingClientRect();
+        const b = box.getBoundingClientRect();
+        if (r.top < b.top || r.bottom > b.bottom) el.scrollIntoView({ block: "nearest" });
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeProfileId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Agent Bridge section ----
   const masterBridgeMenu = (e: React.MouseEvent) => {
@@ -738,13 +1041,23 @@ export function ServerRail() {
       pending={pendingByProfile.get(p.id) ?? 0}
       expanded={expanded}
       dragging={dragId === p.id}
+      selected={selected.has(p.id)}
+      problem={connectedIds.has(p.id) ? null : problemOf(p)}
       onClick={(e) => onBubbleClick(e, p)}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        openMenuAt(e, bubbleMenuItems(p));
-      }}
+      onContextMenu={(e) => onBubbleContextMenu(e, p)}
       onPointerDown={(e) => onPointerDown(e, p.id)}
       onKeyDown={(e) => onBubbleKeyDown(e, p)}
+      onFocus={() => useFocusedItem.getState().setItem({ kind: "server", profileId: p.id })}
+      rename={
+        renaming?.kind === "server" && renaming.id === p.id ? (
+          <InlineRename
+            value={p.name}
+            aria-label={`Rename ${p.name}`}
+            onSubmit={(n) => renameServer(p, n)}
+            onDone={() => endRename(`[data-rail-profile-id="${CSS.escape(p.id)}"]`)}
+          />
+        ) : null
+      }
     />
     <ServerSites profileId={p.id} serverName={p.name} expanded={expanded} onMenuChange={setSiteMenuOpen} />
     </div>
@@ -766,8 +1079,8 @@ export function ServerRail() {
           !!dragId && "cursor-grabbing [&_button]:cursor-grabbing"
         )}
       >
-      <div ref={scrollRef} data-rail-scroll className="flex-1 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {organizationHistory.length > 0 && <button title="Undo last group or order change" aria-label="Undo organization" disabled={reordering} onClick={() => void undoOrganization()} className="mx-2 mb-2 rounded border border-border px-2 py-1 text-[11px] text-text-muted disabled:opacity-50">{expanded ? "Undo organization" : "↶"}</button>}
+      <div ref={scrollRef} data-rail-scroll onClick={onRailBackgroundClick} onContextMenu={railMenu} className="flex-1 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {organizationHistory.length > 0 && <button title="Undo last group or order change" aria-label="Undo organization" disabled={reordering} onClick={() => void undoOrganization()} className="mx-2 mb-2 truncate whitespace-nowrap rounded border border-border px-2 py-1 text-[11px] text-text-muted disabled:opacity-50">{expanded ? "Undo organization" : "↶"}</button>}
         {/* Local files (single-pane layout only) */}
         {browserLayout === "single" && (
           <div className="mb-2 flex flex-col items-center gap-1.5">
@@ -872,8 +1185,30 @@ export function ServerRail() {
                       isDropTarget={
                         dropTarget?.kind === "group" && dropTarget.name === name
                       }
-                      onToggle={() => toggleRailGroup(name)}
+                      selected={items.length > 0 && items.every((p) => selected.has(p.id))}
+                      onToggle={(e) => {
+                        if (selectGroupClick(e, name)) return;
+                        clearSelection();
+                        toggleRailGroup(name);
+                      }}
                       onContextMenu={(e) => groupMenu(e, name)}
+                      onKeyDown={(e) => {
+                        if (e.defaultPrevented) return;
+                        if (keyCombo(e.nativeEvent) !== keyOf("focus.rename").combo) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setRenaming({ kind: "group", name });
+                      }}
+                      rename={
+                        renaming?.kind === "group" && renaming.name === name ? (
+                          <InlineRename
+                            value={name}
+                            aria-label={`Rename group ${name}`}
+                            onSubmit={(n) => renameGroup(name, n)}
+                            onDone={() => endRename(`[data-rail-group="${CSS.escape(name)}"]`)}
+                          />
+                        ) : null
+                      }
                     />
                     {!collapsed && items.map(renderBubble)}
                     {!collapsed && (
@@ -1020,13 +1355,25 @@ export function ServerRail() {
         <GroupNameDialog
           title={
             groupPrompt.kind === "assign"
-              ? `Group for “${groupPrompt.profile.name}”`
+              ? groupPrompt.profiles.length === 1
+                ? `Group for “${groupPrompt.profiles[0].name}”`
+                : `Group for ${groupPrompt.profiles.length} servers`
               : `Rename “${groupPrompt.from}”`
           }
           initial={groupPrompt.kind === "rename" ? groupPrompt.from : ""}
           existing={groupNames}
           onSubmit={submitGroupPrompt}
           onClose={() => setGroupPrompt(null)}
+        />
+      )}
+      {pendingBulkDelete && (
+        <ConfirmModal
+          title={`Delete ${pendingBulkDelete.length} connections`}
+          message={`Delete ${pendingBulkDelete.length} connections (${pendingBulkDelete.slice(0, 5).map((p) => p.name).join(", ")}${pendingBulkDelete.length > 5 ? `, and ${pendingBulkDelete.length - 5} more` : ""})? Their saved credentials are removed from the OS keychain too — this can't be undone.`}
+          confirmLabel={`Delete ${pendingBulkDelete.length}`}
+          destructive
+          onClose={() => setPendingBulkDelete(null)}
+          onConfirm={() => void deleteMany(pendingBulkDelete)}
         />
       )}
       {pendingDelete && (
@@ -1060,8 +1407,11 @@ function RailRow({
   ariaLabel,
   bubble,
   label,
+  selected,
 }: {
   expanded: boolean;
+  /** Part of a multi-selection: the row is tinted. */
+  selected?: boolean;
   tooltip: React.ReactNode;
   onClick: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -1071,23 +1421,22 @@ function RailRow({
 }) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const [clipped, setClipped] = useState(false);
-  // Measured at hover time (the rail may still be mid-expansion on mount).
-  const measure = () => {
-    const els = btnRef.current?.querySelectorAll<HTMLElement>(".truncate");
-    setClipped(
-      !!els && [...els].some((el) => el.scrollWidth > el.clientWidth + 1)
-    );
-  };
+  // Measured at hover/focus time (the rail may still be mid-expansion on mount).
+  const measure = () => setClipped(isClipped(btnRef.current));
   const btn = (
     <button
       ref={btnRef}
       onClick={onClick}
       onContextMenu={onContextMenu}
       onMouseEnter={expanded ? measure : undefined}
+      onFocus={expanded ? measure : undefined}
       aria-label={ariaLabel}
       className={cn(
-        "relative flex items-center rounded-2xl",
-        expanded && "w-full gap-2.5 px-2 text-left transition-colors hover:bg-bg-hover"
+        // Keyboard focus is an outline; selection is a tint (and a ring on
+        // the bubble); the active server is the accent pill — three looks.
+        "relative flex items-center rounded-2xl outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+        expanded && "w-full gap-2.5 px-2 text-left transition-colors",
+        expanded && (selected ? "bg-accent-soft hover:bg-accent-soft" : "hover:bg-bg-hover")
       )}
     >
       {bubble}
@@ -1122,12 +1471,20 @@ function RailBubble({
   pending,
   expanded,
   dragging,
+  selected,
+  problem,
   onClick,
   onContextMenu,
   onPointerDown,
   onKeyDown,
+  onFocus,
+  rename,
 }: {
   profile: ConnectionProfile;
+  /** In the rail's multi-selection. */
+  selected: boolean;
+  /** Why this profile can't connect as saved (shown as a warning marker). */
+  problem: string | null;
   state: RowState;
   bridged: boolean;
   /** Levels granted to the agent on this server; null = no access. */
@@ -1140,6 +1497,9 @@ function RailBubble({
   onContextMenu: (e: React.MouseEvent) => void;
   onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
+  onFocus?: () => void;
+  /** The inline rename editor, laid over the name while renaming. */
+  rename?: React.ReactNode;
 }) {
   const focused = state === "focused";
   const connected = state === "focused" || state === "connected";
@@ -1167,8 +1527,11 @@ function RailBubble({
         "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-bg-subtle text-[13px] font-bold leading-none transition-[border-radius,box-shadow] duration-150 motion-reduce:transition-none",
         (focused || connected) && "rounded-2xl",
         focused && "glow-accent",
-        isError && "ring-1 ring-danger",
-        plaintext && !isError && "ring-1 ring-warning/50"
+        selected
+          ? "ring-2 ring-accent"
+          : isError
+            ? "ring-1 ring-danger"
+            : plaintext && "ring-1 ring-warning/50"
       )}
     >
       {/* Saved-but-offline servers dim their glyph so the open ones read at a
@@ -1197,6 +1560,8 @@ function RailBubble({
       </span>
       {pending > 0 ? (
         <PendingBadge count={pending} />
+      ) : problem ? (
+        <ProblemMark />
       ) : (
         <StatusDot
           kind={
@@ -1217,8 +1582,12 @@ function RailBubble({
   return (
     <div
       data-rail-profile-id={p.id}
+      data-selected={selected || undefined}
+      data-active={focused || undefined}
+      data-broken={problem ? "" : undefined}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
+      onFocus={onFocus}
       className={cn(
         "group relative flex w-full touch-none select-none items-center",
         expanded ? "justify-start pr-2" : "justify-center",
@@ -1239,9 +1608,10 @@ function RailBubble({
       />
       <RailRow
         expanded={expanded}
+        selected={selected}
         onClick={onClick}
         onContextMenu={onContextMenu}
-        ariaLabel={p.name}
+        ariaLabel={problem ? `${p.name} (${problem.toLowerCase()})` : p.name}
         tooltip={
           <span className="flex flex-col gap-0.5 text-left">
             <span className="font-semibold text-text">{p.name}</span>
@@ -1261,6 +1631,7 @@ function RailBubble({
                 {pending} request{pending === 1 ? "" : "s"} waiting for you
               </span>
             )}
+            {problem && <span className="text-[10px] text-warning">{problem}</span>}
           </span>
         }
         bubble={bubble}
@@ -1275,6 +1646,17 @@ function RailBubble({
           </span>
         }
       />
+      {rename && expanded && <RenameOverlay>{rename}</RenameOverlay>}
+    </div>
+  );
+}
+
+// The rename editor sits over the row's name (outside its button, so typing
+// can't click the row). Same row height, so nothing shifts.
+function RenameOverlay({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="absolute inset-y-0 left-[56px] right-2 z-10 flex items-center bg-bg text-[13px]">
+      {children}
     </div>
   );
 }
@@ -1323,10 +1705,15 @@ function RailGroupHeader({
   collapsed,
   expanded,
   isDropTarget,
+  selected,
   onToggle,
   onContextMenu,
+  onKeyDown,
+  rename,
 }: {
   name: string;
+  /** Every server in the folder is in the multi-selection. */
+  selected: boolean;
   count: number;
   members: ConnectionProfile[];
   /** Any member is open to the agent → amber dot on the closed folder tile. */
@@ -1336,10 +1723,15 @@ function RailGroupHeader({
   collapsed: boolean;
   expanded: boolean;
   isDropTarget: boolean;
-  onToggle: () => void;
+  onToggle: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
+  rename?: React.ReactNode;
 }) {
   const label = `${name} group, ${count} server${count === 1 ? "" : "s"}`;
+  const headerRef = useRef<HTMLButtonElement>(null);
+  const [clipped, setClipped] = useState(false);
+  const measure = () => setClipped(isClipped(headerRef.current));
   if (collapsed) {
     // Closed folder: one 44px tile with a 2×2 grid of member colours, same
     // height in both rail modes (see RailRow's note).
@@ -1347,7 +1739,7 @@ function RailGroupHeader({
       <span
         className={cn(
           "relative grid h-11 w-11 shrink-0 grid-cols-2 gap-[3px] rounded-xl bg-bg-subtle p-[7px] transition-colors group-hover:bg-bg-hover",
-          isDropTarget && "ring-2 ring-accent"
+          (isDropTarget || selected) && "ring-2 ring-accent"
         )}
       >
         {[0, 1, 2, 3].map((i) => (
@@ -1369,13 +1761,16 @@ function RailGroupHeader({
     return (
       <div
         data-rail-group={name}
+        onKeyDown={onKeyDown}
         className={cn(
           "group relative flex w-full items-center",
           expanded ? "justify-start pr-2" : "justify-center"
         )}
       >
+        {rename && expanded && <RenameOverlay>{rename}</RenameOverlay>}
         <RailRow
           expanded={expanded}
+          selected={selected}
           onClick={onToggle}
           onContextMenu={onContextMenu}
           ariaLabel={label}
@@ -1402,14 +1797,17 @@ function RailGroupHeader({
   }
   const btn = (
     <button
+      ref={headerRef}
       onClick={onToggle}
       onContextMenu={onContextMenu}
+      onMouseEnter={expanded ? measure : undefined}
+      onFocus={expanded ? measure : undefined}
       aria-label={label}
       aria-expanded={!collapsed}
       className={cn(
-        "flex h-6 items-center rounded-md text-text-dim transition-colors hover:bg-bg-hover hover:text-text",
+        "flex h-6 items-center rounded-md text-text-dim outline-none transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent",
         expanded ? "w-full gap-1 px-2 text-left" : "w-9 justify-center",
-        isDropTarget && "bg-accent-soft text-accent"
+        (isDropTarget || selected) && "bg-accent-soft text-accent"
       )}
     >
       {expanded ? (
@@ -1434,13 +1832,22 @@ function RailGroupHeader({
   return (
     <div
       data-rail-group={name}
+      onKeyDown={onKeyDown}
       className={cn(
-        "mt-1.5 flex w-full items-center",
+        "relative mt-1.5 flex w-full items-center",
         expanded ? "justify-start px-1" : "justify-center"
       )}
     >
+      {rename && expanded && (
+        <div className="absolute inset-y-0 left-1 right-1 z-10 flex items-center bg-bg-panel text-[11px]">
+          {rename}
+        </div>
+      )}
       {expanded ? (
-        btn
+        // Expanded, the name is on screen: a tooltip only when it's cut off.
+        <Tooltip portal side="right" label={clipped ? name : null} className="w-full min-w-0">
+          {btn}
+        </Tooltip>
       ) : (
         <Tooltip
           portal
@@ -1532,6 +1939,19 @@ function AgentDot() {
       className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-bg text-text-muted ring-1 ring-border"
     >
       <Bot size={10} />
+    </span>
+  );
+}
+
+// Amber warning (bottom-right, in the status dot's slot): the profile can't
+// connect as saved. Its menu is cut down to Edit, Test and Delete.
+function ProblemMark() {
+  return (
+    <span
+      aria-hidden
+      className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-bg text-warning ring-1 ring-border"
+    >
+      <TriangleAlert size={10} strokeWidth={2.5} />
     </span>
   );
 }
@@ -1645,7 +2065,17 @@ function RailSearch({
 
   useEffect(() => {
     inputRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Esc peels one layer: the typed query first, then the popover.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (inputRef.current && inputRef.current.value) {
+        e.preventDefault();
+        setQuery("");
+        inputRef.current.focus();
+        return;
+      }
+      onClose();
+    };
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (!wrapRef.current?.contains(t) && !toggleRef.current?.contains(t))
@@ -1706,7 +2136,7 @@ function RailSearch({
       <div className="max-h-80 overflow-y-auto py-1">
         {results.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-text-dim">
-            No servers match “{query}”.
+            {query.trim() ? <>No servers match “{query}”.</> : "No servers yet."}
           </div>
         ) : (
           results.map((p) => {

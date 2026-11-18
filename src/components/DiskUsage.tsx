@@ -26,6 +26,7 @@ import {
   type MenuItem,
 } from "@faro/file-ui";
 import { cn } from "@/lib/cn";
+import { Deferred } from "@faro/file-ui";
 import { DiskTreemap, folderColor, isDarkTheme } from "./DiskTreemap";
 
 /** Parent directory of a POSIX/Windows path (its own root when at top). */
@@ -93,7 +94,7 @@ function DiskUsage() {
 
   const copyPath = (node: DuNode) => {
     navigator.clipboard.writeText(node.path);
-    toast.info("Path copied", node.path);
+    toast.info("Path copied", node.path, undefined, { log: false });
   };
 
   const openMenu = (node: DuNode, x: number, y: number) => {
@@ -254,6 +255,7 @@ function DiskUsage() {
 
       {/* Progress banner while scanning */}
       {scanning && (
+        <Deferred>
         <div className="flex shrink-0 items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1.5 text-xs text-text-muted">
           <Loader2 size={13} className="animate-spin text-accent" />
           <span>
@@ -262,6 +264,7 @@ function DiskUsage() {
             <span className="font-medium text-text">{fmtSize(totalBytes)}</span>
           </span>
         </div>
+        </Deferred>
       )}
 
       {/* Body */}
@@ -337,14 +340,15 @@ function DiskUsage() {
       )}
       {confirmDel && (
         <ConfirmModal
-          title={`Delete ${confirmDel.name}?`}
+          title={`Delete this ${confirmDel.kind === "directory" ? "folder" : "file"}?`}
           message={
-            `Path: ${confirmDel.path}` +
-            (confirmDel.kind === "directory"
-              ? `\nThis folder and everything under it (${fmtSize(
-                  confirmDel.size
-                )}) will be permanently removed.`
-              : `\n${fmtSize(confirmDel.size)} will be permanently removed.`)
+            <span>
+              <strong className="font-semibold text-text [overflow-wrap:anywhere]">{confirmDel.name}</strong>
+              {confirmDel.kind === "directory"
+                ? ` and everything in it (${fmtSize(confirmDel.size)}) will be permanently deleted.`
+                : ` (${fmtSize(confirmDel.size)}) will be permanently deleted.`}
+              <span className="mt-1 block font-mono text-xs text-text-dim [overflow-wrap:anywhere]">{confirmDel.path}</span>
+            </span>
           }
           destructive
           confirmLabel="Delete"

@@ -15,6 +15,7 @@ import type {
 } from "./types";
 import { fileIcon, type FileIconSpec } from "./lib/fileIcons";
 import type { FileBrowserAction } from "./lib/keys";
+import type { ColumnWidths } from "./lib/columns";
 
 // ---------------------------------------------------------------------------
 // The transport contract. This is the whole point of the package: the UI never
@@ -67,6 +68,17 @@ export interface FileSystemAdapter {
    * offer "Duplicate". May reject for backends that can't copy server-side.
    */
   duplicate?(sessionId: SessionId, path: string, kind: FileKind): Promise<void>;
+  /**
+   * Optional: copy a file/folder to exactly `to` on the same connection (the
+   * pane picks a free name first). Must refuse rather than overwrite. Omit it
+   * and Paste after Copy only works across panes, as a transfer.
+   */
+  copy?(sessionId: SessionId, from: string, to: string): Promise<void>;
+  /**
+   * Optional: show a short confirmation or failure ("Copied 3 items"). Without
+   * it the pane shows the message in its own status line.
+   */
+  notify?(message: string, variant?: "info" | "success" | "error"): void;
   /**
    * Optional: archive a remote directory on the server (one `tar`/`zip`
    * command) and download the single resulting file — far cheaper than walking
@@ -170,6 +182,13 @@ export interface PaneSettings {
    * the same "mod+shift+key" spelling as `comboFromEvent`.
    */
   keyBindings?: Partial<Record<FileBrowserAction, string>>;
+  /**
+   * Optional: details-view column widths (percent of the list per column id,
+   * from dragging the header handles); null = the built-in layout. Supply
+   * `setColumnWidths` to persist them, otherwise they last for the pane.
+   */
+  columnWidths?: ColumnWidths | null;
+  setColumnWidths?(widths: ColumnWidths | null): void;
   setSortField(field: SortField): void;
   setSortDirection(dir: SortDirection): void;
   setPaneViewMode(mode: PaneViewMode): void;
