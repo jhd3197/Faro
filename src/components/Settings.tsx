@@ -37,6 +37,7 @@ import { SyncSettings } from "./SyncSettings";
 import { CliUpdaterSettings } from "./CliUpdaterSettings";
 import { CloudflareSettings } from "./CloudflareSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
+import { Dropdown } from "./ui/Dropdown";
 import { AboutSettings } from "./AboutSettings";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
@@ -281,6 +282,7 @@ export function Settings({ onClose }: Props) {
               help="Scales the whole interface — text, icons and layout. Also View → Zoom in / Zoom out, or Ctrl/⌘ + = / − / 0."
             >
               <Select<number>
+                label="UI zoom"
                 value={s.uiZoom}
                 onChange={s.setUiZoom}
                 options={(UI_ZOOM_STEPS.includes(s.uiZoom)
@@ -475,6 +477,7 @@ export function Settings({ onClose }: Props) {
             />
             <Field label="Default sort">
               <Select<SortField>
+                label="Sort by"
                 value={s.sortField}
                 onChange={s.setSortField}
                 options={[
@@ -577,6 +580,8 @@ export function Settings({ onClose }: Props) {
             </Field>
             <Field label="Font family">
               <Select<string>
+                searchable
+                label="Terminal font"
                 value={s.terminalFontFamily}
                 onChange={s.setTerminalFontFamily}
                 options={[
@@ -612,6 +617,7 @@ export function Settings({ onClose }: Props) {
             </Field>
             <Field label="Scrollback">
               <Select<number>
+                label="Scrollback"
                 value={s.terminalScrollback}
                 onChange={s.setTerminalScrollback}
                 options={[
@@ -1449,29 +1455,24 @@ function Select<T extends string | number>({
   value,
   onChange,
   options,
+  searchable,
+  label,
 }: {
   value: T;
   onChange: (v: T) => void;
   options: { value: T; label: string }[];
+  searchable?: boolean;
+  label?: string;
 }) {
   return (
-    <select
-      value={value as string | number}
-      onChange={(e) => {
-        const raw = e.target.value;
-        const sample = options[0]?.value;
-        const parsed =
-          typeof sample === "number" ? (Number(raw) as T) : (raw as T);
-        onChange(parsed);
-      }}
-      className="rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none hover:border-text-dim focus:border-accent"
-    >
-      {options.map((o) => (
-        <option key={String(o.value)} value={o.value as string | number}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <Dropdown<T>
+      value={value}
+      onChange={onChange}
+      options={options}
+      searchable={searchable}
+      aria-label={label}
+      className="min-w-[11rem]"
+    />
   );
 }
 

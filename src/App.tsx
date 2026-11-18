@@ -4,7 +4,6 @@ import { TipStrip } from "./components/TipStrip";
 import { useDiscovery } from "./stores/discoveryStore";
 import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { ServerRail } from "./components/ServerRail";
 import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
@@ -65,6 +64,7 @@ import { useSites } from "./stores/sitesStore";
 import type { DeepLink, Protocol, ConnectionProfile } from "./lib/types";
 import { PROTOCOL_DEFAULT_PORT } from "./lib/types";
 import { Toaster } from "./components/ui/Toaster";
+import { Popover } from "./components/ui/Popover";
 import { OverwriteDialogHost } from "./components/OverwriteModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { KeyboardShortcutsDialog } from "./components/KeyboardShortcutsDialog";
@@ -371,35 +371,10 @@ function StatusBar({
   const installedVersion = useDiscovery((s) => s.version);
   const discoveryOpen = useLayout((s) => s.dialog === "whatsNew");
 
-  // Dismiss the status-bar popovers on Escape or a click outside, matching how
-  // every other overlay closes (the hover-leave behavior stays as a bonus).
+  // The status-bar popovers close on Escape or a click outside (Popover),
+  // and when the pointer leaves them.
   const editsWrapRef = useRef<HTMLDivElement>(null);
   const notifWrapRef = useRef<HTMLDivElement>(null);
-  const editsPopRef = useRef<HTMLDivElement>(null);
-  const notifPopRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!notifOpen && !editsMenuOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setNotifOpen(false);
-      onCloseEditsMenu();
-    };
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      const outside = (...els: (HTMLElement | null)[]) =>
-        !els.some((el) => el?.contains(t));
-      if (notifOpen && outside(notifWrapRef.current, notifPopRef.current))
-        setNotifOpen(false);
-      if (editsMenuOpen && outside(editsWrapRef.current, editsPopRef.current))
-        onCloseEditsMenu();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onDown);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onDown);
-    };
-  }, [notifOpen, editsMenuOpen, onCloseEditsMenu]);
 
   return (
     <div className="flex h-7 min-w-0 shrink-0 items-center gap-2 overflow-hidden border-t border-border bg-bg-panel px-2 text-[11px]">
@@ -465,8 +440,7 @@ function StatusBar({
           {editsMenuOpen && (
             <StatusPopover
               anchorRef={editsWrapRef}
-              popRef={editsPopRef}
-              onMouseLeave={onCloseEditsMenu}
+              onClose={onCloseEditsMenu}
             >
               <div className="border-b border-border bg-bg-subtle px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
                 Live edits — saves upload automatically
@@ -527,8 +501,7 @@ function StatusBar({
         {notifOpen && (
           <StatusPopover
             anchorRef={notifWrapRef}
-            popRef={notifPopRef}
-            onMouseLeave={() => setNotifOpen(false)}
+            onClose={() => setNotifOpen(false)}
           >
             <div className="flex items-center justify-between border-b border-border bg-bg-subtle px-3 py-1.5">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
@@ -666,35 +639,29 @@ function StatusBar({
   );
 }
 
-/// Status-bar popover, portaled to <body>: the bar clips its overflow (so it
-/// never scrolls sideways on narrow windows), which would hide an absolutely
-/// positioned child. Anchored above the pill's wrapper, right-aligned to it.
+/// Status-bar popover: portaled (the bar clips its overflow), above the
+/// pill's wrapper and right-aligned to it.
 function StatusPopover({
   anchorRef,
-  popRef,
-  onMouseLeave,
+  onClose,
   children,
 }: {
   anchorRef: React.RefObject<HTMLDivElement>;
-  popRef: React.RefObject<HTMLDivElement>;
-  onMouseLeave: () => void;
+  onClose: () => void;
   children: React.ReactNode;
 }) {
-  const r = anchorRef.current?.getBoundingClientRect();
-  if (!r) return null;
-  return createPortal(
-    <div
-      ref={popRef}
-      style={{
-        bottom: window.innerHeight - r.top + 6,
-        right: Math.max(8, window.innerWidth - r.right),
-      }}
-      className="anim-modal fixed z-dropdown w-80 overflow-hidden rounded-md border border-border bg-bg-panel shadow-elev-3"
-      onMouseLeave={onMouseLeave}
+  return (
+    <Popover
+      open
+      anchorRef={anchorRef}
+      onClose={onClose}
+      onMouseLeave={onClose}
+      placement="top-end"
+      layer="dropdown"
+      className="w-80"
     >
       {children}
-    </div>,
-    document.body
+    </Popover>
   );
 }
 
