@@ -33,6 +33,8 @@ import {
   ArrowDown,
   Bot,
   Globe,
+  Stethoscope,
+  MoreHorizontal,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useBridge } from "@/stores/bridgeStore";
@@ -41,6 +43,7 @@ import { useServerView } from "@/stores/serverViewStore";
 import { useSettings } from "@/stores/settingsStore";
 import { ProfileEditor } from "./ProfileEditor";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { formatCombo } from "@/lib/shortcuts";
 import { ConfirmModal } from "./ConfirmModal";
 import { Tooltip } from "./ui/Tooltip";
 import { useDialog } from "@/hooks/useDialog";
@@ -61,6 +64,7 @@ import { canLink, connectLink } from "@/lib/connectLink";
 import { toast } from "@/stores/toastStore";
 import { ipc } from "@/lib/ipc";
 import { CfForwardsRail } from "./CfForwardsRail";
+import { useConnectionCheck } from "./ConnectionCheckDialog";
 import { useRailDrag, type RailDropTarget } from "@/hooks/useRailDrag";
 import { effectiveAccess, accessSummary } from "@/lib/agentAccess";
 import { searchRank } from "@/lib/serverSearch";
@@ -422,30 +426,33 @@ export function ServerRail() {
     }
   };
 
+  // The server menu, in the order people reach for things: what this server
+  // can do right now (by connection state), then edit/test, then the rarer
+  // actions folded into Share / Organize / More, and Delete last.
   const bubbleMenuItems = (p: ConnectionProfile): MenuItem[] => {
     const sid = sidFor(p.id);
-    const connected = connectedIds.has(p.id);
+    const connected = connectedIds.has(p.id) && !!sid;
     const sessionBridged = sid ? enabledSessions.includes(sid) : false;
-    const items: MenuItem[] = [
-      {
-        label: connected ? "Switch to" : "Connect",
-        icon: <Plug size={14} />,
-        onClick: () => {
-          leaveSiteNavigation();
-          useSites.getState().select(p.id);
-          setBrowseLocal(false);
-          if (connected && sid) setActiveSession(sid);
-          else doConnect(p.id);
-        },
-      },
-    ];
-    if (p.protocol === "sftp") {
+    const isSftp = p.protocol === "sftp";
+    const cf = isSftp && p.proxyCommand?.kind === "cloudflare";
+    const items: MenuItem[] = [];
+
+    // 1. Now. Clicking a connected server already switches to it.
+    // Global shortcuts act on the active server, so their hint shows only here.
+    const active = !!sid && sid === activeSessionId;
+    if (!connected) {
+      items.push({ label: "Connect", icon: <Plug size={14} />, hint: "Enter", onClick: () => doConnect(p.id) });
+    }
+    if (isSftp) {
       items.push({
         label: connected ? "Open shell" : "Connect & open shell",
         icon: <TerminalSquare size={14} />,
+        hint: active ? formatCombo("mod+`") : undefined,
         onClick: () => openShell(p.id),
       });
-      if (connected && sid) {
+    }
+    if (connected && sid) {
+      if (isSftp) {
         items.push({
           label: "Server view",
           icon: <Activity size={14} />,
@@ -456,41 +463,7 @@ export function ServerRail() {
           },
         });
       }
-    }
-    items.push({
-      label: "Properties / Edit…",
-      icon: <Pencil size={14} />,
-      onClick: () => setEditing(p),
-    });
-    // Duplicate opens the New Connection editor seeded from this profile, so a
-    // sibling login (same host, different user/password) is a quick edit.
-    items.push({
-      label: "Duplicate…",
-      icon: <Copy size={14} />,
-      onClick: () => {
-        const { id: _id, sortOrder: _so, ...rest } = p;
-        const oauthAccount =
-          p.protocol === "dropbox" ||
-          p.protocol === "onedrive" ||
-          p.protocol === "gdrive" ||
-          p.protocol === "box" ||
-          p.protocol === "dynamics";
-        openNewConnection({
-          ...rest,
-          name: `${p.name} (copy)`,
-          autoConnect: undefined,
-          // OAuth tokens are keyed by profile id — the copy must sign in anew.
-          account: oauthAccount ? undefined : p.account,
-        });
-      },
-    });
-    if (p.protocol === "sftp" && p.proxyCommand?.kind === "cloudflare") {
-      items.push({
-        label: "Invite…",
-        icon: <UserPlus size={14} />,
-        onClick: () => openInvite([p.id]),
-      });
-      for (const f of p.cfForwards ?? []) {
+      for (const f of cf ? p.cfForwards ?? [] : []) {
         if (!f.web) continue;
         items.push({
           label: `Open ${f.name} in browser`,
@@ -500,15 +473,40 @@ export function ServerRail() {
           },
         });
       }
-    } else if (p.protocol === "sftp" && !p.jumpProfile && !p.proxyCommand && !p.proxy) {
       items.push({
-        label: "Move behind Cloudflare…",
-        icon: <Cloud size={14} />,
-        onClick: () => openMoveToCloudflare(p.id),
+        label: "Reconnect",
+        icon: <RefreshCw size={14} />,
+        hint: active ? formatCombo("mod+shift+r") : undefined,
+        onClick: () => {
+          setPendingId(p.id);
+          reconnect(sid)
+            .then(() => setPendingId((cur) => (cur === p.id ? null : cur)))
+            .catch(() => {});
+        },
+      });
+      items.push({
+        label: "Disconnect",
+        icon: <Unplug size={14} />,
+        onClick: () => disconnect(sid),
       });
     }
+    items[items.length - 1].separatorAfter = true;
+
+    // 2. This connection
+    items.push(
+      { label: "Edit…", icon: <Pencil size={14} />, hint: "F2", onClick: () => setEditing(p) },
+      {
+        label: "Test connection…",
+        icon: <Stethoscope size={14} />,
+        onClick: () => useConnectionCheck.getState().open(p, () => setEditing(p)),
+        separatorAfter: true,
+      }
+    );
+
+    // 3. Folded away
+    const share: MenuItem[] = [];
     if (canLink(p)) {
-      items.push({
+      share.push({
         label: "Copy link",
         icon: <Link2 size={14} />,
         onClick: () => {
@@ -524,83 +522,97 @@ export function ServerRail() {
         },
       });
     }
+    if (cf) share.push({ label: "Invite…", icon: <UserPlus size={14} />, onClick: () => openInvite([p.id]) });
     // One entry: the export dialog itself offers the Faro file or OpenSSH config.
-    items.push({
+    share.push({
       label: "Export…",
       icon: <Upload size={14} />,
       onClick: () => openExport({ ids: [p.id], format: "faro", label: p.name }),
-      separatorAfter: true,
     });
+
     const siblings = flatOrder().filter(item => (item.group || undefined) === (p.group || undefined));
     const position = siblings.findIndex(item => item.id === p.id);
     const move = (offset: number) => {
       const neighbour = siblings[position + offset];
       if (neighbour) commitDrop(p.id, { kind: "row", id: neighbour.id, after: offset > 0 });
     };
-    items.push(
+    const organize: MenuItem[] = [
+      ...groupNames
+        .filter((g) => g !== p.group)
+        .map((g) => ({
+          label: `Move to "${g}"`,
+          icon: <Folder size={14} />,
+          onClick: () => saveProfiles([{ ...p, group: g }]),
+        })),
+      { label: "New group…", icon: <FolderPlus size={14} />, onClick: () => setGroupPrompt({ kind: "assign", profile: p }) },
+      ...(p.group
+        ? [{ label: "Remove from group", icon: <FolderMinus size={14} />, onClick: () => saveProfiles([{ ...p, group: undefined }]) }]
+        : []),
+    ];
+    organize[organize.length - 1].separatorAfter = true;
+    organize.push(
       { label: "Move up", icon: <ArrowUp size={14} />, disabled: reordering || position <= 0, onClick: () => move(-1) },
-      { label: "Move down", icon: <ArrowDown size={14} />, disabled: reordering || position >= siblings.length - 1, onClick: () => move(1), separatorAfter: true }
+      { label: "Move down", icon: <ArrowDown size={14} />, disabled: reordering || position >= siblings.length - 1, onClick: () => move(1) }
     );
-    // Group membership: one flat item per existing group, plus "New group…".
-    for (const g of groupNames) {
-      if (g === p.group) continue;
-      items.push({
-        label: `Move to "${g}"`,
-        icon: <Folder size={14} />,
-        onClick: () => saveProfiles([{ ...p, group: g }]),
-      });
+
+    const more: MenuItem[] = [
+      { label: "Duplicate…", icon: <Copy size={14} />, hint: formatCombo("mod+d"), onClick: () => duplicateProfile(p) },
+    ];
+    if (isSftp && !p.jumpProfile && !p.proxyCommand && !p.proxy) {
+      more.push({ label: "Move behind Cloudflare…", icon: <Cloud size={14} />, onClick: () => openMoveToCloudflare(p.id) });
     }
-    items.push({
-      label: "New group…",
-      icon: <FolderPlus size={14} />,
-      onClick: () => setGroupPrompt({ kind: "assign", profile: p }),
-      separatorAfter: !p.group,
+    more.push({
+      label: p.autoConnect ? "Don't connect on startup" : "Connect on startup",
+      icon: <Power size={14} />,
+      onClick: () => saveProfile({ ...p, autoConnect: !p.autoConnect }),
     });
-    if (p.group) {
-      items.push({
-        label: "Remove from group",
-        icon: <FolderMinus size={14} />,
-        onClick: () => saveProfiles([{ ...p, group: undefined }]),
-        separatorAfter: true,
-      });
-    }
     if (sid) {
-      items.push({
-        label: sessionBridged ? "Disable Agent Bridge" : "Enable Agent Bridge",
+      more.push({
+        label: sessionBridged ? "Turn off Agent Bridge" : "Turn on Agent Bridge",
         icon: <Radio size={14} />,
         onClick: () => setSessionAccess(sid, !sessionBridged),
       });
     }
-    items.push({
-      label: p.autoConnect ? "Disable auto-connect" : "Auto-connect on startup",
-      icon: <Power size={14} />,
-      onClick: () => saveProfile({ ...p, autoConnect: !p.autoConnect }),
-    });
-    if (connected && sid) {
-      items.push({
-        label: "Reconnect",
-        icon: <RefreshCw size={14} />,
-        onClick: () => {
-          setPendingId(p.id);
-          reconnect(sid)
-            .then(() => setPendingId((cur) => (cur === p.id ? null : cur)))
-            .catch(() => {});
-        },
-      });
-      items.push({
-        label: "Disconnect",
-        icon: <Unplug size={14} />,
-        onClick: () => disconnect(sid),
-        separatorAfter: true,
-      });
-    }
-    items.push({
-      label: "Delete",
-      icon: <Trash2 size={14} />,
-      destructive: true,
-      onClick: () => setPendingDelete(p),
-    });
+
+    items.push(
+      { label: "Share", icon: <Link2 size={14} />, submenu: share },
+      { label: "Organize", icon: <Folder size={14} />, submenu: organize },
+      { label: "More", icon: <MoreHorizontal size={14} />, submenu: more }
+    );
+    more[more.length - 1].separatorAfter = true;
+    more.push({ label: "Delete…", icon: <Trash2 size={14} />, hint: "Del", destructive: true, onClick: () => setPendingDelete(p) });
     return items;
+  };
+
+  // A copy seeded from this profile, so a sibling login (same host, different
+  // user/password) is a quick edit.
+  const duplicateProfile = (p: ConnectionProfile) => {
+    const { id: _id, sortOrder: _so, ...rest } = p;
+    const oauthAccount =
+      p.protocol === "dropbox" ||
+      p.protocol === "onedrive" ||
+      p.protocol === "gdrive" ||
+      p.protocol === "box" ||
+      p.protocol === "dynamics";
+    openNewConnection({
+      ...rest,
+      name: `${p.name} (copy)`,
+      autoConnect: undefined,
+      // OAuth tokens are keyed by profile id — the copy must sign in anew.
+      account: oauthAccount ? undefined : p.account,
+    });
+  };
+
+  // The menu's shortcuts, on the focused server in the rail.
+  const onBubbleKeyDown = (e: React.KeyboardEvent, p: ConnectionProfile) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (e.key === "Enter" && !mod && !connectedIds.has(p.id)) doConnect(p.id);
+    else if (e.key === "F2" && !mod) setEditing(p);
+    else if (e.key === "Delete" && !mod) setPendingDelete(p);
+    else if (mod && !e.shiftKey && e.key.toLowerCase() === "d") duplicateProfile(p);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
   };
 
   // The reconciled click rule: connected → switch; auto-connect → connect;
@@ -732,6 +744,7 @@ export function ServerRail() {
         openMenuAt(e, bubbleMenuItems(p));
       }}
       onPointerDown={(e) => onPointerDown(e, p.id)}
+      onKeyDown={(e) => onBubbleKeyDown(e, p)}
     />
     <ServerSites profileId={p.id} serverName={p.name} expanded={expanded} onMenuChange={setSiteMenuOpen} />
     </div>
@@ -1112,6 +1125,7 @@ function RailBubble({
   onClick,
   onContextMenu,
   onPointerDown,
+  onKeyDown,
 }: {
   profile: ConnectionProfile;
   state: RowState;
@@ -1125,6 +1139,7 @@ function RailBubble({
   onClick: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
 }) {
   const focused = state === "focused";
   const connected = state === "focused" || state === "connected";
@@ -1203,6 +1218,7 @@ function RailBubble({
     <div
       data-rail-profile-id={p.id}
       onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
       className={cn(
         "group relative flex w-full touch-none select-none items-center",
         expanded ? "justify-start pr-2" : "justify-center",

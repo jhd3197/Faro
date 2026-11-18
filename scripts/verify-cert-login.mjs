@@ -106,11 +106,13 @@ async function testConnection() {
   );
 }
 
+// Through Cloudflare the login is a choice of two cards (issue #86).
 const authOption = () =>
   page.evaluate(() => {
-    const dialog = document.querySelector('[role="dialog"]');
-    const o = dialog.querySelector('option[value="cloudflarecert"]');
-    return o ? { text: o.textContent, disabled: o.disabled } : null;
+    const card = [...document.querySelectorAll('[role="dialog"] [aria-label="Log in with"] [role="radio"]')].find((b) =>
+      b.textContent.startsWith("Cloudflare sign-in")
+    );
+    return card ? { text: card.textContent, disabled: card.disabled, checked: card.getAttribute("aria-checked") === "true" } : null;
   });
 
 let savedId = null;
@@ -130,12 +132,16 @@ try {
   await page.click('[aria-label="Connect via"] button:nth-child(2)');
   const after = await waitFor(authOption, 5000);
   check("through Cloudflare it's offered", after && !after.disabled, JSON.stringify(after));
-  await (await field("Authentication", "select")).select("cloudflarecert");
+  check("Cloudflare sign-in is the login it starts on", !!after?.checked, JSON.stringify(after));
   const principal = await waitFor(async () => {
-    const t = await text('[data-testid="cf-cert-principal"]');
-    return t || null;
+    const t = await text('[data-testid="editor-access-signin"]');
+    return t.includes("Signed in as") ? t : null;
   }, 30000);
-  check("the hint names whose certificate Cloudflare issues", (principal ?? "").includes("Certificate for jane.doe (jane.doe@example.com)"), principal ?? "");
+  check("the sign-in line names who is signed in", (principal ?? "").includes("jane.doe@example.com"), principal ?? "");
+  check(
+    "no principal note on the form (it comes with a refusal)",
+    !(await page.evaluate(() => document.querySelector('[role="dialog"]').innerText.includes("Server must allow")))
+  );
   const hasField = async (label) => !!(await field(label).catch(() => null));
   check("no key path or password is asked for", !(await hasField("Key path")) && !(await hasField("Password")));
   await page.screenshot({ path: path.join(OUT, "cert-editor.png") });
@@ -145,20 +151,11 @@ try {
   await page.screenshot({ path: path.join(OUT, "cert-test-ok.png") });
 
   // ---- 2. A principal the server doesn't accept for that user -------------
-  await type("Username", "deploy");
-  const mismatchHint = await waitFor(async () => {
-    const t = await text('[data-testid="cf-cert-principal"]');
-    return t.includes("deploy") ? t : null;
-  }, 10000);
-  check(
-    "the hint says what the server must accept for another user",
-    (mismatchHint ?? "").includes("the server must accept jane.doe for that user"),
-    mismatchHint ?? ""
-  );
+  await type("Log in as", "deploy");
   const refused = await testConnection();
   check(
-    "a refused certificate names the principal and the server user",
-    (refused ?? "").includes("Cloudflare issued a certificate for `jane.doe`, but the server refused it for user `deploy`"),
+    "a refused certificate points at the one-time server fix",
+    (refused ?? "").includes("didn't accept your Cloudflare sign-in") && (refused ?? "").includes("Server setup guide"),
     refused ?? "(timed out)"
   );
   await page.screenshot({ path: path.join(OUT, "cert-test-refused.png") });
@@ -170,7 +167,7 @@ try {
   );
 
   // ---- 4. Save ---------------------------------------------------------------
-  await type("Username", "shared");
+  await type("Log in as", "shared");
   await clickButton("Save", '[role="dialog"]');
   await page.waitForFunction(() => !document.querySelector('[role="dialog"]'), { timeout: 10000 });
   const stored = JSON.parse(readFileSync(path.join(FARO_E2E_DATA, "profiles.json"), "utf8"));

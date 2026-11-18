@@ -19,6 +19,7 @@ import { AuthPromptModal } from "./components/AuthPromptModal";
 import { TitleBar } from "./components/TitleBar";
 import { ProfileEditor } from "./components/ProfileEditor";
 import { CloudflareConnectSheet, useCfConnect } from "./components/CloudflareConnectSheet";
+import { ConnectionCheckDialog } from "./components/ConnectionCheckDialog";
 import { GrantDialog } from "./components/GrantDialog";
 import { ImportDialog } from "./components/ImportDialog";
 import { ExportDialog } from "./components/ExportDialog";
@@ -193,6 +194,7 @@ export default function App() {
       {dialog === "grant" && <GrantDialog onClose={closeDialog} />}
       {dialog === "about" && <AboutDialog onClose={closeDialog} />}
       <CloudflareConnectSheet />
+      <ConnectionCheckDialog />
       <HostKeyModal />
       <AuthPromptModal />
       <Toaster />
