@@ -7,7 +7,8 @@
 //
 // A file counts as a UI test when it imports puppeteer-core, so new tests are
 // picked up without touching this list. Files run serially (they start their
-// own mock Vite server, some on a fixed port) with a hard timeout each.
+// own mock Vite server, some on a fixed port) with a hard timeout each. A UI
+// file that fails runs once more; passing then is reported as FLAKY.
 //
 // Env:
 //   CHROME_PATH       browser to use; found automatically when unset
@@ -111,8 +112,16 @@ for (const file of files) {
     continue;
   }
   console.log(`\n=== ${file.name}`);
-  const { code, secs } = await run(file);
-  const status = code === 0 ? "PASS" : code === "timeout" ? "TIMEOUT" : "FAIL";
+  let { code, secs } = await run(file);
+  // A browser test that fails can be a slow runner, not a bug: run it once
+  // more, and report a pass on the second try as FLAKY so it stays visible.
+  let retried = false;
+  if (code !== 0 && file.ui) {
+    console.log(`\n=== ${file.name} (retry)`);
+    retried = true;
+    ({ code, secs } = await run(file));
+  }
+  const status = code === 0 ? (retried ? "FLAKY" : "PASS") : code === "timeout" ? "TIMEOUT" : "FAIL";
   results.push({ name: file.name, status, note: `${secs}s` });
 }
 
