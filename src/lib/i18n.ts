@@ -390,6 +390,17 @@ const ZH: Record<string, string> = {
   "Settings › Cloudflare": "设置 › Cloudflare",
   "Pop out failed": "弹出窗口失败",
   "Transfer failed": "传输失败",
+  "Copy details": "复制详情",
+  Errors: "错误",
+  Error: "错误",
+  "No errors": "没有错误",
+  "Show errors": "显示错误",
+  "Unexpected error": "意外错误",
+  "Unhandled error in the background": "后台出现未处理的错误",
+  "The rest of Faro still works. Try again reloads just this part.": "Faro 的其他部分仍可使用。重试只会重新加载这一部分。",
+  "Don't show again for this server": "此服务器不再显示",
+  "Couldn't check faro-cli": "无法检查 faro-cli",
+  "Couldn't update faro-cli": "无法更新 faro-cli",
   "Update download failed": "更新下载失败",
   "Couldn't restart": "无法重启",
   "Couldn't save snippet": "无法保存代码片段",
@@ -843,6 +854,15 @@ function translate(value: string): string {
   }
   if (/^program not found$/i.test(normalized)) {
     return value.replace(trimmed, "找不到程序");
+  }
+  const stopped = normalized.match(/^(.+) stopped working$/);
+  if (stopped) {
+    return value.replace(trimmed, `${stopped[1]} 已停止工作`);
+  }
+  const failedOn = normalized.match(/^Couldn't (upload|download|delete|save|start transferring) (.+)$/i);
+  if (failedOn) {
+    const verb = { upload: "上传", download: "下载", delete: "删除", save: "保存", "start transferring": "开始传输" }[failedOn[1].toLowerCase()];
+    return value.replace(trimmed, `无法${verb} ${failedOn[2]}`);
   }
   const connectTarget = normalized.match(/^Couldn't connect to (.+)$/i);
   if (connectTarget) {

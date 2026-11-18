@@ -50,20 +50,27 @@ interface PushArgs {
   log?: boolean;
   /** Raw error text included by "Copy details". */
   detail?: string;
+  /** false logs it to the notification centre without a card on screen
+   *  (a crash the recover panel already shows, a background error). */
+  show?: boolean;
 }
 
 interface ToastState {
   toasts: Toast[]; // currently on-screen
   history: Toast[]; // bounded, persisted log for the notification center
   unreadCount: number;
+  /** Errors logged after this time count on the status-bar error pill. */
+  errorsSeenAt: number;
 
   push: (args: PushArgs) => string;
   dismiss: (id: string) => void;
+  /** Also marks errors seen: opening the notification centre shows them. */
   markAllRead: () => void;
   clearHistory: () => void;
 }
 
 const HISTORY_KEY = "faro.notifications.v1";
+const ERRORS_SEEN_KEY = "faro.notifications.errorsSeenAt";
 const MAX_HISTORY = 100;
 
 let _seq = 0;
@@ -78,6 +85,19 @@ function loadHistory(): Toast[] {
   }
 }
 
+function loadErrorsSeenAt(): number {
+  try {
+    return Number(localStorage.getItem(ERRORS_SEEN_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Errors in the log the user hasn't looked at yet. */
+export function unseenErrors(history: Toast[], seenAt: number): number {
+  return history.filter((t) => t.variant === "error" && t.createdAt > seenAt).length;
+}
+
 function saveHistory(h: Toast[]) {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
@@ -90,8 +110,9 @@ export const useToasts = create<ToastState>((set, get) => ({
   toasts: [],
   history: loadHistory(),
   unreadCount: 0,
+  errorsSeenAt: loadErrorsSeenAt(),
 
-  push: ({ id, variant, title, message, action, duration, log = true, detail }) => {
+  push: ({ id, variant, title, message, action, duration, log = true, detail, show = true }) => {
     const key = id ?? nextId();
     // A repeat of a toast still on screen replaces it and counts up; it
     // doesn't stack another card or bump the unread count again.
@@ -104,12 +125,12 @@ export const useToasts = create<ToastState>((set, get) => ({
       saveHistory(history);
     }
     set((s) => ({
-      toasts: [...s.toasts.filter((t) => t.id !== item.id), item],
+      toasts: show ? [...s.toasts.filter((t) => t.id !== item.id), item] : s.toasts,
       history,
       unreadCount: log && !prev ? s.unreadCount + 1 : s.unreadCount,
     }));
     const ms = duration ?? (variant === "error" ? 8000 : 4000);
-    if (ms > 0)
+    if (show && ms > 0)
       setTimeout(() => {
         // A replacement with the same id runs its own timer.
         if (get().toasts.some((t) => t === item)) get().dismiss(item.id);
@@ -118,7 +139,15 @@ export const useToasts = create<ToastState>((set, get) => ({
   },
 
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
-  markAllRead: () => set({ unreadCount: 0 }),
+  markAllRead: () => {
+    const errorsSeenAt = Date.now();
+    try {
+      localStorage.setItem(ERRORS_SEEN_KEY, String(errorsSeenAt));
+    } catch {
+      // ignore quota failures
+    }
+    set({ unreadCount: 0, errorsSeenAt });
+  },
   clearHistory: () => {
     saveHistory([]);
     set({ history: [] });

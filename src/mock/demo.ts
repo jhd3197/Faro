@@ -20,6 +20,8 @@ import { useDiscovery } from "@/stores/discoveryStore";
 import { useTips } from "@/stores/tipsStore";
 import { useSites } from "@/stores/sitesStore";
 import { useSession } from "@/stores/sessionStore";
+import { useCrashTest } from "@/lib/errorCapture";
+import { useNudges } from "@/stores/nudgeStore";
 import { useEditor } from "@/stores/editorStore";
 import { usePalette } from "@/stores/paletteStore";
 import { usePanelSizes } from "@/stores/panelSizesStore";
@@ -53,6 +55,9 @@ import "./primitives";
   // Restored session (split, last server, Settings section) and open edits.
   useSession,
   useEditor,
+  // Make a region throw so its recover panel shows: useCrashTest.getState().crash("Terminal").
+  useCrashTest,
+  useNudges,
   // Palette recent commands.
   usePalette,
   usePanelSizes,
