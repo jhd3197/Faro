@@ -11,6 +11,7 @@ import { ContextMenu } from "./ContextMenu";
 import { InlineRename } from "@faro/file-ui";
 import { useKeyOf } from "@/lib/keybindings";
 import { keyCombo } from "@/lib/shortcuts";
+import { isClipped } from "@/lib/truncation";
 
 let navigation = 0;
 /** A parent/local click cancels any pending site navigation. */
@@ -79,7 +80,7 @@ export function ServerSites({ profileId, serverName, expanded, onMenuChange }: {
                 requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-site-id="${CSS.escape(site.id)}"]`)?.focus());
               }} /></span>
           </div> : <button aria-label={`Open site ${site.name}`} aria-current={active ? "page" : undefined} data-site-id={site.id}
-            title={`${site.name}\n${site.path}`} onClick={() => void openSite(site)} onContextMenu={e => showMenu(e, site)}
+            onMouseEnter={e => { e.currentTarget.title = isClipped(e.currentTarget) ? `${site.name}\n${site.path}` : ""; }} onClick={() => void openSite(site)} onContextMenu={e => showMenu(e, site)}
             onKeyDown={e => {
               if (e.defaultPrevented || keyCombo(e.nativeEvent) !== keyOf("focus.rename").combo) return;
               e.preventDefault();
@@ -97,8 +98,8 @@ export function ServerSites({ profileId, serverName, expanded, onMenuChange }: {
     </div>}
     {menu && createPortal(<ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={[
       { label: "Open site home", icon: <House size={13} />, onClick: () => void openSite(menu.site, true) },
-      { label: "Rename site…", icon: <Pencil size={13} />, onClick: () => setEditing(menu.site) },
-      { label: "Remove shortcut", icon: <Trash2 size={13} />, onClick: () => {
+      { label: "Rename site…", icon: <Pencil size={13} />, onClick: () => setEditing(menu.site), separatorAfter: true },
+      { label: "Remove shortcut", icon: <Trash2 size={13} />, destructive: true, onClick: () => {
         void useSites.getState().remove(menu.site.id).catch(e => toastError(e, "Couldn't remove site shortcut"));
       } },
     ]} />, document.body)}
