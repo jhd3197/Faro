@@ -48,6 +48,12 @@ export { InlineRename } from "./components/InlineRename";
 // Hooks + utils.
 export { usePathHistory } from "./hooks/usePathHistory";
 export { useDialog } from "./hooks/useDialog";
+export {
+  useDeferredLoading,
+  Deferred,
+  LOADING_DELAY_MS,
+  NOT_FOUND_DELAY_MS,
+} from "./hooks/useDeferredLoading";
 export { cn } from "./lib/cn";
 export { fmtSize, fmtMtime, formatMode } from "./lib/format";
 export {

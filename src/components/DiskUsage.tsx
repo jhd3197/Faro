@@ -26,6 +26,7 @@ import {
   type MenuItem,
 } from "@faro/file-ui";
 import { cn } from "@/lib/cn";
+import { Deferred } from "@faro/file-ui";
 import { DiskTreemap, folderColor, isDarkTheme } from "./DiskTreemap";
 
 /** Parent directory of a POSIX/Windows path (its own root when at top). */
@@ -254,6 +255,7 @@ function DiskUsage() {
 
       {/* Progress banner while scanning */}
       {scanning && (
+        <Deferred>
         <div className="flex shrink-0 items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1.5 text-xs text-text-muted">
           <Loader2 size={13} className="animate-spin text-accent" />
           <span>
@@ -262,6 +264,7 @@ function DiskUsage() {
             <span className="font-medium text-text">{fmtSize(totalBytes)}</span>
           </span>
         </div>
+        </Deferred>
       )}
 
       {/* Body */}

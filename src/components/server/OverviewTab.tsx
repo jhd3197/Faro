@@ -6,6 +6,7 @@ import { fmtRate, fmtSize } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import type { SysSample } from "@/lib/types";
 import { Notice, TD, TH, usePoll } from "./shared";
+import { Deferred } from "@faro/file-ui";
 
 const ACCENT = "rgb(var(--accent))";
 const INFO = "rgb(var(--info))";
@@ -117,10 +118,12 @@ export function OverviewTab() {
         </Notice>
       )}
       {!last && sampler !== "ended" && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1.5 text-xs text-text-muted">
-          <Loader2 size={13} className="animate-spin text-accent" />
-          Waiting for the first sample…
-        </div>
+        <Deferred>
+          <div className="flex shrink-0 items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1.5 text-xs text-text-muted">
+            <Loader2 size={13} className="animate-spin text-accent" />
+            Waiting for the first sample…
+          </div>
+        </Deferred>
       )}
 
       <div className="grid shrink-0 grid-cols-1 divide-y divide-border border-b border-border lg:grid-cols-3 lg:divide-x lg:divide-y-0">
