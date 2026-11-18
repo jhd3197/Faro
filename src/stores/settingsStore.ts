@@ -65,6 +65,49 @@ export const APP_THEMES: ThemeMeta[] = [
 
 /** Named color palettes (everything except the plain Light/Dark neutrals). */
 export const COLOR_THEMES = APP_THEMES.filter((t) => !t.neutral);
+/** Themes offered for the light and dark slots of the appearance mode. */
+export const LIGHT_THEMES = APP_THEMES.filter((t) => !t.dark);
+export const DARK_THEMES = APP_THEMES.filter((t) => t.dark);
+
+/** Light, dark, or follow the OS. Each side has its own theme pick. */
+export type ThemeMode = "light" | "dark" | "system";
+
+export function isAppTheme(v: unknown): v is AppTheme {
+  return typeof v === "string" && APP_THEMES.some((t) => t.value === v);
+}
+
+export function themeIsDark(t: AppTheme): boolean {
+  return APP_THEMES.find((m) => m.value === t)?.dark ?? true;
+}
+
+const DARK_QUERY = "(prefers-color-scheme: dark)";
+
+/** Whether the OS asks for dark. Dark when it can't be read. */
+export function systemPrefersDark(): boolean {
+  try {
+    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+      return window.matchMedia(DARK_QUERY).matches;
+    }
+  } catch {
+    // ignore
+  }
+  return true;
+}
+
+/** The theme actually painted for a mode and its two picks. */
+export function resolveTheme(
+  mode: ThemeMode,
+  light: AppTheme,
+  dark: AppTheme,
+  systemDark: boolean = systemPrefersDark()
+): AppTheme {
+  if (mode === "light") return light;
+  if (mode === "dark") return dark;
+  return systemDark ? dark : light;
+}
+
+/** Fixed id so a theme fallback shows one toast, never a stack. */
+export const THEME_FALLBACK_TOAST_ID = "settings-theme-fallback";
 export type TerminalTheme =
   | "dark"
   | "light"
@@ -85,7 +128,14 @@ export interface NotificationSettings {
 
 interface SettingsState {
   // Appearance
+  /** The theme painted right now, resolved from `themeMode` and the two
+   *  picks. Persisted so the native pre-paint script can set it early. */
   appTheme: AppTheme;
+  themeMode: ThemeMode;
+  /** Theme used in light mode (and by System when the OS is light). */
+  lightTheme: AppTheme;
+  /** Theme used in dark mode (and by System when the OS is dark). */
+  darkTheme: AppTheme;
   /** Window-control layout of the custom title bar. */
   frameStyle: FrameStyle;
   /** Optional accent override (hex). "" = use the theme's own accent. */
@@ -135,6 +185,9 @@ interface SettingsState {
   railExpanded: boolean;
   /** Rail groups the user has folded shut (by group name). */
   railCollapsedGroups: string[];
+  /** How the rail orders servers. A–Z / Z–A are a view: the drag-and-drop
+   *  order (profile.sortOrder) is kept and comes back with "custom". */
+  railSort: RailSort;
   /** Single-pane browser: show a text preview of the selected file. */
   filePreview: boolean;
 
@@ -160,7 +213,16 @@ interface SettingsState {
   // Notifications (Plan 16 Phase 3)
   notifications: NotificationSettings;
 
+  /** Pick a theme directly (palette, command palette). Switches the mode to
+   *  the theme's side unless System already shows that side. */
   setAppTheme: (t: AppTheme) => void;
+  setThemeMode: (m: ThemeMode) => void;
+  setLightTheme: (t: AppTheme) => void;
+  setDarkTheme: (t: AppTheme) => void;
+  /** Flip between the light and dark picks (title bar, Ctrl+Shift+T). */
+  toggleLightDark: () => void;
+  /** Re-resolve System mode after the OS switched light/dark. */
+  syncSystemTheme: () => void;
   setFrameStyle: (f: FrameStyle) => void;
   setAccentColor: (hex: string) => void;
   setUiLanguage: (lang: UiLanguage) => void;
@@ -184,10 +246,8 @@ interface SettingsState {
   setRemoteImagePreviews: (v: RemoteImagePreviews) => void;
   setRailExpanded: (v: boolean) => void;
   toggleRailGroup: (name: string) => void;
+  setRailSort: (v: RailSort) => void;
   setFilePreview: (v: boolean) => void;
-  /** How the rail orders servers. A–Z / Z–A are a view: the drag-and-drop
-   *  order (profile.sortOrder) is kept and comes back with "custom". */
-  railSort: RailSort;
   setTerminalFontSize: (n: number) => void;
   setTerminalFontFamily: (s: string) => void;
   setTerminalTheme: (t: TerminalTheme) => void;
@@ -222,6 +282,11 @@ const STORAGE_KEY = "faro.settings.v1";
 type Persisted = Omit<
   SettingsState,
   | "setAppTheme"
+  | "setThemeMode"
+  | "setLightTheme"
+  | "setDarkTheme"
+  | "toggleLightDark"
+  | "syncSystemTheme"
   | "setFrameStyle"
   | "setAccentColor"
   | "setUiLanguage"
@@ -245,8 +310,8 @@ type Persisted = Omit<
   | "setRemoteImagePreviews"
   | "setRailExpanded"
   | "toggleRailGroup"
+  | "setRailSort"
   | "setFilePreview"
-  setRailSort: (v: RailSort) => void;
   | "setTerminalFontSize"
   | "setTerminalFontFamily"
   | "setTerminalTheme"
@@ -261,6 +326,11 @@ type Persisted = Omit<
 
 const DEFAULTS: Persisted = {
   appTheme: "dark",
+  // A fresh database gets "system" from the native side. An install without
+  // the row derives its mode from the theme it already had.
+  themeMode: "dark",
+  lightTheme: "light",
+  darkTheme: "dark",
   frameStyle: "windows",
   accentColor: "",
   uiLanguage: "system",
@@ -287,6 +357,7 @@ const DEFAULTS: Persisted = {
   remoteImagePreviews: "off",
   railExpanded: false,
   railCollapsedGroups: [],
+  railSort: "custom",
   filePreview: true,
   terminalFontSize: 13,
   terminalFontFamily:
@@ -301,6 +372,10 @@ const DEFAULTS: Persisted = {
   notifications: { enabled: true, unfocusedOnly: true },
 };
 
+/** Factory value of every persisted setting (the Settings nav dots). */
+export const SETTINGS_DEFAULTS: Readonly<Persisted> = DEFAULTS;
+export type PersistedSettings = Persisted;
+
 // The persisted setting keys, in one place — also the authoritative allow-list
 // the localStorage→faro.db migration filters against.
 export const SETTINGS_KEYS = Object.keys(DEFAULTS) as (keyof Persisted)[];
@@ -310,7 +385,6 @@ export const SETTINGS_KEYS = Object.keys(DEFAULTS) as (keyof Persisted)[];
  *  popouts and mock builds. */
 function readInjected(): Partial<Persisted> | null {
   try {
-  | "setRailSort"
     const inj = (globalThis as { __FARO_SETTINGS__?: unknown }).__FARO_SETTINGS__;
     if (inj && typeof inj === "object") return inj as Partial<Persisted>;
   } catch {
@@ -329,12 +403,95 @@ function pickKnown(obj: Partial<Persisted>): Partial<Persisted> {
   return out;
 }
 
+type ThemePicks = Pick<Persisted, "themeMode" | "lightTheme" | "darkTheme">;
+
+/**
+ * Check stored theme ids and fill in the appearance mode. An unknown id (a
+ * theme removed in an update, a hand-edited database) falls back to the
+ * plain Light/Dark theme. An install from before modes existed gets its
+ * mode from the one theme it had, so nobody's look changes on upgrade.
+ * Returns the corrected values and the ids that were dropped.
+ */
+export function normalizeThemes(
+  stored: Partial<Persisted>,
+  base: ThemePicks
+): { patch: Partial<Persisted>; unknown: string[]; migrated: boolean } {
+  const unknown: string[] = [];
+  const check = (v: unknown): AppTheme | undefined => {
+    if (v === undefined) return undefined;
+    if (isAppTheme(v)) return v;
+    unknown.push(String(v));
+    return undefined;
+  };
+  const app = check(stored.appTheme);
+  let light = check(stored.lightTheme);
+  let dark = check(stored.darkTheme);
+  // A pick on the wrong side is ignored rather than reported.
+  if (light && themeIsDark(light)) light = undefined;
+  if (dark && !themeIsDark(dark)) dark = undefined;
+
+  let mode: ThemeMode | undefined =
+    stored.themeMode === "light" || stored.themeMode === "dark" || stored.themeMode === "system"
+      ? stored.themeMode
+      : undefined;
+  let migrated = false;
+  if (!mode && app && stored.lightTheme === undefined && stored.darkTheme === undefined) {
+    // Before modes: the single theme picks the side and fills that slot.
+    mode = themeIsDark(app) ? "dark" : "light";
+    if (mode === "dark") dark = app;
+    else light = app;
+    migrated = true;
+  }
+  const touched =
+    mode !== undefined || light !== undefined || dark !== undefined || stored.appTheme !== undefined;
+  if (!touched) return { patch: {}, unknown, migrated };
+  const m = mode ?? base.themeMode;
+  const l = light ?? base.lightTheme;
+  const d = dark ?? base.darkTheme;
+  return {
+    patch: { themeMode: m, lightTheme: l, darkTheme: d, appTheme: resolveTheme(m, l, d) },
+    unknown,
+    migrated,
+  };
+}
+
+/** Tell the user once that a saved theme is gone. The dynamic import keeps
+ *  the toast store out of this module's load order. */
+function reportThemeFallback(unknown: string[], fallback: AppTheme) {
+  if (!unknown.length) return;
+  const label = APP_THEMES.find((t) => t.value === fallback)?.label ?? fallback;
+  void import("@/stores/toastStore").then(({ useToasts }) =>
+    useToasts.getState().push({
+      id: THEME_FALLBACK_TOAST_ID,
+      variant: "warning",
+      title: "Theme not found",
+      message: `“${unknown[0]}” isn't available, so Faro switched to ${label}.`,
+    })
+  );
+}
+
+/** Write back what normalizing fixed or migrated, so it sticks. */
+function persistThemePatch(patch: Partial<Persisted>, unknown: string[], migrated: boolean) {
+  if (!unknown.length && !migrated) return;
+  for (const k of ["themeMode", "lightTheme", "darkTheme", "appTheme"] as const) {
+    const v = patch[k];
+    if (v !== undefined) persistKey(k, v);
+  }
+}
+
+let loadFallback: { unknown: string[]; theme: AppTheme } | null = null;
+
 function load(): Persisted {
-  const injected = readInjected();
-  if (injected) return { ...DEFAULTS, ...pickKnown(injected) };
   // No injection (popout / mock / first paint before the script ran) — start
   // from defaults; `hydrateFromDb()` below reconciles from faro.db async.
-  return DEFAULTS;
+  const injected = readInjected();
+  const known = injected ? pickKnown(injected) : {};
+  const { patch, unknown, migrated } = normalizeThemes(known, DEFAULTS);
+  const out: Persisted = { ...DEFAULTS, ...known, ...patch };
+  if (!patch.appTheme) out.appTheme = resolveTheme(out.themeMode, out.lightTheme, out.darkTheme);
+  persistThemePatch(patch, unknown, migrated);
+  if (unknown.length) loadFallback = { unknown, theme: out.appTheme };
+  return out;
 }
 
 /** Persist one setting to faro.db — the single source of truth (Plan 12 Phase
@@ -357,12 +514,59 @@ function mutate<K extends keyof Persisted>(
   set(() => ({ [key]: value }) as Partial<SettingsState>);
   persistKey(key, value);
 }
-  railSort: "custom",
+
+/** Set several settings at once, persisting each. */
+function mutateMany(
+  set: (fn: (s: SettingsState) => Partial<SettingsState>) => void,
+  patch: Partial<Persisted>
+) {
+  set(() => patch as Partial<SettingsState>);
+  for (const [k, v] of Object.entries(patch)) {
+    persistKey(k as keyof Persisted, v as Persisted[keyof Persisted]);
+  }
+}
+
+/** Apply new appearance picks plus the theme they resolve to. */
+function applyThemePicks(
+  set: (fn: (s: SettingsState) => Partial<SettingsState>) => void,
+  get: () => SettingsState,
+  picks: Partial<ThemePicks>
+) {
+  const cur = get();
+  const appTheme = resolveTheme(
+    picks.themeMode ?? cur.themeMode,
+    picks.lightTheme ?? cur.lightTheme,
+    picks.darkTheme ?? cur.darkTheme
+  );
+  mutateMany(set, { ...picks, ...(appTheme !== cur.appTheme ? { appTheme } : {}) });
+}
 
 export const useSettings = create<SettingsState>((set, get) => ({
   ...initial,
 
-  setAppTheme: (t) => mutate(set, get, "appTheme", t),
+  setAppTheme: (t) => {
+    if (!isAppTheme(t)) return;
+    const dark = themeIsDark(t);
+    const slot = dark ? { darkTheme: t } : { lightTheme: t };
+    // System keeps following the OS when it already shows this side.
+    const keepSystem = get().themeMode === "system" && systemPrefersDark() === dark;
+    applyThemePicks(set, get, keepSystem ? slot : { ...slot, themeMode: dark ? "dark" : "light" });
+  },
+  setThemeMode: (m) => applyThemePicks(set, get, { themeMode: m }),
+  setLightTheme: (t) => {
+    if (isAppTheme(t) && !themeIsDark(t)) applyThemePicks(set, get, { lightTheme: t });
+  },
+  setDarkTheme: (t) => {
+    if (isAppTheme(t) && themeIsDark(t)) applyThemePicks(set, get, { darkTheme: t });
+  },
+  toggleLightDark: () =>
+    applyThemePicks(set, get, { themeMode: themeIsDark(get().appTheme) ? "light" : "dark" }),
+  syncSystemTheme: () => {
+    const s = get();
+    if (s.themeMode !== "system") return;
+    const next = resolveTheme("system", s.lightTheme, s.darkTheme);
+    if (next !== s.appTheme) mutate(set, get, "appTheme", next);
+  },
   setFrameStyle: (f) => mutate(set, get, "frameStyle", f),
   setAccentColor: (hex) => mutate(set, get, "accentColor", hex),
   setUiLanguage: (lang) => mutate(set, get, "uiLanguage", lang),
@@ -405,6 +609,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setRemoteImagePreviews: (v) => mutate(set, get, "remoteImagePreviews", v),
   setRailExpanded: (v) => mutate(set, get, "railExpanded", v),
   setFilePreview: (v) => mutate(set, get, "filePreview", v),
+  setRailSort: (v) => mutate(set, get, "railSort", v),
   toggleRailGroup: (name) => {
     const cur = get().railCollapsedGroups;
     mutate(
@@ -449,9 +654,13 @@ export async function hydrateFromDb(): Promise<void> {
       }
     }
     const known = pickKnown(parsed);
+    const { patch, unknown, migrated } = normalizeThemes(known, useSettings.getState());
+    Object.assign(known, patch);
     if (Object.keys(known).length) {
       useSettings.setState(known as Partial<SettingsState>);
     }
+    persistThemePatch(patch, unknown, migrated);
+    reportThemeFallback(unknown, useSettings.getState().appTheme);
   } catch {
     // no backend — ignore
   }
@@ -461,6 +670,21 @@ export async function hydrateFromDb(): Promise<void> {
 // injection, so seed them from faro.db right after boot.
 if (!readInjected()) {
   void hydrateFromDb();
+}
+
+// (Set inside load(); the cast stops TS narrowing it to its initial null.)
+const fallback = loadFallback as { unknown: string[]; theme: AppTheme } | null;
+if (fallback) reportThemeFallback(fallback.unknown, fallback.theme);
+
+// System mode follows the OS switching light/dark while Faro is open.
+try {
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    window
+      .matchMedia(DARK_QUERY)
+      .addEventListener("change", () => useSettings.getState().syncSystemTheme());
+  }
+} catch {
+  // ignore
 }
 
 export const TERMINAL_THEMES: Record<
@@ -500,4 +724,3 @@ export const TERMINAL_THEMES: Record<
     cursor: "#a7c080",
   },
 };
-  setRailSort: (v) => mutate(set, get, "railSort", v),

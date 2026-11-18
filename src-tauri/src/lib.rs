@@ -106,8 +106,14 @@ pub struct AppState {
 /// the first paint so there's no theme flash on reload.
 fn build_settings_init_script(db: &db::Db) -> String {
     let mut map = db.settings_get_all().unwrap_or_default();
-    // A fresh install has no rows yet — default the theme so the window still
-    // paints dark (matching the frontend DEFAULTS), not the bare CSS default.
+    // A fresh install follows the OS light/dark setting. Written once, so an
+    // install that predates modes (it has rows) keeps the theme it had.
+    if map.is_empty() {
+        let _ = db.settings_set("themeMode", "\"system\"");
+        map.insert("themeMode".to_string(), "\"system\"".to_string());
+    }
+    // Default the theme so the window still paints dark (matching the
+    // frontend DEFAULTS), not the bare CSS default.
     map.entry("appTheme".to_string())
         .or_insert_with(|| "\"dark\"".to_string());
 
@@ -129,6 +135,10 @@ fn build_settings_init_script(db: &db::Db) -> String {
            var s={obj};\
            window.__FARO_SETTINGS__=s;\
            var el=document.documentElement;\
+           if(s.themeMode==='system'&&window.matchMedia){{\
+             s.appTheme=window.matchMedia('(prefers-color-scheme: dark)').matches\
+               ?(s.darkTheme||'dark'):(s.lightTheme||'light');\
+           }}\
            if(el&&typeof s.appTheme==='string'){{el.setAttribute('data-theme',s.appTheme);}}\
          }}catch(e){{}}}})();"
     )
@@ -178,6 +188,21 @@ mod init_script_tests {
         let db = db::Db::open_in_memory().unwrap();
         let script = build_settings_init_script(&db);
         assert!(script.contains("\"appTheme\":\"dark\""));
+    }
+
+    #[test]
+    fn fresh_install_follows_the_os_but_upgrades_keep_their_theme() {
+        let fresh = db::Db::open_in_memory().unwrap();
+        let script = build_settings_init_script(&fresh);
+        assert!(script.contains("\"themeMode\":\"system\""));
+        assert!(script.contains("prefers-color-scheme: dark"));
+        assert_eq!(fresh.settings_get("themeMode").unwrap().as_deref(), Some("\"system\""));
+
+        let upgraded = db::Db::open_in_memory().unwrap();
+        upgraded.settings_set("appTheme", "\"nord\"").unwrap();
+        let script = build_settings_init_script(&upgraded);
+        assert!(!script.contains("\"themeMode\""));
+        assert!(upgraded.settings_get("themeMode").unwrap().is_none());
     }
 
     #[test]

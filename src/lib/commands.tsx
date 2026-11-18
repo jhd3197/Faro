@@ -298,7 +298,7 @@ export function useCommands(): Command[] {
       group: "View",
       icon: <SunMoon size={14} />,
       combo: "mod+shift+t",
-      run: () => setAppTheme(appTheme === "light" ? "dark" : "light"),
+      run: () => useSettings.getState().toggleLightDark(),
     },
     {
       id: "zoom-in",

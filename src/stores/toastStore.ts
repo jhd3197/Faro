@@ -24,6 +24,8 @@ export interface Toast {
 }
 
 interface PushArgs {
+  /** Fixed id: a toast with the same id on screen is replaced, not stacked. */
+  id?: string;
   variant: ToastVariant;
   title: string;
   message?: string;
@@ -70,17 +72,21 @@ export const useToasts = create<ToastState>((set, get) => ({
   history: loadHistory(),
   unreadCount: 0,
 
-  push: ({ variant, title, message, action, duration }) => {
-    const item: Toast = { id: nextId(), variant, title, message, action, createdAt: Date.now() };
-    const history = [item, ...get().history].slice(0, MAX_HISTORY);
+  push: ({ id, variant, title, message, action, duration }) => {
+    const item: Toast = { id: id ?? nextId(), variant, title, message, action, createdAt: Date.now() };
+    const history = [item, ...get().history.filter((t) => t.id !== item.id)].slice(0, MAX_HISTORY);
     saveHistory(history);
     set((s) => ({
-      toasts: [...s.toasts, item],
+      toasts: [...s.toasts.filter((t) => t.id !== item.id), item],
       history,
       unreadCount: s.unreadCount + 1,
     }));
     const ms = duration ?? (variant === "error" ? 8000 : 4000);
-    if (ms > 0) setTimeout(() => get().dismiss(item.id), ms);
+    if (ms > 0)
+      setTimeout(() => {
+        // A replacement with the same id runs its own timer.
+        if (get().toasts.some((t) => t === item)) get().dismiss(item.id);
+      }, ms);
     return item.id;
   },
 

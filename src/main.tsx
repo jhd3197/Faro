@@ -34,7 +34,9 @@ if (import.meta.env.VITE_MOCK) {
 // (Plan 12 Phase 2) — so there's no FOUC. This is only a deterministic
 // safety net: windows spawned from JS (popped-out terminals) get no injection,
 // so set `data-theme` from the seeded store if it isn't already present.
-if (!document.documentElement.getAttribute("data-theme")) {
+// The store also checks the id (an unknown theme falls back to Light/Dark), so
+// replace whatever the injection set when the two disagree.
+if (document.documentElement.getAttribute("data-theme") !== useSettings.getState().appTheme) {
   document.documentElement.setAttribute(
     "data-theme",
     useSettings.getState().appTheme
