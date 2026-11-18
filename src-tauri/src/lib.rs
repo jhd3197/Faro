@@ -60,6 +60,7 @@ mod tls_trust;
 mod transfer;
 mod vela;
 mod virtualfs;
+mod window_state;
 
 pub struct AppState {
     pub sessions: Arc<session::SessionManager>,
@@ -306,16 +307,23 @@ pub fn run() {
             // itself synchronously instead of an async round-trip.
             {
                 let init_script = build_settings_init_script(&db);
-                let main = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                // Built hidden so the saved size/position (and maximized state)
+                // apply before the first frame; painted in the last theme's
+                // background so there's no white flash while the page loads.
+                let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
                     .title("Faro")
                     .inner_size(1280.0, 800.0)
                     .min_inner_size(900.0, 600.0)
                     .decorations(false)
                     .resizable(true)
                     .shadow(true)
-                    .initialization_script(&init_script)
-                    .build()
-                    .expect("failed to create main window");
+                    .visible(false)
+                    .initialization_script(&init_script);
+                if let Some(color) = window_state::saved_background(&db) {
+                    builder = builder.background_color(color);
+                }
+                let main = builder.build().expect("failed to create main window");
+                window_state::restore_and_track(&main, db.clone());
                 // Settings → Appearance → UI zoom, applied before the frontend
                 // loads so a zoomed UI doesn't paint at 100% first.
                 if let Some(scale) = saved_ui_zoom(&db) {

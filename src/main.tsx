@@ -7,6 +7,7 @@ import { applyAccent } from "./lib/accent";
 import { applyUiLanguage, type UiLanguage } from "./lib/i18n";
 import { applyUiZoom } from "./lib/uiZoom";
 import { sweepStalePopoutBuffers } from "./lib/popout";
+import { rememberWindowBackground } from "./lib/windowBackground";
 // Bundled (offline) UI and code faces — latin subsets only to keep the bundle lean.
 import "@fontsource/ibm-plex-sans/latin-400.css";
 import "@fontsource/ibm-plex-sans/latin-500.css";
@@ -73,7 +74,11 @@ useSettings.subscribe((s) => {
   el.classList.add("theming");
   el.setAttribute("data-theme", s.appTheme);
   if (themingTimer) clearTimeout(themingTimer);
-  themingTimer = setTimeout(() => el.classList.remove("theming"), 260);
+  themingTimer = setTimeout(() => {
+    el.classList.remove("theming");
+    // The next launch's native window paints this colour before the page loads.
+    rememberWindowBackground();
+  }, 260);
 });
 
 // Secondary windows load this same SPA with `?view=…` (see lib/popout.ts):
@@ -84,6 +89,9 @@ const view = new URLSearchParams(window.location.search).get("view");
 // the first-paint path and so a reload during an in-flight handoff can't eat
 // a buffer its popout hasn't read yet.
 if (view !== "terminal") window.setTimeout(sweepStalePopoutBuffers, 10_000);
+// Also record the current theme's background once per launch (covers installs
+// that predate the setting and theme rows changed outside the UI).
+if (view !== "terminal") window.setTimeout(rememberWindowBackground, 1_000);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   view === "terminal" ? (
