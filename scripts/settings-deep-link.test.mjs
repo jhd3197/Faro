@@ -6,7 +6,7 @@ import puppeteer from "puppeteer-core";
 
 // Clicking a control that names a settings section opens Settings on that
 // section (and focuses the field, when the jump names one). The gear and
-// Preferences stay on Appearance.
+// Preferences reopen the section shown last.
 test("settings deep links", { timeout: 120000 }, async () => {
   const executablePath = [
     process.env.CHROME_PATH,
@@ -79,7 +79,11 @@ test("settings deep links", { timeout: 120000 }, async () => {
 
     await page.click('button[title="Settings"]');
     await page.waitForSelector("[data-settings-heading]");
-    assert.equal(await section(), "appearance");
+    assert.equal(await section(), "remoteControl", "the gear reopens the last section");
+    await closeSettings();
+
+    // An explicit deep link still lands on its own section, whatever was last.
+    assert.equal(await openAndRead({ section: "appearance" }), "appearance");
     await closeSettings();
 
     const runPalette = async (query, id) => {
