@@ -19,6 +19,9 @@ import { useUpdater } from "@/stores/updaterStore";
 import { useDiscovery } from "@/stores/discoveryStore";
 import { useTips } from "@/stores/tipsStore";
 import { useSites } from "@/stores/sitesStore";
+import { useSession } from "@/stores/sessionStore";
+import { useEditor } from "@/stores/editorStore";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "./event";
 import { useCfConnect } from "@/components/CloudflareConnectSheet";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
@@ -43,6 +46,11 @@ import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocke
   useDiscovery,
   useTips,
   useSites,
+  // Restored session (split, last server, Settings section) and open edits.
+  useSession,
+  useEditor,
+  // Ask the window to close, as the title bar's close button does.
+  requestClose: () => getCurrentWindow().close(),
   // Convenience: focus a server by profile id (connects if needed).
   focusProfile: (profileId: string) =>
     useConnections.getState().connect(profileId),

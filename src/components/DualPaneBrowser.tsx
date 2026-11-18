@@ -5,6 +5,7 @@ import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
+import { useSession } from "@/stores/sessionStore";
 import { LOCAL_SESSION } from "@/lib/types";
 import type { DirEntry } from "@/lib/types";
 import { ArrowRightLeft } from "lucide-react";
@@ -15,8 +16,9 @@ import { useSyncedPanes } from "@/hooks/useSyncedPanes";
 export function DualPaneBrowser() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragOffset = useRef<number | null>(null);
-  const [splitRatio, setSplitRatio] = useState(0.5);
-  const resize = (ratio: number) => setSplitRatio(Math.min(0.8, Math.max(0.2, ratio)));
+  // The split is part of the restored session (persisted, clamped 0.2–0.8).
+  const splitRatio = useSession((s) => s.snapshot.splitRatio);
+  const resize = (ratio: number) => useSession.getState().setSplitRatio(ratio);
   const activeSessionId = useConnections((s) => s.activeSessionId);
   const activeProfileId = useConnections((s) => s.activeProfileId);
   const profiles = useConnections((s) => s.profiles);
@@ -119,7 +121,7 @@ export function DualPaneBrowser() {
           }}
           onPointerCancel={() => { dragOffset.current = null; }}
           onLostPointerCapture={() => { dragOffset.current = null; }}
-          onDoubleClick={() => setSplitRatio(0.5)}
+          onDoubleClick={() => resize(0.5)}
           onKeyDown={(e) => {
             const ratio = e.key === "ArrowLeft" ? splitRatio - 0.05
               : e.key === "ArrowRight" ? splitRatio + 0.05

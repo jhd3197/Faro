@@ -163,7 +163,9 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "settings_get_all":
       return JSON.parse(sessionStorage.getItem("faro-mock-discovery") ?? '{"discoverySeenVersion":"1.3.22"}');
     case "settings_set": {
-      if (String(a.key).startsWith("discovery")) {
+      // Rows the demo keeps across reloads (in this tab): discovery state and
+      // the restored-session/window rows the restore test reads back.
+      if (String(a.key).startsWith("discovery") || ["sessionSnapshot", "windowBackground"].includes(String(a.key))) {
         const settings = JSON.parse(sessionStorage.getItem("faro-mock-discovery") ?? '{"discoverySeenVersion":"1.3.22"}');
         settings[a.key] = a.value;
         sessionStorage.setItem("faro-mock-discovery", JSON.stringify(settings));

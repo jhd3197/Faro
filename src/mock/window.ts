@@ -1,5 +1,8 @@
 // Mock of @tauri-apps/api/window for the demo build — just enough for the custom
 // title bar's window controls (no-ops in a plain browser).
+type CloseHandler = (event: { preventDefault: () => void; isPreventDefault: () => boolean }) => void | Promise<void>;
+const closeHandlers = new Set<CloseHandler>();
+
 export function getCurrentWindow() {
   return {
     async isMaximized() {
@@ -25,7 +28,26 @@ export function getCurrentWindow() {
     },
     async minimize() {},
     async toggleMaximize() {},
-    async close() {},
+    // Close mirrors Tauri: each close-requested handler runs, and the window
+    // is destroyed unless one prevented it. Tests read `window.__destroyed`.
+    async onCloseRequested(handler: CloseHandler) {
+      closeHandlers.add(handler);
+      return () => { closeHandlers.delete(handler); };
+    },
+    async close() {
+      for (const handler of [...closeHandlers]) {
+        let prevented = false;
+        await handler({ preventDefault: () => { prevented = true; }, isPreventDefault: () => prevented });
+        if (!prevented) {
+          (window as any).__destroyed = true;
+          return;
+        }
+      }
+      if (!closeHandlers.size) (window as any).__destroyed = true;
+    },
+    async destroy() {
+      (window as any).__destroyed = true;
+    },
     async startDragging() {},
   };
 }

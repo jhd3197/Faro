@@ -153,6 +153,8 @@ interface SettingsState {
   defaultPort: number;
   /** Keep saved connection passwords in the OS keychain instead of profiles.json. */
   storePasswordsInKeychain: boolean;
+  /** On launch, reconnect the server that was focused and connected at quit. */
+  restoreLastSession: boolean;
 
   // Notifications (Plan 16 Phase 3)
   notifications: NotificationSettings;
@@ -192,6 +194,7 @@ interface SettingsState {
   /** Resolves once the passwords have moved; rejects (value unchanged) if the keychain refuses. */
   setStorePasswordsInKeychain: (v: boolean) => Promise<void>;
   setNotifications: (v: NotificationSettings) => void;
+  setRestoreLastSession: (v: boolean) => void;
 }
 
 /** The UI zoom stops Zoom In / Zoom Out walk through (percent). */
@@ -248,6 +251,7 @@ type Persisted = Omit<
   | "setDefaultPort"
   | "setStorePasswordsInKeychain"
   | "setNotifications"
+  | "setRestoreLastSession"
 >;
 
 const DEFAULTS: Persisted = {
@@ -288,6 +292,7 @@ const DEFAULTS: Persisted = {
   terminalSuggestions: true,
   defaultPort: 22,
   storePasswordsInKeychain: false,
+  restoreLastSession: true,
   notifications: { enabled: true, unfocusedOnly: true },
 };
 
@@ -416,6 +421,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
     mutate(set, get, "storePasswordsInKeychain", v);
   },
   setNotifications: (v) => mutate(set, get, "notifications", v),
+  setRestoreLastSession: (v) => mutate(set, get, "restoreLastSession", v),
 }));
 
 /** Reload settings from faro.db and merge them into the live store. Used by

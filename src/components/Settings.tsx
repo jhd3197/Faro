@@ -32,6 +32,7 @@ import { CloudflareSettings } from "./CloudflareSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
 import { AboutSettings } from "./AboutSettings";
 import { useLayout } from "@/stores/layoutStore";
+import { useSession } from "@/stores/sessionStore";
 import {
   SETTINGS_FOCUS,
   SETTINGS_SECTIONS,
@@ -61,6 +62,12 @@ const SECTION_ICONS: Record<SettingsSectionId, React.ReactNode> = {
 const SECTIONS: { id: SettingsSectionId; label: string; icon: React.ReactNode }[] =
   SETTINGS_SECTIONS.map((sec) => ({ ...sec, icon: SECTION_ICONS[sec.id] }));
 
+/** The section shown last time Settings was open (Appearance on first use). */
+function lastSection(): SettingsSectionId {
+  const saved = useSession.getState().snapshot.settingsSection;
+  return SECTIONS.some((sec) => sec.id === saved) ? (saved as SettingsSectionId) : "appearance";
+}
+
 export function Settings({ onClose }: Props) {
   const s = useSettings();
 
@@ -79,16 +86,20 @@ export function Settings({ onClose }: Props) {
 
   const target = useLayout((s) => s.settingsTarget);
   const [active, setActive] = useState<SettingsSectionId>(
-    () => useLayout.getState().settingsTarget?.section ?? "appearance"
+    () => useLayout.getState().settingsTarget?.section ?? lastSection()
   );
 
   // A jump from another page (or a second jump while Settings is already
   // open) names the section. A generic open leaves the target null, which
-  // is Appearance. Clicking the nav does not change the target, so it is
-  // not pulled back.
+  // is the section shown last time. Clicking the nav does not change the
+  // target, so it is not pulled back.
   useEffect(() => {
-    setActive(target?.section ?? "appearance");
+    setActive(target?.section ?? lastSection());
   }, [target]);
+
+  useEffect(() => {
+    useSession.getState().setSettingsSection(active);
+  }, [active]);
 
   useEffect(() => {
     const root = panelRef.current;
@@ -551,6 +562,12 @@ export function Settings({ onClose }: Props) {
                   toastError(e, "Couldn't change where passwords are stored"),
                 )
               }
+            />
+            <ToggleField
+              label="Restore last session"
+              help="When Faro starts, reconnect the server you were using if it was still connected when you quit."
+              checked={s.restoreLastSession}
+              onChange={s.setRestoreLastSession}
             />
           </>
         );

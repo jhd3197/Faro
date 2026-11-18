@@ -86,6 +86,8 @@ import { formatCombo } from "./lib/shortcuts";
 import { toggleZen } from "./lib/windowMode";
 import { relTime } from "./lib/format";
 import { cn } from "./lib/cn";
+import { QuitGate } from "./components/QuitGate";
+import { useSession } from "./stores/sessionStore";
 
 export default function App() {
   const activeSessionId = useConnections((s) => s.activeSessionId);
@@ -123,6 +125,10 @@ export default function App() {
   useShortcuts();
 
   useEffect(() => { void useDiscovery.getState().init(); }, []);
+
+  // Pick up where the last run left off (focused server, split, Settings
+  // section). Saving the session snapshot starts only after this finishes.
+  useEffect(() => { void useSession.getState().restore(); }, []);
 
   // Boot the Folder Sync store: fetch the current pairs and attach the
   // "foldersync://changed" listener so background syncs keep the UI live.
@@ -198,6 +204,7 @@ export default function App() {
       <HostKeyModal />
       <AuthPromptModal />
       <Toaster />
+      <QuitGate />
       <AgentBridgeHost />
       <OverwriteDialogHost />
       <DirectoryDiffHost />

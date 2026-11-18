@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { onBeforeClose } from "@/lib/closeGuard";
 import { ipc } from "@/lib/ipc";
 import { LOCAL_SESSION, type ConnectionProfile } from "@/lib/types";
 import { browserLocationKey, useSites } from "@/stores/sitesStore";
@@ -92,18 +92,10 @@ export function useRememberedLocalPath(
     };
     const unload = () => { void flush(); };
     window.addEventListener("beforeunload", unload);
-    const win = getCurrentWindow() as {
-      onCloseRequested?: (handler: () => Promise<void>) => Promise<() => void>;
-    };
-    let unlisten = () => {};
-    let cancelled = false;
-    if (win.onCloseRequested) {
-      win.onCloseRequested(flush).then(fn => {
-        if (cancelled) fn(); else unlisten = fn;
-      }).catch(() => {});
-    }
+    // The window's one close handler (lib/closeGuard) runs this before the
+    // window goes, after any quit confirmation.
+    const unlisten = onBeforeClose(flush);
     return () => {
-      cancelled = true;
       window.removeEventListener("beforeunload", unload);
       unlisten();
       void flush();

@@ -85,6 +85,11 @@ const ZH: Record<string, string> = {
   "Copy on select": "选中即复制",
   "Inline suggestions": "行内建议",
   "Default port for new profiles": "新连接默认端口",
+  "Restore last session": "恢复上次会话",
+  "When Faro starts, reconnect the server you were using if it was still connected when you quit.":
+    "启动 Faro 时，如果退出时仍连接着正在使用的服务器，则重新连接它。",
+  "Quit Faro?": "退出 Faro？",
+  "Quit anyway": "仍然退出",
   "Allow all — no prompts": "全部允许，不再询问",
   "Auto-approve read-only operations": "自动批准只读操作",
   "Auto-approve safe shell commands": "自动批准安全 Shell 命令",
