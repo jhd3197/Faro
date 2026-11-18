@@ -19,6 +19,7 @@ import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import type { Transfer } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { fmtEta, fmtRate } from "@/lib/format";
+import { exactBytes } from "@faro/file-ui";
 import { toastError } from "@/lib/errors";
 import { Elapsed } from "./ui/Elapsed";
 import { ResizablePanel } from "./ResizablePanel";
@@ -287,7 +288,7 @@ function Row({
         )}
       </div>
       <div className="w-28 shrink-0 text-right text-[11px] tabular-nums text-text-muted">
-        <div>{fmtSize(t.transferred)}</div>
+        <div title={exactBytes(t.transferred)}>{fmtSize(t.transferred)}</div>
         {t.status === "transferring" && !stalled && t.bytesPerSec !== undefined && (
           <div
             className="text-text-dim"

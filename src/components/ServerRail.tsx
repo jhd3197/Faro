@@ -2136,7 +2136,7 @@ function RailSearch({
       <div className="max-h-80 overflow-y-auto py-1">
         {results.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-text-dim">
-            No servers match “{query}”.
+            {query.trim() ? <>No servers match “{query}”.</> : "No servers yet."}
           </div>
         ) : (
           results.map((p) => {
