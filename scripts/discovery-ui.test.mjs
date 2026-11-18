@@ -1,14 +1,20 @@
 // Plan 32: first run, update notices, release notes and tips, against the mock build.
-// Run `npm run dev:mock` first; FARO_TEST_URL overrides the address, FARO_SHOTS
-// the screenshot folder (default: %TEMP%).
+// Starts its own mock server unless FARO_TEST_URL points at one (e.g. a running
+// `npm run dev:mock`); FARO_SHOTS sets the screenshot folder (default: temp).
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'vite';
 import puppeteer from 'puppeteer-core';
 const executablePath = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(p => p && existsSync(p));
-const shots = process.env.FARO_SHOTS ?? process.env.TEMP ?? '.';
+const shots = process.env.FARO_SHOTS ?? tmpdir();
 const shot = (page, name) => page.screenshot({ path: join(shots, `faro-${name}.png`) });
 const marked = (title, ...items) => `## Faro\n\n<!-- faro:changes -->\n### ${title}\n\n${items.map(i => `- ${i}`).join('\n')}\n<!-- /faro:changes -->\n\n### Desktop app\n| File | Size |`;
+const server = process.env.FARO_TEST_URL ? null
+  : await createServer({ mode: 'mock', server: { host: '127.0.0.1', port: 0, strictPort: false } });
+await server?.listen();
+const url = process.env.FARO_TEST_URL ?? `http://127.0.0.1:${server.httpServer.address().port}/`;
 const browser = await puppeteer.launch({ executablePath, headless: true });
 try {
   const page = await browser.newPage();
@@ -25,7 +31,7 @@ try {
     sessionStorage.setItem('faro-mock-found', '1');
   });
   const load = async () => {
-    await page.goto(process.env.FARO_TEST_URL ?? 'http://localhost:1425', { waitUntil: 'networkidle0' });
+    await page.goto(url, { waitUntil: 'networkidle0' });
     await page.waitForFunction(() => window.__demo?.useDiscovery);
   };
   const state = (settings, extra = {}) => page.evaluate((settings, extra) => {
@@ -194,4 +200,4 @@ try {
   await shot(page, 'get-connected-narrow');
   assert.deepEqual(errors, []);
   console.log('Discovery UI passed: fresh install, detected imports, empty state, replay, upgrade without a record, patch pill, minor notes across skipped versions, tips, update-bar fallback, narrow layout.');
-} finally { await browser.close(); }
+} finally { await browser.close(); await server?.close(); }
