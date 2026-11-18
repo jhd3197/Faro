@@ -169,6 +169,13 @@ export function ServerRail() {
   const stopBridge = useBridge((s) => s.stop);
 
   const [editing, setEditing] = useState<ConnectionProfile | "new" | null>(null);
+  const editProfileId = useLayout((s) => s.editProfileId);
+  useEffect(() => {
+    if (!editProfileId) return;
+    const p = profiles.find((x) => x.id === editProfileId);
+    if (p) setEditing(p);
+    useLayout.getState().openEditProfile(null);
+  }, [editProfileId, profiles]);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchToggleRef = useRef<HTMLDivElement>(null);
   // Which profile we last asked to connect — localizes the global

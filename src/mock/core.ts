@@ -201,9 +201,41 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
         throw { kind: "network", message: "Connection refused (os error 111)" };
       if (a.profileId === "__str_fail__")
         throw "legacy string error: something broke"; // un-migrated command shape
+      {
+        // Issue #86 test hooks for Cloudflare profiles: `window.__cfConnect`
+        // = "hostkey" asks about an unknown host key first; "refused" fails
+        // the way ssh_cert words a certificate the server turned down.
+        const w = window as unknown as { __cfConnect?: string; __hostAnswer?: (d: string) => void };
+        const p = data.profiles.find((x) => x.id === a.profileId);
+        if (p?.proxyCommand?.kind === "cloudflare" && w.__cfConnect) {
+          await new Promise((r) => setTimeout(r, 400));
+          if (w.__cfConnect === "hostkey") {
+            const decision = await new Promise<string>((resolve) => {
+              w.__hostAnswer = resolve;
+              emit("host://prompt", {
+                requestId: "mock-host",
+                host: p.proxyCommand?.hostname || p.host,
+                port: p.port,
+                keyType: "ssh-ed25519",
+                fingerprint: "SHA256:k3Vq0Yb1u9mN2xR7pLzW4eTjH8sQdFcA6oIvGy5BnKs",
+                kind: "unknown",
+              });
+            });
+            if (decision === "reject") throw { kind: "other", message: "Host key rejected" };
+          }
+          if (w.__cfConnect === "refused")
+            throw {
+              kind: "auth",
+              message: `Cloudflare issued a certificate for \`jane.doe\`, but the server refused it for user \`${p.username}\`.`,
+            };
+        }
+      }
       return data.openSession(a.profileId);
     case "disconnect":
       data.closeSession(a.sessionId);
+      return null;
+    case "respond_to_host_prompt":
+      (window as unknown as { __hostAnswer?: (d: string) => void }).__hostAnswer?.(String(a.decision));
       return null;
 
     // ---- files ----
@@ -402,6 +434,18 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       ];
     case "cf_account_zones":
       return [];
+    case "cf_access_login":
+      // The browser round-trip: a moment, then signed in.
+      await new Promise((r) => setTimeout(r, 1200));
+      (window as unknown as { __cfAccess?: string }).__cfAccess = "loggedIn";
+      return { hostname: a.hostname, state: "loggedIn", identity: "jane.doe@example.com", expiresAt: Math.floor(Date.now() / 1000) + 18 * 3600 };
+    case "cf_access_status": {
+      // `window.__cfAccess` picks the state for screenshots (default: signed in).
+      const state = (window as unknown as { __cfAccess?: string }).__cfAccess ?? "loggedIn";
+      return state === "loggedIn"
+        ? { hostname: a.hostname, state, identity: "jane.doe@example.com", expiresAt: Math.floor(Date.now() / 1000) + 18 * 3600 }
+        : { hostname: a.hostname, state };
+    }
     case "import_faro_file":
       // A canned team file: one duplicate of a demo server, one that needs a key.
       return {
@@ -474,8 +518,27 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     }
 
     // ---- sync ----
-    case "diagnose_connection":
+    case "diagnose_connection": {
+      // `window.__diag = "auth"` makes the check fail at sign-in (screenshots).
+      const diag = (window as unknown as { __diag?: string }).__diag;
+      await new Promise((r) => setTimeout(r, diag ? 900 : 0));
+      if (diag === "auth")
+        return {
+          ok: false,
+          steps: [
+            { label: "Gateway configuration", ok: true, detail: "Passed", elapsedMs: 0 },
+            { label: "First-hop DNS", ok: true, detail: "Passed", elapsedMs: 18 },
+            { label: "First-hop TCP", ok: true, detail: "Passed", elapsedMs: 64 },
+            {
+              label: "Destination connection and sign-in",
+              ok: false,
+              detail: "Sign-in failed. Check the username, credential source, key, and any required second factor.",
+              elapsedMs: 1412,
+            },
+          ],
+        };
       return { ok: true, steps: [{ label: "Destination connection and sign-in", ok: true, detail: "Passed", elapsedMs: 120 }, { label: "Starting folder access", ok: true, detail: "Passed", elapsedMs: 40 }] };
+    }
     case "sync_plan":
       return data.syncPlan(a.localPath, a.remotePath);
     case "sync_recovery_list":

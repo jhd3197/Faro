@@ -8,6 +8,7 @@ import {
 import { ipc, onHostPrompt } from "@/lib/ipc";
 import { useDialog } from "@/hooks/useDialog";
 import type { HostDecision, HostPromptEvent } from "@/lib/types";
+import { useCfConnect } from "./CloudflareConnectSheet";
 
 // Mounted once at the top of the tree. Listens for `host://prompt` events
 // from the SSH connect handshake (and FTPS certificates the OS doesn't trust)
@@ -19,7 +20,10 @@ export function HostKeyModal() {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    onHostPrompt((e) => setQueue((q) => [...q, e])).then((u) => {
+    onHostPrompt((e) => {
+      if (useCfConnect.getState().takeHostPrompt(e)) return;
+      setQueue((q) => [...q, e]);
+    }).then((u) => {
       if (cancelled) u();
       else unlisten = u;
     });
