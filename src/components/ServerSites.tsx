@@ -6,7 +6,6 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/cn";
-import { SiteDialog } from "./SiteDialog";
 import { ContextMenu } from "./ContextMenu";
 import { InlineRename } from "@faro/file-ui";
 import { useKeyOf } from "@/lib/keybindings";
@@ -30,7 +29,6 @@ export function ServerSites({ profileId, serverName, expanded, onMenuChange }: {
   const sites = allSites.filter(s => s.profileId === profileId);
   const [collapsed, setCollapsed] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
-  const [editing, setEditing] = useState<SiteShortcut | null>(null);
   // The site being renamed in place (F2 on a focused site).
   const [renaming, setRenaming] = useState<string | null>(null);
   const keyOf = useKeyOf();
@@ -98,11 +96,10 @@ export function ServerSites({ profileId, serverName, expanded, onMenuChange }: {
     </div>}
     {menu && createPortal(<ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={[
       { label: "Open site home", icon: <House size={13} />, onClick: () => void openSite(menu.site, true) },
-      { label: "Rename site…", icon: <Pencil size={13} />, onClick: () => setEditing(menu.site), separatorAfter: true },
+      { label: "Rename site", icon: <Pencil size={13} />, ...keyOf("focus.rename"), onClick: () => setRenaming(menu.site.id), separatorAfter: true },
       { label: "Remove shortcut", icon: <Trash2 size={13} />, destructive: true, onClick: () => {
         void useSites.getState().remove(menu.site.id).catch(e => toastError(e, "Couldn't remove site shortcut"));
       } },
     ]} />, document.body)}
-    {editing && createPortal(<SiteDialog site={editing} profileId={profileId} serverName={serverName} path={editing.path} onClose={() => setEditing(null)} />, document.body)}
   </>;
 }

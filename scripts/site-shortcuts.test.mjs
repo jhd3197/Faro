@@ -93,16 +93,19 @@ test('site shortcuts reuse connections and preserve independent navigation', { t
 
     await t.test('rename and remove affect metadata only; save failures stay in the dialog', async () => {
       await clickAria('Options for Media library');
-      await clickText('Rename site…');
-      await page.waitForSelector('[role="dialog"] input');
-      await page.$eval('[role="dialog"] input', e => e.select());
-      await page.type('[role="dialog"] input', 'Client media');
+      await page.waitForFunction(() => [...document.querySelectorAll('[role="menuitem"]')].some(b => b.textContent.startsWith('Rename site')));
+      await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(b => b.textContent.startsWith('Rename site')).click());
+      const field = 'input[aria-label="Rename site Media library"]';
+      await page.waitForSelector(field);
+      await page.$eval(field, e => e.select());
+      await page.type(field, 'Client media');
       await page.evaluate(() => { window.siteTest.failSave = true; });
-      await clickText('Save name');
+      await page.keyboard.press('Enter');
       await page.waitForSelector('[role="alert"]');
       assert.ok((await snapshot()).sites.some(s => s.name === 'Media library'));
       await page.evaluate(() => { window.siteTest.failSave = false; });
-      await clickText('Save name');
+      await page.focus(field);
+      await page.keyboard.press('Enter');
       await waitSite('Client media');
       await page.reload();
       await waitSite('Client media');
