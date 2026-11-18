@@ -98,7 +98,6 @@ import { ConfirmModal } from "./ConfirmModal";
 import { PropertiesModal } from "./PropertiesModal";
 import { FileListSkeleton } from "./Skeleton";
 import { EmptyState } from "./EmptyState";
-import { Deferred, NOT_FOUND_DELAY_MS } from "../hooks/useDeferredLoading";
 import { Thumbnail } from "./Thumbnail";
 
 interface Segment {
@@ -1933,11 +1932,7 @@ export function FilePane({
               }
             />
           ) : (
-            // Deferred: the first paint before a listing starts would
-            // otherwise flash "Empty folder".
-            <Deferred delay={NOT_FOUND_DELAY_MS}>
-              <EmptyState icon={<Inbox size={20} />} title={skippedEntries > 0 ? "No supported entries" : "Empty folder"} />
-            </Deferred>
+            <EmptyState icon={<Inbox size={20} />} title={skippedEntries > 0 ? "No supported entries" : "Empty folder"} />
           )
         ) : paneViewMode === "grid" ? (
           <div className="grid [grid-template-columns:repeat(auto-fill,minmax(108px,1fr))] gap-1 p-2">
