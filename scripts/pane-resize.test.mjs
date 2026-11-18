@@ -45,9 +45,9 @@ test('file panes resize with pointer and keyboard without disrupting Sync', { ti
     await page.mouse.move(g.x + 20, g.y);
     await settle();
     assert.equal((await geometry()).left, g.left, 'released pointer must stop resizing');
-    await dragTo(0.99);
+    await dragTo(0.9);
     assert.equal((await geometry()).ratio, 80);
-    await dragTo(0.01);
+    await dragTo(0.1);
     assert.equal((await geometry()).ratio, 20);
     await page.focus(selector);
     await page.keyboard.press('ArrowRight');

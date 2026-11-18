@@ -6,6 +6,9 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
+import { usePanelSizes } from "@/stores/panelSizesStore";
+import { COLLAPSE_AT, EXPAND_AT, PANEL_TRANSITION_MS, STRIP_SIZE, startResizeDrag } from "@/hooks/useResizable";
+import { CollapsedStrip } from "./ResizablePanel";
 import { LOCAL_SESSION } from "@/lib/types";
 import type { DirEntry } from "@/lib/types";
 import { ArrowRightLeft } from "lucide-react";
@@ -13,12 +16,63 @@ import { useSiteBrowser } from "@/hooks/useSiteBrowser";
 import { useRememberedLocalPath } from "@/hooks/useRememberedLocalPath";
 import { useSyncedPanes } from "@/hooks/useSyncedPanes";
 
+type Side = "local" | "remote";
+
+function currentCollapsedSide(): Side | null {
+  const p = usePanelSizes.getState().panels;
+  return p["dual.local"]?.collapsed ? "local" : p["dual.remote"]?.collapsed ? "remote" : null;
+}
+
 export function DualPaneBrowser() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const dragOffset = useRef<number | null>(null);
   // The split is part of the restored session (persisted, clamped 0.2–0.8).
   const splitRatio = useSession((s) => s.snapshot.splitRatio);
   const resize = (ratio: number) => useSession.getState().setSplitRatio(ratio);
+  // Either side can be dragged shut into a labelled strip; the ratio is kept
+  // so it reopens where it was.
+  const localCollapsed = usePanelSizes((s) => !!s.panels["dual.local"]?.collapsed);
+  const remoteCollapsed = usePanelSizes((s) => !!s.panels["dual.remote"]?.collapsed);
+  const panelsReady = usePanelSizes((s) => s.ready);
+  const collapsed: Side | null = localCollapsed ? "local" : remoteCollapsed ? "remote" : null;
+  const setCollapsed = (side: Side | null) => {
+    const p = usePanelSizes.getState();
+    p.setCollapsed("dual.local", side === "local");
+    p.setCollapsed("dual.remote", side === "remote");
+  };
+  const [dragging, setDragging] = useState(false);
+
+  // Drag the divider (or a collapsed strip). Positions are px from the
+  // container's left edge; within COLLAPSE_AT of an edge that side folds into
+  // a strip, and it takes EXPAND_AT to pull it back out.
+  const beginDrag = (e: React.PointerEvent<Element>, onClick?: () => void) => {
+    const bounds = containerRef.current?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 1) return;
+    const width = bounds.width - 1;
+    const shown = collapsed === "local" ? STRIP_SIZE
+      : collapsed === "remote" ? width - STRIP_SIZE
+      : splitRatio * width;
+    const offset = e.clientX - bounds.left - shown;
+    let side = collapsed;
+    if (e.currentTarget.getAttribute("role") === "separator") (e.currentTarget as HTMLElement).focus();
+    startResizeDrag(e, {
+      axis: "x",
+      onStart: () => setDragging(true),
+      onMove: (_delta, ev) => {
+        const x = ev.clientX - bounds.left - offset;
+        const fromRight = width - x;
+        if (side === "local") { if (x >= EXPAND_AT) side = null; }
+        else if (side === "remote") { if (fromRight >= EXPAND_AT) side = null; }
+        else if (x < COLLAPSE_AT) side = "local";
+        else if (fromRight < COLLAPSE_AT) side = "remote";
+        if (side !== currentCollapsedSide()) setCollapsed(side);
+        if (!side) resize(x / width);
+      },
+      onEnd: (moved) => {
+        setDragging(false);
+        if (!moved) onClick?.();
+      },
+    });
+  };
   const activeSessionId = useConnections((s) => s.activeSessionId);
   const activeProfileId = useConnections((s) => s.activeProfileId);
   const profiles = useConnections((s) => s.profiles);
@@ -71,9 +125,25 @@ export function DualPaneBrowser() {
     );
   };
 
+  // A collapsed side is a fixed strip and the other takes the rest. Flex
+  // changes animate (collapse, expand, keyboard steps) except mid-drag.
+  const paneStyle = (side: Side): React.CSSProperties => ({
+    flex: collapsed === side ? `0 0 ${STRIP_SIZE}px`
+      : collapsed ? "1 1 0%"
+      : `${side === "local" ? splitRatio : 1 - splitRatio} 1 0%`,
+    transition: dragging ? undefined : `flex ${PANEL_TRANSITION_MS}ms ease`,
+  });
+
+  // Wait for the saved collapsed state so a folded pane doesn't flash open.
+  if (!panelsReady) return null;
+
   return (
     <div ref={containerRef} className="relative flex h-full min-w-0 flex-1">
-      <div className="flex min-w-0 overflow-hidden" style={{ flex: `${splitRatio} 1 0%` }}>
+      <div className="flex min-w-0 overflow-hidden" style={paneStyle("local")}>
+        {collapsed === "local" && (
+          <CollapsedStrip label="Local" axis="x" onExpand={() => setCollapsed(null)} onPointerDown={(e) => beginDrag(e, () => setCollapsed(null))} />
+        )}
+        <div className={collapsed === "local" ? "hidden" : "flex min-w-0 flex-1"}>
         <FilePane
           paneId="local"
           title="Local"
@@ -85,6 +155,7 @@ export function DualPaneBrowser() {
           transferLabel="Upload"
           toolbarActions={sync.toolbar}
         />
+        </div>
       </div>
       <div className="relative w-px shrink-0 bg-border">
         <div
@@ -97,31 +168,8 @@ export function DualPaneBrowser() {
           tabIndex={0}
           title="Drag to resize panes; double-click to reset"
           className="absolute inset-y-0 -left-1 z-20 w-[9px] touch-none cursor-col-resize select-none hover:bg-accent/30 focus-visible:bg-accent/30 focus-visible:outline-none"
-          onPointerDown={(e) => {
-            if (e.button !== 0 || !e.isPrimary) return;
-            e.preventDefault();
-            const bounds = containerRef.current?.getBoundingClientRect();
-            if (!bounds) return;
-            dragOffset.current = e.clientX - bounds.left - splitRatio * (bounds.width - 1);
-            e.currentTarget.focus();
-            e.currentTarget.setPointerCapture(e.pointerId);
-          }}
-          onPointerMove={(e) => {
-            if (dragOffset.current === null || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
-            const bounds = containerRef.current?.getBoundingClientRect();
-            if (bounds && bounds.width > 1) {
-              resize((e.clientX - bounds.left - dragOffset.current) / (bounds.width - 1));
-            }
-          }}
-          onPointerUp={(e) => {
-            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-              e.currentTarget.releasePointerCapture(e.pointerId);
-            }
-            dragOffset.current = null;
-          }}
-          onPointerCancel={() => { dragOffset.current = null; }}
-          onLostPointerCapture={() => { dragOffset.current = null; }}
-          onDoubleClick={() => resize(0.5)}
+          onPointerDown={beginDrag}
+          onDoubleClick={() => { setCollapsed(null); resize(0.5); }}
           onKeyDown={(e) => {
             const ratio = e.key === "ArrowLeft" ? splitRatio - 0.05
               : e.key === "ArrowRight" ? splitRatio + 0.05
@@ -130,6 +178,7 @@ export function DualPaneBrowser() {
               : e.key === "Enter" ? 0.5 : null;
             if (ratio === null) return;
             e.preventDefault();
+            setCollapsed(null);
             resize(ratio);
           }}
         />
@@ -149,7 +198,11 @@ export function DualPaneBrowser() {
           </div>
         )}
       </div>
-      <div className="flex min-w-0 overflow-hidden" style={{ flex: `${1 - splitRatio} 1 0%` }}>
+      <div className="flex min-w-0 overflow-hidden" style={paneStyle("remote")}>
+        {collapsed === "remote" && (
+          <CollapsedStrip label="Remote" axis="x" onExpand={() => setCollapsed(null)} onPointerDown={(e) => beginDrag(e, () => setCollapsed(null))} />
+        )}
+        <div className={collapsed === "remote" ? "hidden" : "flex min-w-0 flex-1"}>
         {profiles.length === 0 && !activeSessionId ? <NoConnections /> : <FilePane
           paneId="remote"
           key={`${activeSessionId}:${siteBrowser.site?.id ?? "server"}`}
@@ -163,6 +216,7 @@ export function DualPaneBrowser() {
           onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
           toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
         />}
+        </div>
       </div>
       {siteBrowser.dialog}
 
