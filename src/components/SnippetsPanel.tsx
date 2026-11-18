@@ -13,6 +13,7 @@ import {
 import { useSnippets, newSnippet } from "@/stores/snippetsStore";
 import { extractVariables } from "@/lib/snippets";
 import { useDialog } from "@/hooks/useDialog";
+import { useTypeToSearch } from "@/hooks/useTypeToSearch";
 import { ConfirmModal } from "./ConfirmModal";
 import { VariableDialog } from "./VariableDialog";
 import type { Snippet } from "@/lib/types";
@@ -55,6 +56,7 @@ function SnippetsPanel() {
   const requestInsert = useSnippets((s) => s.requestInsert);
 
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Snippet | "new" | null>(null);
   const [deleting, setDeleting] = useState<Snippet | null>(null);
@@ -97,14 +99,22 @@ function SnippetsPanel() {
     }
   }, [filtered, selectedId]);
 
-  // Esc closes the panel unless an inner dialog is open.
+  // Esc peels one layer unless an inner dialog is open: a typed search
+  // first, then the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !editing && !deleting) close();
+      if (e.key !== "Escape" || editing || deleting || e.isComposing) return;
+      if (searchRef.current?.value) {
+        setQuery("");
+        searchRef.current.focus();
+      } else close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [close, editing, deleting]);
+
+  // Start typing anywhere in the panel to search.
+  useTypeToSearch(searchRef, (ch) => setQuery((q) => q + ch), !editing && !deleting);
 
   return createPortal(
     <div className="anim-modal fixed inset-0 z-modal flex flex-col bg-bg">
@@ -138,9 +148,11 @@ function SnippetsPanel() {
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
             <Search size={13} className="shrink-0 text-text-dim" />
             <input
+              ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search snippets…"
+              aria-label="Search snippets"
               className="w-full bg-transparent text-xs outline-none placeholder:text-text-dim"
             />
           </div>
@@ -152,7 +164,18 @@ function SnippetsPanel() {
                 asks for the values when you insert it.
               </div>
             ) : filtered.length === 0 ? (
-              <div className="p-4 text-xs text-text-dim">No matches.</div>
+              <div data-snippets-no-match="" className="p-4 text-xs text-text-dim">
+                {`No snippets match “${query.trim()}”. `}
+                <button
+                  onClick={() => {
+                    setQuery("");
+                    searchRef.current?.focus();
+                  }}
+                  className="text-accent hover:underline"
+                >
+                  Clear search
+                </button>
+              </div>
             ) : (
               groups.map(([folder, items]) => (
                 <div key={folder || "__ungrouped"}>

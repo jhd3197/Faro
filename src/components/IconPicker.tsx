@@ -10,6 +10,7 @@ import { BrandIcon } from "@/lib/brandIcons";
 import { BRAND_ICONS } from "@/lib/brandIconData";
 import { cn } from "@/lib/cn";
 import { isComposing } from "@faro/file-ui";
+import { useTypeToSearch } from "@/hooks/useTypeToSearch";
 
 const EMOJI_CHOICES: { char: string; label: string }[] = [
   { char: "🚀", label: "rocket" },
@@ -61,6 +62,7 @@ export function IconPicker({
   const [query, setQuery] = useState("");
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const trimmed = value.trim();
   const valueIsKnownKey = trimmed.includes(":") && !!BRAND_ICONS[trimmed];
@@ -77,15 +79,23 @@ export function IconPicker({
     setOpen(true);
   };
 
-  // Escape closes; overlay-click covers the mouse case.
+  // Escape clears a typed search first, then closes; overlay-click covers
+  // the mouse case.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape" || e.isComposing) return;
+      if (searchRef.current?.value) {
+        setQuery("");
+        searchRef.current.focus();
+      } else setOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+
+  // Focus left on a cell? Typing still searches.
+  useTypeToSearch(searchRef, (ch) => setQuery((v) => v + ch), open);
 
   const q = query.trim().toLowerCase();
   const emoji = EMOJI_CHOICES.filter((e) => !q || e.label.includes(q));
@@ -145,6 +155,7 @@ export function IconPicker({
             <div className="flex items-center gap-1.5 border-b border-border px-2.5 py-2">
               <Search size={13} className="shrink-0 text-text-dim" />
               <input
+                ref={searchRef}
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
