@@ -16,6 +16,7 @@ import type { Transfer } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { fmtEta, fmtRate } from "@/lib/format";
 import { toastError } from "@/lib/errors";
+import { Elapsed } from "./ui/Elapsed";
 
 export function TransferQueue() {
   const {
@@ -79,7 +80,7 @@ export function TransferQueue() {
           </span>
         )}
         {totalSpeed > 0 && (
-          <span className="text-[11px] text-text-muted" title="Combined speed of running transfers">
+          <span className="text-[11px] tabular-nums text-text-muted" title="Combined speed of running transfers">
             {fmtRate(totalSpeed)}
           </span>
         )}
@@ -257,7 +258,7 @@ function Row({
           </div>
         )}
       </div>
-      <div className="w-24 shrink-0 text-right text-[11px] text-text-muted">
+      <div className="w-28 shrink-0 text-right text-[11px] tabular-nums text-text-muted">
         <div>{fmtSize(t.transferred)}</div>
         {t.status === "transferring" && !stalled && t.bytesPerSec !== undefined && (
           <div
@@ -272,7 +273,17 @@ function Row({
             {t.etaSecs !== undefined && ` · ${fmtEta(t.etaSecs)}`}
           </div>
         )}
-        <div className={stalled ? "text-warning" : "text-text-dim"}>{statusLabel}</div>
+        <div className={stalled ? "text-warning" : "text-text-dim"}>
+          {statusLabel}
+          {/* From the stored start time, so closing and reopening the panel
+              keeps counting instead of starting over. */}
+          {t.status === "transferring" && t.startedAt > 0 && (
+            <>
+              {" · "}
+              <Elapsed since={t.startedAt} />
+            </>
+          )}
+        </div>
       </div>
       {t.status === "queued" && queuePos >= 0 && (
         <>

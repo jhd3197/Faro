@@ -241,7 +241,8 @@ export const transfers: Transfer[] = [
     transferred: 34_603_008,
     status: "transferring",
     delta: { sent: 3_355_443, reused: 49_073_357 },
-    startedAt: (T - 20) * 1000,
+    // Relative to now: the row shows a live elapsed counter.
+    startedAt: Date.now() - 20_000,
   },
   {
     id: "t2",
