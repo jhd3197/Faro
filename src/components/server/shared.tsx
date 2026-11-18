@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { RefreshCw, Loader2, AlertCircle, KeyRound } from "lucide-react";
+import { RefreshCw, Loader2, AlertCircle, KeyRound, X } from "lucide-react";
 import { ConfirmModal } from "@faro/file-ui";
 import {
   elevateFor,
@@ -109,10 +109,13 @@ export function Notice({
   tone = "info",
   children,
   action,
+  onDismiss,
 }: {
   tone?: "info" | "error";
   children: React.ReactNode;
   action?: React.ReactNode;
+  /** Show a close button (a nudge the user can put away). */
+  onDismiss?: () => void;
 }) {
   return (
     <div
@@ -128,6 +131,17 @@ export function Notice({
       />
       <div className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{children}</div>
       {action}
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          title="Don't show again for this server"
+          aria-label="Dismiss"
+          className="shrink-0 rounded p-0.5 text-text-dim hover:bg-bg-hover hover:text-text"
+        >
+          <X size={12} />
+        </button>
+      )}
     </div>
   );
 }

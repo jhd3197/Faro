@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ArrowUpCircle, X } from "lucide-react";
 import { useCliUpdater } from "@/stores/cliUpdaterStore";
+import { nudgeId, useNudgeDismissed, useNudges } from "@/stores/nudgeStore";
 
 /**
  * Non-blocking prompt for a stale `faro-cli` (Plan 10 Phase 0c/0d). Mounted at
@@ -17,6 +18,9 @@ export function CliUpdatePrompt() {
   const update = useCliUpdater((s) => s.update);
   const setMode = useCliUpdater((s) => s.setMode);
   const dismiss = useCliUpdater((s) => s.dismiss);
+  // "Not now" is remembered for this Faro version: the next release asks again.
+  const versionNudge = status?.appVersion ? nudgeId("cli-update", status.appVersion) : null;
+  const versionDismissed = useNudgeDismissed(versionNudge);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -36,6 +40,7 @@ export function CliUpdatePrompt() {
 
   const show =
     !dismissed &&
+    !versionDismissed &&
     status?.installed === true &&
     status.stale === true &&
     status.mode === "ask";
@@ -64,7 +69,10 @@ export function CliUpdatePrompt() {
         Always update automatically
       </button>
       <button
-        onClick={dismiss}
+        onClick={() => {
+          dismiss();
+          if (versionNudge) useNudges.getState().dismiss(versionNudge);
+        }}
         title="Not now"
         className="shrink-0 rounded-md p-1 text-text-muted hover:bg-bg-hover hover:text-text"
       >
