@@ -65,6 +65,8 @@ export const SETTINGS_ENTRY_POINTS = {
   aboutCliInstall: { section: "cli" },
   keyboardCustomize: { section: "keyboard", focus: SETTINGS_FOCUS.keyboardSearch },
   pairingRemoteControl: { section: "remoteControl", focus: SETTINGS_FOCUS.showPairingCode },
+  themeMenu: { section: "appearance", focus: SETTINGS_FOCUS.themeMode },
+  transferPanel: { section: "transfers", focus: SETTINGS_FOCUS.transferConcurrency },
 } as const satisfies Record<string, SettingsTarget>;
 
 export type SettingsEntryPointId = keyof typeof SETTINGS_ENTRY_POINTS;

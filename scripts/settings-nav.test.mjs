@@ -47,6 +47,8 @@ test("named entry points open a real section, and a focus id when the control is
     aboutCliInstall: { section: "cli" },
     keyboardCustomize: { section: "keyboard", focus: nav.SETTINGS_FOCUS.keyboardSearch },
     pairingRemoteControl: { section: "remoteControl", focus: nav.SETTINGS_FOCUS.showPairingCode },
+    themeMenu: { section: "appearance", focus: nav.SETTINGS_FOCUS.themeMode },
+    transferPanel: { section: "transfers", focus: nav.SETTINGS_FOCUS.transferConcurrency },
   };
   assert.deepEqual(nav.SETTINGS_ENTRY_POINTS, expected);
   for (const [id, target] of Object.entries(expected)) {
@@ -71,6 +73,8 @@ test("each entry point is wired in the UI, and generic settings still opens with
     pairingRemoteControl: "../src/components/ProfileEditor.tsx",
     aboutCliInstall: "../src/components/AboutSettings.tsx",
     keyboardCustomize: "../src/components/KeyboardShortcutsDialog.tsx",
+    themeMenu: "../src/components/TitleBar.tsx",
+    transferPanel: "../src/components/TransferQueue.tsx",
   };
   for (const [id, file] of Object.entries(wired)) {
     const src = read(file);
@@ -86,5 +90,9 @@ test("each entry point is wired in the UI, and generic settings still opens with
   assert.match(commands, /openDialog\("settings"\)/);
   const titleBar = read("../src/components/TitleBar.tsx");
   assert.equal([...titleBar.matchAll(/openDialog\("settings"\)/g)].length, 2);
-  assert.doesNotMatch(titleBar, /openSettings\(/);
+  // The title bar's only section jump is the theme item's named entry point.
+  assert.deepEqual(
+    [...titleBar.matchAll(/openSettings\(([^)]*)\)/g)].map((m) => m[1]),
+    ["SETTINGS_ENTRY_POINTS.themeMenu"],
+  );
 });

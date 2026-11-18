@@ -10,8 +10,12 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Settings2,
 } from "lucide-react";
 import { useTransfers } from "@/stores/transfersStore";
+import { useLayout } from "@/stores/layoutStore";
+import { useSettings } from "@/stores/settingsStore";
+import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import type { Transfer } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { fmtEta, fmtRate } from "@/lib/format";
@@ -38,6 +42,7 @@ export function TransferQueue() {
     retry,
     move,
   } = useTransfers();
+  const concurrency = useSettings((s) => s.transferConcurrency);
 
   useEffect(() => {
     // Listeners first, so a failed initial load can't leave the queue deaf
@@ -86,6 +91,15 @@ export function TransferQueue() {
         )}
         <div className="flex-1" />
         <ThrottleInput value={throttleKbps} onCommit={setThrottle} />
+        <button
+          onClick={() => useLayout.getState().openSettings(SETTINGS_ENTRY_POINTS.transferPanel)}
+          className="rounded p-1 text-text-muted hover:bg-bg-hover hover:text-text"
+          title={`Up to ${concurrency} at once. Change in Settings`}
+          aria-label="Change transfer limits in Settings"
+          data-transfer-settings-link
+        >
+          <Settings2 size={12} />
+        </button>
         <button
           onClick={() => (pausedAll ? resumeAll() : pauseAll())}
           className="rounded p-1 text-text-muted hover:bg-bg-hover hover:text-text"
