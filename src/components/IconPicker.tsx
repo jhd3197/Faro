@@ -9,6 +9,7 @@ import { ChevronDown, Search, X } from "lucide-react";
 import { BrandIcon } from "@/lib/brandIcons";
 import { BRAND_ICONS } from "@/lib/brandIconData";
 import { cn } from "@/lib/cn";
+import { isComposing } from "@faro/file-ui";
 
 const EMOJI_CHOICES: { char: string; label: string }[] = [
   { char: "🚀", label: "rocket" },
@@ -148,7 +149,7 @@ export function IconPicker({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && q) pick(q);
+                  if (e.key === "Enter" && !isComposing(e) && q) pick(q);
                 }}
                 placeholder="Search icons…"
                 className="w-full bg-transparent text-xs outline-none placeholder:text-text-dim"

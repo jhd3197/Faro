@@ -65,6 +65,7 @@ import {
   DEFAULT_FILE_BROWSER_KEYBINDINGS,
   comboFromEvent,
   formatCombo,
+  isComposing,
   type FileBrowserAction,
 } from "../lib/keys";
 import {
@@ -1620,7 +1621,7 @@ export function FilePane({
             value={draftPath}
             onChange={(e) => setDraftPath(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commitPath();
+              if (e.key === "Enter" && !isComposing(e)) commitPath();
               else if (e.key === "Escape") cancelPathEdit();
             }}
             onBlur={commitPath}

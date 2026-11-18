@@ -18,7 +18,7 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { toast } from "@/stores/toastStore";
 import { ConfirmModal } from "./ConfirmModal";
-import { LOCAL_SESSION } from "@faro/file-ui";
+import { LOCAL_SESSION, isComposing } from "@faro/file-ui";
 import type { SessionId } from "@/lib/types";
 import { fmtSize } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -123,7 +123,7 @@ function FindDuplicates() {
             value={path}
             onChange={(e) => setPath(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && path.trim() !== "" && !scanning) void run();
+              if (e.key === "Enter" && !isComposing(e) && path.trim() !== "" && !scanning) void run();
             }}
             disabled={scanning}
             spellCheck={false}

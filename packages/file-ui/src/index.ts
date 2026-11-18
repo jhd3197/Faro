@@ -40,6 +40,7 @@ export {
   comboFromEvent,
   formatCombo,
   isMacPlatform,
+  isComposing,
   type FileBrowserAction,
 } from "./lib/keys";
 export { InlineRename } from "./components/InlineRename";

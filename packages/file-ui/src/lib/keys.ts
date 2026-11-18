@@ -125,3 +125,11 @@ export function isMacPlatform(): boolean {
     (/mac/i.test(navigator.platform) || /mac/i.test(navigator.userAgent))
   );
 }
+
+/** True while an input method (Chinese, Japanese, Korean…) is composing: the
+ *  Enter that picks a candidate must not also submit. keyCode 229 covers the
+ *  WebKit builds that report the confirming keydown after compositionend. */
+export function isComposing(e: { nativeEvent?: KeyboardEvent; isComposing?: boolean; keyCode?: number }): boolean {
+  const n = e.nativeEvent ?? e;
+  return !!n.isComposing || n.keyCode === 229;
+}

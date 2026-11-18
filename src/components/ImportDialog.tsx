@@ -31,6 +31,7 @@ import type {
   Protocol,
 } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { isComposing } from "@faro/file-ui";
 
 interface Props {
   onClose: () => void;
@@ -317,7 +318,7 @@ function ImporterTab({
               setLocked(false);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && path) scan();
+              if (e.key === "Enter" && !isComposing(e) && path) scan();
             }}
             disabled={isRegistry}
             className="w-full rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 font-mono text-[11.5px] outline-none focus:border-accent disabled:opacity-60"

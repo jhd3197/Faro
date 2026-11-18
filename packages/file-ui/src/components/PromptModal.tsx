@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useDialog } from "../hooks/useDialog";
+import { isComposing } from "../lib/keys";
 
 interface Props {
   title: string;
@@ -57,7 +58,7 @@ export function PromptModal({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
+            if (e.key === "Enter" && !isComposing(e)) submit();
             else if (e.key === "Escape") onClose();
           }}
           className="w-full rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"

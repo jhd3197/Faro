@@ -697,6 +697,19 @@ const ZH: Record<string, string> = {
   "Reset tips": "重置提示",
   "Show tips": "显示提示",
   "Show welcome": "显示欢迎页",
+  // Server rail: duplicate, sort, bulk actions, broken profiles
+  Duplicate: "复制",
+  "Sort: A–Z": "排序：A–Z",
+  "Sort: Z–A": "排序：Z–A",
+  "Sort: Custom order": "排序：自定义顺序",
+  "Move to group": "移动到分组",
+  "New connection…": "新建连接…",
+  "Not paired yet": "尚未配对",
+  "No key file chosen": "未选择密钥文件",
+  "Sign-in failed last time": "上次登录失败",
+  "Key file or path not found last time": "上次找不到密钥文件或路径",
+  "Sorted by name": "已按名称排序",
+  "Switch the sort to Custom order to rearrange servers.": "将排序切换为自定义顺序后即可重新排列服务器。",
 };
 
 const ATTRIBUTES = ["title", "aria-label", "placeholder", "alt"];
@@ -708,6 +721,16 @@ function translate(value: string): string {
   if (exact) return value.replace(trimmed, exact);
   const moveTo = normalized.match(/^Move to \"(.+)\"$/);
   if (moveTo) return value.replace(trimmed, `移动到“${moveTo[1]}”`);
+  const bulk = normalized.match(/^(Connect all|Disconnect all|Delete) \((\d+)\)(…?)$/);
+  if (bulk) {
+    const verbs: Record<string, string> = { "Connect all": "全部连接", "Disconnect all": "全部断开", Delete: "删除" };
+    const verb = verbs[bulk[1]];
+    return value.replace(trimmed, `${verb}（${bulk[2]}）${bulk[3]}`);
+  }
+  const duplicated = normalized.match(/^Duplicated as “(.+)”$/);
+  if (duplicated) return value.replace(trimmed, `已复制为“${duplicated[1]}”`);
+  const deleteMany = normalized.match(/^Delete (\d+) connections$/);
+  if (deleteMany) return value.replace(trimmed, `删除 ${deleteMany[1]} 个连接`);
   if (normalized === "Folder Sync — keep folders mirrored to your servers") {
     return value.replace(trimmed, "文件夹同步 — 保持文件夹与服务器镜像同步");
   }

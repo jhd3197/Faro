@@ -66,6 +66,7 @@ import { messageOf } from "@/lib/errors";
 import { ConnectionHelp } from "@/components/ui/ConnectionHelp";
 import { CopyTextButton } from "@/components/ui/CopyText";
 import { toast } from "@/stores/toastStore";
+import { isComposing } from "@faro/file-ui";
 
 interface Props {
   profile: ConnectionProfile | null;
@@ -2301,7 +2302,7 @@ function AgentSection({
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && codeValid && host && !pairing) void doPair();
+                if (e.key === "Enter" && !isComposing(e) && codeValid && host && !pairing) void doPair();
               }}
               placeholder="000000"
               inputMode="numeric"

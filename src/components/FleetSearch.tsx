@@ -20,7 +20,7 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useEditor } from "@/stores/editorStore";
 import { toast } from "@/stores/toastStore";
-import { LOCAL_SESSION } from "@faro/file-ui";
+import { LOCAL_SESSION, isComposing } from "@faro/file-ui";
 import type { SearchHit, SessionId } from "@/lib/types";
 import { fmtSize } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -163,7 +163,7 @@ function FleetSearch() {
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && canRun) void run();
+            if (e.key === "Enter" && !isComposing(e) && canRun) void run();
           }}
           autoFocus
           spellCheck={false}
