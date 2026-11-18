@@ -18,14 +18,32 @@ export const TERMINAL_CHORDS = {
   splitDown: "mod+shift+e", // stacked (horizontal divider)
   zoom: "mod+shift+enter",
   closePane: "mod+shift+w",
+  // Tab strip. mod+shift+t is the theme toggle, so reopen takes mod+alt+t.
+  reopenTab: "mod+alt+t",
+  prevTab: "mod+shift+[",
+  nextTab: "mod+shift+]",
+  lastTab: "mod+9",
 } as const;
 
+/** Command id for "go to terminal tab n" (1–8); tab 9 is `term-tab-last`. */
+export const termTabCommandId = (n: number) => `term-tab-${n}`;
+
 // Override ids (they match the command-registry ids) → their default chord.
-const CHORD_COMMAND_DEFAULTS: Record<string, string> = {
+// Undefined = no default, but a user binding is still kept from the shell.
+const CHORD_COMMAND_DEFAULTS: Record<string, string | undefined> = {
   "term-split-right": TERMINAL_CHORDS.splitRight,
   "term-split-down": TERMINAL_CHORDS.splitDown,
   "term-zoom-pane": TERMINAL_CHORDS.zoom,
   "term-close-pane": TERMINAL_CHORDS.closePane,
+  "term-reopen-tab": TERMINAL_CHORDS.reopenTab,
+  "term-tab-prev": TERMINAL_CHORDS.prevTab,
+  "term-tab-next": TERMINAL_CHORDS.nextTab,
+  "term-tab-last": TERMINAL_CHORDS.lastTab,
+  "term-tab-move-left": undefined,
+  "term-tab-move-right": undefined,
+  ...Object.fromEntries(
+    [1, 2, 3, 4, 5, 6, 7, 8].map((n) => [termTabCommandId(n), `mod+${n}`])
+  ),
 };
 
 /** Raw-event matcher for xterm's `attachCustomKeyEventHandler`: returning false

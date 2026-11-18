@@ -56,6 +56,10 @@ export function comboFromEvent(e: KeyboardEvent): string {
   const code = e.code ?? "";
   if (/^Key[A-Z]$/.test(code) && !/^[a-z]$/.test(k)) k = code.slice(3).toLowerCase();
   else if (/^Digit[0-9]$/.test(code) && !/^[0-9]$/.test(k)) k = code.slice(5);
+  // Shift turns the bracket keys into braces; keep the key's own name so
+  // "mod+shift+[" means the key a user sees on the keycap.
+  else if (code === "BracketLeft" && k === "{") k = "[";
+  else if (code === "BracketRight" && k === "}") k = "]";
   if (k === " ") k = "space";
   if (k === "esc") k = "escape";
   parts.push(k);
