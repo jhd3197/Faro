@@ -67,6 +67,12 @@ import type {
   CfSetupState,
   CfSetupRequest,
   RootRun,
+  CfLoginState,
+  CfLoginRequest,
+  CfLoginPlan,
+  CfLoginApplyResult,
+  CfLoginCa,
+  CfPersonCommand,
   ExportFormat,
   ExportSummary,
   ProfilePreview,
@@ -542,6 +548,19 @@ export const ipc = {
   /** Run a root command on a live SSH session: as root, sudo -n, or sudo with `password`. */
   sshRunAsRoot: (sessionId: string, script: string, password?: string) =>
     invoke<RootRun>("ssh_run_as_root", { sessionId, script, password }),
+  /** Cloudflare login on the server behind an admin's live session. */
+  cfLoginState: (sessionId: string, user: string) => invoke<CfLoginState>("cf_login_state", { sessionId, user }),
+  /** Build a change against the server as it is now; nothing runs. */
+  cfLoginPlan: (sessionId: string, request: CfLoginRequest) =>
+    invoke<CfLoginPlan>("cf_login_plan", { sessionId, request }),
+  /** Run a seen plan; `testProfile` is tried with Cloudflare sign-in after, and a failure restores. */
+  cfLoginApply: (sessionId: string, plan: CfLoginPlan, testProfile: ConnectionProfile | null, password?: string) =>
+    invoke<CfLoginApplyResult>("cf_login_apply", { sessionId, plan, testProfile, password }),
+  /** The root command that adds (or removes) one person on a user's list. */
+  cfLoginPersonCommand: (user: string, person: string, add: boolean) =>
+    invoke<CfPersonCommand>("cf_login_person_command", { user, person, add }),
+  /** The Access application's SSH CA key, through the API when an account is connected. */
+  cfLoginCa: (hostname: string) => invoke<CfLoginCa>("cf_login_ca", { hostname }),
 
   /** Read a `.faro` connections file; an encrypted one needs `passphrase`. */
   importFaroFile: (path: string, passphrase?: string) =>

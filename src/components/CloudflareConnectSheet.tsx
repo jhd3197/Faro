@@ -20,6 +20,7 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { toast } from "@/stores/toastStore";
 import type { ConnectionProfile, HostDecision, HostPromptEvent } from "@/lib/types";
+import { AllowFromRefusal } from "./CloudflareServerLogin";
 
 // Issue #86: a `faro://connect` / `faro://site` link through Cloudflare goes
 // from click to files in one pass. The sheet asks once (a link never connects
@@ -323,6 +324,8 @@ export function CloudflareConnectSheet() {
                   <ExternalLink size={10} className="text-text-dim" />
                 </button>
               </div>
+              {/* You're the admin (another login to this server is saved): fix it here. */}
+              <AllowFromRefusal profile={profile} principal={principal} onAllowed={() => void connect()} />
             </div>
           </div>
         )}

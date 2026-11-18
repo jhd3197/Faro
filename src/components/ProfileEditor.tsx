@@ -54,6 +54,7 @@ import { cn } from "@/lib/cn";
 import { BrandIcon, protocolIcon } from "@/lib/brandIcons";
 import { AccessSignIn, InstallCloudflared } from "./CloudflareSettings";
 import { AccessGuideLink } from "./CloudflareConnectSheet";
+import { ServerLoginSection } from "./CloudflareServerLogin";
 import type { CfSshHostname } from "@/lib/types";
 import { TunnelHealth } from "./CloudflareAccount";
 import { BRAND_ICONS } from "@/lib/brandIconData";
@@ -1320,6 +1321,19 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               />
             )}
               </>
+            )}
+
+            {cfRoute && (
+              <ServerLoginSection
+                target={{
+                  id,
+                  host: host.trim(),
+                  port,
+                  accessHost: (proxyCmd.hostname.trim() || host.trim()).toLowerCase(),
+                }}
+                user={username.trim()}
+                testProfile={buildProfile}
+              />
             )}
           </>
         )}
