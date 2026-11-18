@@ -36,6 +36,8 @@ const CHORD_COMMAND_DEFAULTS: Record<string, string> = {
 export function isTerminalChord(ev: KeyboardEvent): boolean {
   if (ev.type !== "keydown") return false;
   if (!(ev.ctrlKey || ev.metaKey)) return false;
+  // Shortcuts switched off: every key belongs to the shell.
+  if (!useBindings.getState().enabled) return false;
   const combo = keyCombo(ev);
   const overrides = useBindings.getState().overrides;
   for (const [id, def] of Object.entries(CHORD_COMMAND_DEFAULTS)) {

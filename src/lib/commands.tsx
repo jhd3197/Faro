@@ -26,6 +26,7 @@ import {
   Focus,
   PanelRight,
   Activity,
+  PanelLeft,
 } from "lucide-react";
 import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
 import { useConnections } from "@/stores/connectionsStore";
@@ -42,6 +43,8 @@ import { useTerminals } from "@/stores/terminalsStore";
 import { useServerView } from "@/stores/serverViewStore";
 import { TERMINAL_CHORDS } from "@/lib/terminalChords";
 import { SETTINGS_SECTIONS, settingsCommandId } from "@/lib/settingsNav";
+import { COMMAND_COMBOS } from "@/lib/bindingCatalog";
+import { useFocusedItem } from "@/stores/focusStore";
 
 export interface Command {
   id: string;
@@ -51,6 +54,8 @@ export interface Command {
   combo?: string; // canonical, e.g. "mod+t"
   keywords?: string;
   enabled?: boolean; // default true
+  /** Listed in Settings › Keyboard even without a default combo. */
+  bindable?: boolean;
   run: () => void;
 }
 
@@ -86,6 +91,16 @@ export function useCommands(): Command[] {
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const supportsTerminal = activeProfile?.protocol === "sftp";
   const serverViewOpen = useServerView((s) => s.open);
+  const railExpanded = useSettings((s) => s.railExpanded);
+  const setRailExpanded = useSettings((s) => s.setRailExpanded);
+  const focused = useFocusedItem((s) => s.item);
+  const focusedSession = focused?.kind === "file" ? focused.sessionId : null;
+  const sessions = useConnections((s) => s.sessions);
+  const focusedProfileId = sessions.find((x) => x.sessionId === focusedSession)?.profileId;
+  const focusedShell =
+    focused?.kind === "file" &&
+    focused.isDir &&
+    profiles.find((p) => p.id === focusedProfileId)?.protocol === "sftp";
 
   const cmds: Command[] = [
     {
@@ -202,9 +217,33 @@ export function useCommands(): Command[] {
       title: "Toggle Terminal",
       group: "View",
       icon: <TerminalSquare size={14} />,
-      combo: "mod+`",
+      combo: COMMAND_COMBOS["toggle-terminal"],
       enabled: !!activeSessionId && supportsTerminal,
       run: toggleTerminal,
+    },
+    {
+      id: "open-terminal-here",
+      title: "Open Terminal in Focused Folder",
+      group: "View",
+      icon: <TerminalSquare size={14} />,
+      keywords: "terminal shell here cd folder focused",
+      bindable: true,
+      enabled: !!focusedShell,
+      run: () => {
+        if (focused?.kind !== "file" || !focused.isDir) return;
+        useLayout.getState().setTerminalOpen(true);
+        const quoted = "'" + focused.path.replace(/'/g, "'\\''") + "'";
+        useTerminals.getState().openTab(focused.sessionId, `cd ${quoted}\n`);
+      },
+    },
+    {
+      id: "toggle-rail",
+      title: railExpanded ? "Collapse Server Rail" : "Expand Server Rail",
+      group: "View",
+      icon: <PanelLeft size={14} />,
+      combo: COMMAND_COMBOS["toggle-rail"],
+      keywords: "rail sidebar servers collapse expand pin",
+      run: () => setRailExpanded(!railExpanded),
     },
     {
       id: "server-view",
@@ -357,7 +396,7 @@ export function useCommands(): Command[] {
       title: "Reconnect",
       group: "Connection",
       icon: <RefreshCw size={14} />,
-      combo: "mod+shift+r",
+      combo: COMMAND_COMBOS.reconnect,
       run: () => reconnect().catch(() => {}),
     });
   }

@@ -15,6 +15,8 @@ import { ipc } from "@/lib/ipc";
 
 /** faro.db key prefix for a shortcut override. */
 export const SHORTCUT_PREFIX = "shortcut.";
+/** faro.db key of the master "Enable keyboard shortcuts" switch. */
+export const SHORTCUTS_ENABLED_KEY = "keyboard.enabled";
 
 /** An override value of "" means the command is explicitly unbound (no
  *  shortcut); a non-empty string is the replacement combo; an absent id falls
@@ -23,6 +25,10 @@ type Overrides = Record<string, string>;
 
 interface BindingsState {
   overrides: Overrides;
+  /** Master switch. Off = no shortcut fires anywhere and no hints are shown;
+   *  the overrides are kept for when it comes back on. */
+  enabled: boolean;
+  setEnabled: (on: boolean) => void;
   /** Set (or replace) an override. Pass "" to explicitly unbind. */
   setOverride: (id: string, combo: string) => void;
   /** Drop the override so the built-in default applies again. */
@@ -53,6 +59,16 @@ function seedFromInjection(): Overrides {
   return out;
 }
 
+function seedEnabled(): boolean {
+  try {
+    const inj = (globalThis as { __FARO_SETTINGS__?: Record<string, unknown> }).__FARO_SETTINGS__;
+    const v = inj?.[SHORTCUTS_ENABLED_KEY];
+    return typeof v === "boolean" ? v : true;
+  } catch {
+    return true;
+  }
+}
+
 function persistSet(id: string, combo: string) {
   ipc.settingsSet(SHORTCUT_PREFIX + id, JSON.stringify(combo)).catch(() => {
     // no backend (mock) — the in-memory override still applies this session
@@ -65,6 +81,12 @@ function persistDelete(id: string) {
 
 export const useBindings = create<BindingsState>((set, get) => ({
   overrides: seedFromInjection(),
+  enabled: seedEnabled(),
+
+  setEnabled: (on) => {
+    set({ enabled: on });
+    ipc.settingsSet(SHORTCUTS_ENABLED_KEY, JSON.stringify(on)).catch(() => {});
+  },
 
   setOverride: (id, combo) => {
     set((s) => ({ overrides: { ...s.overrides, [id]: combo } }));
@@ -91,7 +113,16 @@ export const useBindings = create<BindingsState>((set, get) => ({
     try {
       const raw = await ipc.settingsGetAll();
       const next: Overrides = {};
+      let enabled = true;
       for (const [k, v] of Object.entries(raw)) {
+        if (k === SHORTCUTS_ENABLED_KEY) {
+          try {
+            enabled = JSON.parse(v) !== false;
+          } catch {
+            // keep the default
+          }
+          continue;
+        }
         if (!k.startsWith(SHORTCUT_PREFIX)) continue;
         try {
           const parsed = JSON.parse(v);
@@ -102,7 +133,7 @@ export const useBindings = create<BindingsState>((set, get) => ({
           // skip a corrupt row
         }
       }
-      set({ overrides: next });
+      set({ overrides: next, enabled });
     } catch {
       // no backend — ignore
     }
