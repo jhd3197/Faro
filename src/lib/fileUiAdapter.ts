@@ -15,6 +15,7 @@ import { useDiff } from "@/stores/diffStore";
 import { useDedupe } from "@/stores/dedupeStore";
 import { useSearch } from "@/stores/searchStore";
 import { useSettings } from "@/stores/settingsStore";
+import { useToasts } from "@/stores/toastStore";
 
 // POSIX single-quote a path so a `cd` survives spaces / shell metacharacters.
 function shQuote(p: string): string {
@@ -144,6 +145,14 @@ export const tauriFileSystem: FileSystemAdapter = {
   // Copy a file/folder next to the original. The Rust side resolves a free
   // name and does the copy server-side (cp over SSH) or on the local disk.
   duplicate: (sessionId, path) => ipc.duplicatePath(sessionId, path),
+
+  // Paste after Copy on the same connection: a local copy or `cp` over SSH.
+  copy: (sessionId, from, to) => ipc.copyPath(sessionId, from, to),
+
+  // Copy / paste / move confirmations and failures go to the toast stack.
+  notify: (message, variant = "success") => {
+    useToasts.getState().push({ variant, title: message, duration: variant === "error" ? 8000 : 3000 });
+  },
 
   // Server-side archive then download. Returns once the transfer is queued; the
   // transfers panel tracks the actual byte download, and the backend removes the

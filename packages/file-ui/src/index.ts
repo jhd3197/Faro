@@ -49,6 +49,21 @@ export { usePathHistory } from "./hooks/usePathHistory";
 export { useDialog } from "./hooks/useDialog";
 export { cn } from "./lib/cn";
 export { fmtSize, fmtMtime, formatMode } from "./lib/format";
+export {
+  baseName,
+  parentOf,
+  joinPath,
+  samePath,
+  isSameOrInside,
+  pasteProblem,
+  uniqueName,
+  renameClash,
+  isCaseOnlyRename,
+  describeKinds,
+  describeItems,
+  exactBytes,
+} from "./lib/fileOps";
+export { getFileClipboard, setFileClipboard, type FileClipboard } from "./lib/fileClipboard";
 
 // Types.
 export {

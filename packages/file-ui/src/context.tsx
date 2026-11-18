@@ -68,6 +68,17 @@ export interface FileSystemAdapter {
    */
   duplicate?(sessionId: SessionId, path: string, kind: FileKind): Promise<void>;
   /**
+   * Optional: copy a file/folder to exactly `to` on the same connection (the
+   * pane picks a free name first). Must refuse rather than overwrite. Omit it
+   * and Paste after Copy only works across panes, as a transfer.
+   */
+  copy?(sessionId: SessionId, from: string, to: string): Promise<void>;
+  /**
+   * Optional: show a short confirmation or failure ("Copied 3 items"). Without
+   * it the pane shows the message in its own status line.
+   */
+  notify?(message: string, variant?: "info" | "success" | "error"): void;
+  /**
    * Optional: archive a remote directory on the server (one `tar`/`zip`
    * command) and download the single resulting file — far cheaper than walking
    * the tree. Omit it and the pane doesn't offer "Download as …". Remote

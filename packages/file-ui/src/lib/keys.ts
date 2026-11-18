@@ -16,7 +16,10 @@ export type FileBrowserAction =
   | "back"
   | "forward"
   | "focusPath"
-  | "focusFilter";
+  | "focusFilter"
+  | "copy"
+  | "cut"
+  | "paste";
 
 /** Canonical default combos, in the same "mod+shift+key" shape the rest of Faro
  *  uses ("mod" = Ctrl on Windows/Linux, Cmd on macOS). */
@@ -33,6 +36,9 @@ export const DEFAULT_FILE_BROWSER_KEYBINDINGS: Record<FileBrowserAction, string>
   forward: "alt+arrowright",
   focusPath: "mod+l",
   focusFilter: "mod+f",
+  copy: "mod+c",
+  cut: "mod+x",
+  paste: "mod+v",
 };
 
 /** Build the canonical combo string for a keydown event. The app's `keyCombo`

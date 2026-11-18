@@ -36,6 +36,9 @@ export const FILE_BROWSER_KEYS: FileBrowserKeySpec[] = [
   { id: "fb.forward", action: "forward", title: "Forward", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.forward },
   { id: "fb.focusPath", action: "focusPath", title: "Edit the folder path", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.focusPath },
   { id: "fb.focusFilter", action: "focusFilter", title: "Filter this folder", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.focusFilter },
+  { id: "fb.copy", action: "copy", title: "Copy selected files", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.copy },
+  { id: "fb.cut", action: "cut", title: "Cut selected files", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.cut },
+  { id: "fb.paste", action: "paste", title: "Paste files here", defaultCombo: DEFAULT_FILE_BROWSER_KEYBINDINGS.paste },
 ];
 
 /** Compute the effective per-action combo map for <FilePane>. An unbound action
