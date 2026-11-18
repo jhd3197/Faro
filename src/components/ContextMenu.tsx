@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { formatCombo, keyCombo } from "@/lib/shortcuts";
+import { useBindings } from "@/stores/bindingsStore";
 
 export interface MenuItem {
   label: string;
@@ -12,7 +14,11 @@ export interface MenuItem {
   separatorAfter?: boolean;
   /** Opens to the side on hover, click or →. */
   submenu?: MenuItem[];
-  /** Its keyboard shortcut, shown dim on the right (e.g. "F2"). */
+  /** Its keyboard shortcut as a canonical combo ("f2", "mod+d"), live from the
+   *  user's bindings. Shown on the right, and pressing it while the menu is
+   *  open runs this item and closes the menu. */
+  combo?: string;
+  /** A display-only hint, for a key the menu shouldn't run itself. */
   hint?: string;
 }
 
@@ -25,6 +31,18 @@ interface Props {
 
 const WIDTH = 220;
 
+// Keys the menu itself uses (activate, move, close) keep their meaning.
+const MENU_KEYS = new Set([
+  "enter", "space", "escape", "tab", "shift+tab",
+  "arrowup", "arrowdown", "arrowleft", "arrowright", "home", "end",
+]);
+
+const MODIFIER_ONLY = new Set(["Control", "Shift", "Alt", "Meta", "OS", "AltGraph"]);
+
+function flatItems(items: MenuItem[]): MenuItem[] {
+  return items.flatMap((it) => (it.submenu ? flatItems(it.submenu) : [it]));
+}
+
 export function ContextMenu({ x, y, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -32,11 +50,16 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     const onAnyClick = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) onClose();
     };
+    // Esc closes only the menu, the innermost layer, never a dialog or a
+    // search box underneath it. Capture phase so it gets there first.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
     };
     window.addEventListener("mousedown", onAnyClick);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     // Move focus into the menu so it's keyboard-operable straight away.
     const raf = requestAnimationFrame(() =>
       ref.current
@@ -46,9 +69,28 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("mousedown", onAnyClick);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [onClose]);
+
+  // A shortcut pressed while the menu is open does what it says and closes the
+  // menu. One the menu doesn't hold (a global command) closes the menu and
+  // carries on to the app.
+  const shortcutsOn = useBindings((s) => s.enabled);
+  const onRootKeyDown = (e: React.KeyboardEvent) => {
+    if (!shortcutsOn || MODIFIER_ONLY.has(e.key)) return;
+    const combo = keyCombo(e.nativeEvent);
+    if (MENU_KEYS.has(combo)) return;
+    const hit = flatItems(items).find((it) => it.combo === combo && !it.disabled && it.onClick);
+    if (hit) {
+      e.preventDefault();
+      e.stopPropagation();
+      hit.onClick!();
+      onClose();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key)) onClose();
+  };
 
   // Clamp to viewport.
   const rows = items.length;
@@ -59,7 +101,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
   const flip = left + WIDTH * 2 > window.innerWidth;
 
   return (
-    <div ref={ref} style={{ left, top }} className="fixed z-menu">
+    <div ref={ref} style={{ left, top }} className="fixed z-menu" onKeyDownCapture={onRootKeyDown}>
       <MenuList items={items} onClose={onClose} flip={flip} />
     </div>
   );
@@ -78,6 +120,11 @@ function MenuList({
 }) {
   const [open, setOpen] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const shortcutsOn = useBindings((s) => s.enabled);
+  const hintOf = (item: MenuItem) =>
+    shortcutsOn ? (item.combo ? formatCombo(item.combo) : item.hint) : undefined;
+  // The shortcut column exists only when some item in this list has one.
+  const hasHints = items.some((it) => hintOf(it));
   const own = () =>
     Array.from(
       listRef.current?.querySelectorAll<HTMLButtonElement>(":scope > div > button:not([disabled])") ?? []
@@ -95,6 +142,9 @@ function MenuList({
     const idx = btns.indexOf(document.activeElement as HTMLButtonElement);
     if (idx < 0) return; // a key inside a submenu; it handles its own
     if (e.key === "ArrowLeft" && sub) return; // the parent closes us
+    // Shortcut chords travel on to the app (the menu has already closed).
+    if (MODIFIER_ONLY.has(e.key)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key)) return;
     e.stopPropagation();
     if (e.key === "ArrowRight") {
       const i = Number(btns[idx].dataset.index);
@@ -149,6 +199,7 @@ function MenuList({
             role="menuitem"
             aria-haspopup={item.submenu ? "menu" : undefined}
             aria-expanded={item.submenu ? open === i : undefined}
+            aria-keyshortcuts={item.combo && shortcutsOn ? item.combo : undefined}
             data-index={i}
             disabled={item.disabled}
             onClick={() => {
@@ -171,7 +222,11 @@ function MenuList({
               </span>
             )}
             <span className="flex-1">{item.label}</span>
-            {item.hint && <span className="pl-4 text-[11px] text-text-dim">{item.hint}</span>}
+            {hasHints && (
+              <span data-menu-hint className="min-w-[3.5rem] pl-4 text-right text-[11px] text-text-dim">
+                {hintOf(item)}
+              </span>
+            )}
             {item.submenu && <ChevronRight size={13} className="text-text-dim" />}
           </button>
           {item.submenu && open === i && (

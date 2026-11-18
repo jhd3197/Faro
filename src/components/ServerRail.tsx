@@ -35,6 +35,7 @@ import {
   Globe,
   Stethoscope,
   MoreHorizontal,
+  TextCursorInput,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
 import { useBridge } from "@/stores/bridgeStore";
@@ -43,7 +44,10 @@ import { useServerView } from "@/stores/serverViewStore";
 import { useSettings } from "@/stores/settingsStore";
 import { ProfileEditor } from "./ProfileEditor";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
-import { formatCombo } from "@/lib/shortcuts";
+import { keyCombo } from "@/lib/shortcuts";
+import { useKeyOf, useKeybinding } from "@/lib/keybindings";
+import { useFocusedItem } from "@/stores/focusStore";
+import { InlineRename } from "@faro/file-ui";
 import { ConfirmModal } from "./ConfirmModal";
 import { Tooltip } from "./ui/Tooltip";
 import { useDialog } from "@/hooks/useDialog";
@@ -207,11 +211,16 @@ export function ServerRail() {
   // the OS keychain too) — the context menu arms this instead of deleting
   // outright, and a ConfirmModal does the rest.
   const [pendingDelete, setPendingDelete] = useState<ConnectionProfile | null>(null);
+  // In-place rename of a server's display name or a group's name (F2).
+  const [renaming, setRenaming] = useState<
+    { kind: "server"; id: string } | { kind: "group"; name: string } | null
+  >(null);
+  const keyOf = useKeyOf();
 
   // Effective expanded state. Open when pinned, while hovering the collapsed
   // rail, while a rail menu / search popover is up (so the flyout doesn't
   // collapse out from under what you're clicking), or mid-drag.
-  const expanded = pinned || hovering || !!menu || siteMenuOpen || searchOpen || !!dragId;
+  const expanded = pinned || hovering || !!menu || siteMenuOpen || searchOpen || !!dragId || !!renaming;
 
   const onRailEnter = () => {
     if (pinned) return;
@@ -258,24 +267,8 @@ export function ServerRail() {
     };
   }, [loadProfiles]);
 
-  // "/" opens the search popover from anywhere (unless already typing).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
-          t.isContentEditable)
-      )
-        return;
-      e.preventDefault();
-      setSearchOpen(true);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  // "/" (remappable) opens the search popover from anywhere unless typing.
+  useKeybinding("rail.search", () => setSearchOpen(true));
 
   const connectedIds = useMemo(
     () => new Set(sessions.map((s) => s.profileId)),
@@ -441,13 +434,13 @@ export function ServerRail() {
     // Global shortcuts act on the active server, so their hint shows only here.
     const active = !!sid && sid === activeSessionId;
     if (!connected) {
-      items.push({ label: "Connect", icon: <Plug size={14} />, hint: "Enter", onClick: () => doConnect(p.id) });
+      items.push({ label: "Connect", icon: <Plug size={14} />, ...keyOf("rail.connect"), onClick: () => doConnect(p.id) });
     }
     if (isSftp) {
       items.push({
         label: connected ? "Open shell" : "Connect & open shell",
         icon: <TerminalSquare size={14} />,
-        hint: active ? formatCombo("mod+`") : undefined,
+        ...(active ? keyOf("toggle-terminal") : {}),
         onClick: () => openShell(p.id),
       });
     }
@@ -476,7 +469,7 @@ export function ServerRail() {
       items.push({
         label: "Reconnect",
         icon: <RefreshCw size={14} />,
-        hint: active ? formatCombo("mod+shift+r") : undefined,
+        ...(active ? keyOf("reconnect") : {}),
         onClick: () => {
           setPendingId(p.id);
           reconnect(sid)
@@ -494,7 +487,8 @@ export function ServerRail() {
 
     // 2. This connection
     items.push(
-      { label: "Edit…", icon: <Pencil size={14} />, hint: "F2", onClick: () => setEditing(p) },
+      { label: "Rename", icon: <TextCursorInput size={14} />, ...keyOf("focus.rename"), onClick: () => setRenaming({ kind: "server", id: p.id }) },
+      { label: "Edit…", icon: <Pencil size={14} />, onClick: () => setEditing(p) },
       {
         label: "Test connection…",
         icon: <Stethoscope size={14} />,
@@ -556,7 +550,7 @@ export function ServerRail() {
     );
 
     const more: MenuItem[] = [
-      { label: "Duplicate…", icon: <Copy size={14} />, hint: formatCombo("mod+d"), onClick: () => duplicateProfile(p) },
+      { label: "Duplicate…", icon: <Copy size={14} />, ...keyOf("rail.duplicate"), onClick: () => duplicateProfile(p) },
     ];
     if (isSftp && !p.jumpProfile && !p.proxyCommand && !p.proxy) {
       more.push({ label: "Move behind Cloudflare…", icon: <Cloud size={14} />, onClick: () => openMoveToCloudflare(p.id) });
@@ -580,7 +574,7 @@ export function ServerRail() {
       { label: "More", icon: <MoreHorizontal size={14} />, submenu: more }
     );
     more[more.length - 1].separatorAfter = true;
-    more.push({ label: "Delete…", icon: <Trash2 size={14} />, hint: "Del", destructive: true, onClick: () => setPendingDelete(p) });
+    more.push({ label: "Delete…", icon: <Trash2 size={14} />, ...keyOf("rail.delete"), destructive: true, onClick: () => setPendingDelete(p) });
     return items;
   };
 
@@ -603,16 +597,43 @@ export function ServerRail() {
     });
   };
 
-  // The menu's shortcuts, on the focused server in the rail.
+  // The menu's shortcuts, on the focused server in the rail. Row-level: they
+  // only fire while that bubble has focus, and follow the user's bindings.
   const onBubbleKeyDown = (e: React.KeyboardEvent, p: ConnectionProfile) => {
-    const mod = e.ctrlKey || e.metaKey;
-    if (e.key === "Enter" && !mod && !connectedIds.has(p.id)) doConnect(p.id);
-    else if (e.key === "F2" && !mod) setEditing(p);
-    else if (e.key === "Delete" && !mod) setPendingDelete(p);
-    else if (mod && !e.shiftKey && e.key.toLowerCase() === "d") duplicateProfile(p);
+    if (e.defaultPrevented) return;
+    const combo = keyCombo(e.nativeEvent);
+    if (combo === keyOf("rail.connect").combo) {
+      if (connectedIds.has(p.id)) return; // Enter on a live server just clicks it
+      doConnect(p.id);
+    } else if (combo === keyOf("focus.rename").combo) setRenaming({ kind: "server", id: p.id });
+    else if (combo === keyOf("rail.delete").combo) setPendingDelete(p);
+    else if (combo === keyOf("rail.duplicate").combo) duplicateProfile(p);
     else return;
     e.preventDefault();
     e.stopPropagation();
+  };
+
+  const renameServer = async (p: ConnectionProfile, name: string) => {
+    if (profiles.some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`A server named “${name}” already exists`);
+    }
+    try {
+      await saveProfile({ ...p, name });
+    } catch (e) {
+      throw new Error(`Couldn't rename ${p.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  const renameGroup = async (from: string, to: string) => {
+    const members = sections.groups.find(([g]) => g === from)?.[1] ?? [];
+    await saveProfiles(members.map((m) => ({ ...m, group: to })));
+    if (collapsedGroups.includes(from)) toggleRailGroup(from);
+  };
+  // Hand focus back to the row that was renamed, so the keyboard carries on.
+  const endRename = (selector: string) => {
+    setRenaming(null);
+    requestAnimationFrame(() =>
+      scrollRef.current?.querySelector<HTMLElement>(`${selector} button`)?.focus()
+    );
   };
 
   // The reconciled click rule: connected → switch; auto-connect → connect;
@@ -653,9 +674,10 @@ export function ServerRail() {
         separatorAfter: true,
       },
       {
-        label: "Rename group…",
-        icon: <Pencil size={14} />,
-        onClick: () => setGroupPrompt({ kind: "rename", from: name }),
+        label: "Rename group",
+        icon: <TextCursorInput size={14} />,
+        ...keyOf("focus.rename"),
+        onClick: () => setRenaming({ kind: "group", name }),
       },
       {
         label: "Ungroup servers",
@@ -745,6 +767,17 @@ export function ServerRail() {
       }}
       onPointerDown={(e) => onPointerDown(e, p.id)}
       onKeyDown={(e) => onBubbleKeyDown(e, p)}
+      onFocus={() => useFocusedItem.getState().setItem({ kind: "server", profileId: p.id })}
+      rename={
+        renaming?.kind === "server" && renaming.id === p.id ? (
+          <InlineRename
+            value={p.name}
+            aria-label={`Rename ${p.name}`}
+            onSubmit={(n) => renameServer(p, n)}
+            onDone={() => endRename(`[data-rail-profile-id="${CSS.escape(p.id)}"]`)}
+          />
+        ) : null
+      }
     />
     <ServerSites profileId={p.id} serverName={p.name} expanded={expanded} onMenuChange={setSiteMenuOpen} />
     </div>
@@ -874,6 +907,23 @@ export function ServerRail() {
                       }
                       onToggle={() => toggleRailGroup(name)}
                       onContextMenu={(e) => groupMenu(e, name)}
+                      onKeyDown={(e) => {
+                        if (e.defaultPrevented) return;
+                        if (keyCombo(e.nativeEvent) !== keyOf("focus.rename").combo) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setRenaming({ kind: "group", name });
+                      }}
+                      rename={
+                        renaming?.kind === "group" && renaming.name === name ? (
+                          <InlineRename
+                            value={name}
+                            aria-label={`Rename group ${name}`}
+                            onSubmit={(n) => renameGroup(name, n)}
+                            onDone={() => endRename(`[data-rail-group="${CSS.escape(name)}"]`)}
+                          />
+                        ) : null
+                      }
                     />
                     {!collapsed && items.map(renderBubble)}
                     {!collapsed && (
@@ -1126,6 +1176,8 @@ function RailBubble({
   onContextMenu,
   onPointerDown,
   onKeyDown,
+  onFocus,
+  rename,
 }: {
   profile: ConnectionProfile;
   state: RowState;
@@ -1140,6 +1192,9 @@ function RailBubble({
   onContextMenu: (e: React.MouseEvent) => void;
   onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
+  onFocus?: () => void;
+  /** The inline rename editor, laid over the name while renaming. */
+  rename?: React.ReactNode;
 }) {
   const focused = state === "focused";
   const connected = state === "focused" || state === "connected";
@@ -1219,6 +1274,7 @@ function RailBubble({
       data-rail-profile-id={p.id}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
+      onFocus={onFocus}
       className={cn(
         "group relative flex w-full touch-none select-none items-center",
         expanded ? "justify-start pr-2" : "justify-center",
@@ -1275,6 +1331,17 @@ function RailBubble({
           </span>
         }
       />
+      {rename && expanded && <RenameOverlay>{rename}</RenameOverlay>}
+    </div>
+  );
+}
+
+// The rename editor sits over the row's name (outside its button, so typing
+// can't click the row). Same row height, so nothing shifts.
+function RenameOverlay({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="absolute inset-y-0 left-[56px] right-2 z-10 flex items-center bg-bg text-[13px]">
+      {children}
     </div>
   );
 }
@@ -1325,6 +1392,8 @@ function RailGroupHeader({
   isDropTarget,
   onToggle,
   onContextMenu,
+  onKeyDown,
+  rename,
 }: {
   name: string;
   count: number;
@@ -1338,6 +1407,8 @@ function RailGroupHeader({
   isDropTarget: boolean;
   onToggle: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
+  rename?: React.ReactNode;
 }) {
   const label = `${name} group, ${count} server${count === 1 ? "" : "s"}`;
   if (collapsed) {
@@ -1369,11 +1440,13 @@ function RailGroupHeader({
     return (
       <div
         data-rail-group={name}
+        onKeyDown={onKeyDown}
         className={cn(
           "group relative flex w-full items-center",
           expanded ? "justify-start pr-2" : "justify-center"
         )}
       >
+        {rename && expanded && <RenameOverlay>{rename}</RenameOverlay>}
         <RailRow
           expanded={expanded}
           onClick={onToggle}
@@ -1434,11 +1507,17 @@ function RailGroupHeader({
   return (
     <div
       data-rail-group={name}
+      onKeyDown={onKeyDown}
       className={cn(
-        "mt-1.5 flex w-full items-center",
+        "relative mt-1.5 flex w-full items-center",
         expanded ? "justify-start px-1" : "justify-center"
       )}
     >
+      {rename && expanded && (
+        <div className="absolute inset-y-0 left-1 right-1 z-10 flex items-center bg-bg-panel text-[11px]">
+          {rename}
+        </div>
+      )}
       {expanded ? (
         btn
       ) : (
@@ -1645,7 +1724,17 @@ function RailSearch({
 
   useEffect(() => {
     inputRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Esc peels one layer: the typed query first, then the popover.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (inputRef.current && inputRef.current.value) {
+        e.preventDefault();
+        setQuery("");
+        inputRef.current.focus();
+        return;
+      }
+      onClose();
+    };
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (!wrapRef.current?.contains(t) && !toggleRef.current?.contains(t))

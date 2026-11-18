@@ -8,6 +8,9 @@ import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/cn";
 import { SiteDialog } from "./SiteDialog";
 import { ContextMenu } from "./ContextMenu";
+import { InlineRename } from "@faro/file-ui";
+import { useKeyOf } from "@/lib/keybindings";
+import { keyCombo } from "@/lib/shortcuts";
 
 let navigation = 0;
 /** A parent/local click cancels any pending site navigation. */
@@ -27,6 +30,9 @@ export function ServerSites({ profileId, serverName, expanded, onMenuChange }: {
   const [collapsed, setCollapsed] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [editing, setEditing] = useState<SiteShortcut | null>(null);
+  // The site being renamed in place (F2 on a focused site).
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const keyOf = useKeyOf();
   const [menu, setMenu] = useState<{ x: number; y: number; site: SiteShortcut } | null>(null);
   const closeMenu = () => { setMenu(null); onMenuChange(false); };
   const openSite = async (site: SiteShortcut, home = false) => {
@@ -64,13 +70,26 @@ export function ServerSites({ profileId, serverName, expanded, onMenuChange }: {
       {!collapsed && sites.map(site => {
         const active = !browseLocal && activeProfileId === profileId && activeSiteId === site.id;
         return <div key={site.id} className={cn("group/site flex min-w-0 items-center rounded-md", active ? "bg-accent-soft text-accent" : "text-text-muted hover:bg-bg-hover hover:text-text")}>
-          <button aria-label={`Open site ${site.name}`} aria-current={active ? "page" : undefined}
+          {renaming === site.id ? <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2">
+            <Folder size={13} className="shrink-0" />
+            <span className="block min-w-0 flex-1 text-xs font-medium"><InlineRename value={site.name} aria-label={`Rename site ${site.name}`}
+              onSubmit={n => useSites.getState().save({ ...site, name: n })}
+              onDone={() => {
+                setRenaming(null);
+                requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-site-id="${CSS.escape(site.id)}"]`)?.focus());
+              }} /></span>
+          </div> : <button aria-label={`Open site ${site.name}`} aria-current={active ? "page" : undefined} data-site-id={site.id}
             title={`${site.name}\n${site.path}`} onClick={() => void openSite(site)} onContextMenu={e => showMenu(e, site)}
+            onKeyDown={e => {
+              if (e.defaultPrevented || keyCombo(e.nativeEvent) !== keyOf("focus.rename").combo) return;
+              e.preventDefault();
+              setRenaming(site.id);
+            }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left focus-visible:outline focus-visible:outline-accent">
             <Folder size={13} className="shrink-0" />
             <span className="min-w-0"><span className="block truncate text-xs font-medium">{site.name}</span>
               <span className="mt-0.5 block truncate font-mono text-[10px] opacity-60">{opening === site.id ? "Connecting…" : site.path}</span></span>
-          </button>
+          </button>}
           <button aria-label={`Options for ${site.name}`} onClick={e => showMenu(e, site)}
             className="mr-1 rounded p-1 text-text-dim opacity-0 hover:bg-bg-hover hover:text-text focus:opacity-100 group-hover/site:opacity-100"><MoreHorizontal size={14} /></button>
         </div>;

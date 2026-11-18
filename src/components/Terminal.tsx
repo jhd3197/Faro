@@ -27,6 +27,9 @@ import {
   type SplitDir,
 } from "@/stores/terminalsStore";
 import { openTerminalWindow, popoutBufferKey } from "@/lib/popout";
+import { InlineRename } from "@faro/file-ui";
+import { useKeyOf } from "@/lib/keybindings";
+import { keyCombo } from "@/lib/shortcuts";
 import { toast } from "@/stores/toastStore";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { cn } from "@/lib/cn";
@@ -287,7 +290,7 @@ function TabChip({
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(tab.title);
+  const keyOf = useKeyOf();
 
   if (editing) {
     return (
@@ -298,25 +301,14 @@ function TabChip({
         )}
       >
         <TerminalSquare size={11} className="text-text-muted" />
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => {
-            onRename(draft.trim() || tab.title);
-            setEditing(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              onRename(draft.trim() || tab.title);
-              setEditing(false);
-            } else if (e.key === "Escape") {
-              setDraft(tab.title);
-              setEditing(false);
-            }
-          }}
-          className="w-20 bg-transparent text-[11px] outline-none"
-        />
+        <span className="flex w-24 text-[11px]">
+          <InlineRename
+            value={tab.title}
+            aria-label={`Rename tab ${tab.title}`}
+            onSubmit={onRename}
+            onDone={() => setEditing(false)}
+          />
+        </span>
       </div>
     );
   }
@@ -324,12 +316,14 @@ function TabChip({
   return (
     <button
       onClick={onClick}
-      onDoubleClick={() => {
-        setDraft(tab.title);
+      onDoubleClick={() => setEditing(true)}
+      onKeyDown={(e) => {
+        if (e.defaultPrevented || keyCombo(e.nativeEvent) !== keyOf("focus.rename").combo) return;
+        e.preventDefault();
         setEditing(true);
       }}
       onContextMenu={onContextMenu}
-      title={`${tab.title} — double-click to rename`}
+      title={`${tab.title} — double-click or ${keyOf("focus.rename").hint ?? "F2"} to rename`}
       className={cn(
         "group/tab flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors",
         active
