@@ -86,7 +86,7 @@ impl EditManager {
         std::fs::create_dir_all(&base).context("create temp dir for edit")?;
 
         let name = remote_path
-            .rsplit(|c| c == '/' || c == '\\')
+            .rsplit(['/', '\\'])
             .next()
             .filter(|s| crate::transfer::is_plain_local_name(s))
             .unwrap_or("file");

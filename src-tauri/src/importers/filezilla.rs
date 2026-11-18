@@ -9,7 +9,7 @@ use std::path::PathBuf;
 ///   - Windows: %APPDATA%\FileZilla\sitemanager.xml
 ///   - macOS:   ~/Library/Application Support/FileZilla/sitemanager.xml
 ///   - Linux:   ~/.config/filezilla/sitemanager.xml (or ~/.filezilla/ on
-///              older installs — we check both)
+///     older installs — we check both)
 pub fn default_path() -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
         if let Some(appdata) = std::env::var_os("APPDATA") {

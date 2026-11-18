@@ -2028,12 +2028,12 @@ async fn keyboard_interactive_auth(
                     })
                     .collect();
 
-                let answers = if stored_password.is_some()
-                    && !auto_password_used
-                    && is_initial_password_request(&fields)
-                {
+                let auto_password = stored_password
+                    .as_ref()
+                    .filter(|_| !auto_password_used && is_initial_password_request(&fields));
+                let answers = if let Some(password) = auto_password {
                     auto_password_used = true;
-                    vec![stored_password.unwrap().to_string()]
+                    vec![password.to_string()]
                 } else if fields.is_empty() {
                     // Some servers send an empty info request (just a banner).
                     Vec::new()
@@ -2135,6 +2135,12 @@ pub struct SessionManager {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     pub prompts: Arc<HostPromptRegistry>,
     pub auth_prompts: Arc<AuthPromptRegistry>,
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionManager {

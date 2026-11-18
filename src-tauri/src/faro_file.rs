@@ -204,7 +204,7 @@ pub fn needs(p: &ConnectionProfile, has_key_material: bool) -> Vec<String> {
     let token = p.proxy_command.as_ref().filter(|c| c.kind == ProxyCommandKind::Cloudflare);
     if token.is_some_and(|c| {
         c.service_token_id.as_deref().is_some_and(|id| !id.is_empty())
-            && c.service_token_secret.as_deref().map_or(true, str::is_empty)
+            && c.service_token_secret.as_deref().is_none_or(str::is_empty)
     }) {
         out.push("token secret".into());
     }

@@ -334,14 +334,14 @@ enum RetryInfo {
     },
     /// Unit tests drive the runner with a fake copy loop.
     #[cfg(test)]
-    Test(
-        Arc<
-            dyn Fn(Arc<TransferManager>, String) -> futures::future::BoxFuture<'static, Result<u64>>
-                + Send
-                + Sync,
-        >,
-    ),
+    Test(TestCopy),
 }
+
+/// The fake copy loop unit tests hand the runner.
+#[cfg(test)]
+type TestCopy = Arc<
+    dyn Fn(Arc<TransferManager>, String) -> futures::future::BoxFuture<'static, Result<u64>> + Send + Sync,
+>;
 
 /// Default bound on concurrently running transfers (Plan 17); the rest wait
 /// in the FIFO as `Queued`. Overridden by the `transferConcurrency` setting.
@@ -491,6 +491,9 @@ impl ranged::Ctl for TransferCtl {
         self.live.add(bytes);
     }
 
+    // `fetch_update` is deprecated in favour of `try_update` on newer
+    // toolchains, which older ones don't have yet.
+    #[allow(deprecated)]
     fn rewound(&self, bytes: u64) {
         let _ = self
             .live
@@ -559,7 +562,7 @@ async fn sftp_replace_with_part(
 }
 
 fn basename(path: &str) -> String {
-    path.trim_end_matches(['/', '\\']).rsplit(|c| c == '/' || c == '\\')
+    path.trim_end_matches(['/', '\\']).rsplit(['/', '\\'])
         .next()
         .unwrap_or(path)
         .to_string()

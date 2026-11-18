@@ -162,9 +162,9 @@ impl AzureNamespace {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown")
             .to_string();
-        Ok(response
+        response
             .error_for_status()
-            .with_context(|| format!("Azure namespace response ({code})"))?)
+            .with_context(|| format!("Azure namespace response ({code})"))
     }
 
     pub async fn list(&self, prefix: &str, delimiter: bool) -> Result<Listing> {

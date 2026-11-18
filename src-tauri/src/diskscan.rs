@@ -274,7 +274,7 @@ async fn run_scan(
             emit_progress(&info, &app);
             match scan_shell_ssh(ssh, &root, &info, &app).await {
                 Ok(t) => Ok(t),
-                Err(e) => fallback_walk(&info, &fs, &root, &app, &e).await,
+                Err(e) => fallback_walk(&info, fs.as_ref(), &root, &app, &e).await,
             }
         }
         // Faro Agent: same idea, gated by the daemon's allowExec policy.
@@ -283,11 +283,11 @@ async fn run_scan(
             emit_progress(&info, &app);
             match scan_shell_agent(agent, &root, &info, &app).await {
                 Ok(t) => Ok(t),
-                Err(e) => fallback_walk(&info, &fs, &root, &app, &e).await,
+                Err(e) => fallback_walk(&info, fs.as_ref(), &root, &app, &e).await,
             }
         }
         // Local FS, FTP, or no shell: the generic walk is the only option.
-        _ => generic_walk(&info, &fs, &root, &app).await,
+        _ => generic_walk(&info, fs.as_ref(), &root, &app).await,
     };
 
     // Cancellation wins even if a strategy returned a partial Ok tree.
@@ -328,7 +328,7 @@ fn emit_progress(info: &ScanInfo, app: &AppHandle) {
 /// The generic bounded-concurrency `RemoteFs` walk, streaming progress counts.
 async fn generic_walk(
     info: &Arc<ScanInfo>,
-    fs: &Box<dyn RemoteFs>,
+    fs: &dyn RemoteFs,
     root: &str,
     app: &AppHandle,
 ) -> Result<scan::ScanTree, anyhow::Error> {
@@ -345,13 +345,13 @@ async fn generic_walk(
             last_emit = Instant::now();
         }
     };
-    scan::walk(fs.as_ref(), root, &opts, on_progress).await
+    scan::walk(fs, root, &opts, on_progress).await
 }
 
 /// Reset to the generic walk after a fast path failed, recording why.
 async fn fallback_walk(
     info: &Arc<ScanInfo>,
-    fs: &Box<dyn RemoteFs>,
+    fs: &dyn RemoteFs,
     root: &str,
     app: &AppHandle,
     reason: &anyhow::Error,
@@ -561,7 +561,7 @@ fn basename(path: &str) -> String {
         return "/".to_string();
     }
     trimmed
-        .rsplit(|c| c == '/' || c == '\\')
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or(trimmed)
         .to_string()

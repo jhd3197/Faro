@@ -117,7 +117,7 @@ impl StreamManager {
                         let Some(msg) = msg else { break };
                         match msg {
                             ChannelMsg::Data { ref data } => lines.push(data, &mut on_line),
-                            ChannelMsg::ExtendedData { ref data, ext } if ext == 1 => err.push(data),
+                            ChannelMsg::ExtendedData { ref data, ext: 1 } => err.push(data),
                             ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status as i32),
                             ChannelMsg::Eof => saw_eof = true,
                             ChannelMsg::Close => break,

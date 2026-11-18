@@ -563,7 +563,7 @@ pub fn all_secret_purposes(profile_id: &str) -> [String; 2] {
 fn secret_is_empty(auth: &AuthMethod) -> bool {
     match auth {
         AuthMethod::Password { password } => password.is_empty(),
-        AuthMethod::Key { passphrase, .. } => passphrase.as_deref().map_or(true, str::is_empty),
+        AuthMethod::Key { passphrase, .. } => passphrase.as_deref().is_none_or(str::is_empty),
         _ => true,
     }
 }
@@ -704,11 +704,11 @@ mod tests {
         let mut p = profile(serde_json::json!({"kind": "agent"}));
         store.upsert(p.clone()).await.unwrap();
         let after = Organization { id: p.id.clone(), group: Some("Production".into()), sort_order: Some(1) };
-        let before = store.organize(&[after.clone()], None).await.unwrap();
+        let before = store.organize(std::slice::from_ref(&after), None).await.unwrap();
         p.group = after.group.clone(); p.sort_order = after.sort_order;
         p.notes = Some("Updated runbook".into());
         store.upsert(p.clone()).await.unwrap();
-        store.organize(&before, Some(&[after.clone()])).await.unwrap();
+        store.organize(&before, Some(std::slice::from_ref(&after))).await.unwrap();
         let restored = store.get(&p.id).await.unwrap().unwrap();
         assert_eq!(restored.notes.as_deref(), Some("Updated runbook"));
         assert_eq!(restored.group, None);

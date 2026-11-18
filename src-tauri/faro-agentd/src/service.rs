@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "com.juandenis.faro-agentd";
+#[cfg(target_os = "windows")]
 const TASK_NAME: &str = "FaroAgent";
 
 /// Absolute path to the running executable, for the service definition.

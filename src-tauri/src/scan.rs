@@ -199,6 +199,6 @@ async fn walk_filtered<F: FnMut(ScanProgress)>(
 pub fn relative_of(root: &str, full: &str) -> String {
     let stripped = full.strip_prefix(root).unwrap_or(full);
     stripped
-        .trim_start_matches(|c| c == '/' || c == '\\')
+        .trim_start_matches(['/', '\\'])
         .replace('\\', "/")
 }

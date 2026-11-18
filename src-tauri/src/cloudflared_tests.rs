@@ -183,8 +183,10 @@ async fn fake_github(bytes: Vec<u8>, digest: Option<Option<String>>, body: &str)
 }
 
 // Routes are filled after the server knows its own address.
-fn route_table() -> &'static StdMutex<HashMap<String, HashMap<String, Vec<u8>>>> {
-    static T: OnceLock<StdMutex<HashMap<String, HashMap<String, Vec<u8>>>>> = OnceLock::new();
+type Routes = StdMutex<HashMap<String, HashMap<String, Vec<u8>>>>;
+
+fn route_table() -> &'static Routes {
+    static T: OnceLock<Routes> = OnceLock::new();
     T.get_or_init(Default::default)
 }
 
@@ -423,7 +425,8 @@ async fn a_connect_that_needed_a_sign_in_says_who_is_signed_in() {
 /// sign-in back and the same operation resumes, instead of failing.
 #[tokio::test]
 async fn expiry_mid_session_pauses_for_sign_in_and_resumes() {
-    static NOTICES: OnceLock<StdMutex<Vec<(String, Option<String>)>>> = OnceLock::new();
+    type Notices = StdMutex<Vec<(String, Option<String>)>>;
+    static NOTICES: OnceLock<Notices> = OnceLock::new();
     let notices = NOTICES.get_or_init(Default::default);
     crate::proxy_command::set_notice_hook(|m, u| {
         if let Some(n) = NOTICES.get() {
@@ -473,6 +476,8 @@ fn unreachable_hosts_say_so() {
 /// (`ssh_cert::tests::CLOUDFLARED_DIR`) is one global.
 static SSHGEN_LOCK: StdMutex<()> = StdMutex::new(());
 
+/// Held across awaits on purpose: it serializes the tests that share the
+/// fake `cloudflared` state, each on its own runtime.
 fn sshgen_lock() -> std::sync::MutexGuard<'static, ()> {
     SSHGEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -495,6 +500,7 @@ fn sshgen_clear(host: &str) {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // see sshgen_lock
 async fn ssh_gen_signs_in_then_hands_over_a_fresh_pair() {
     let host = "cert.faro.test";
     sshgen_clear(host);
@@ -564,6 +570,7 @@ fn certificate_login_needs_the_access_route_and_a_person() {
 /// takes no certificates, so this ends at the refusal, which must name the
 /// principal Cloudflare issued and the user the server refused.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // see sshgen_lock
 async fn a_refused_cloudflare_certificate_names_principal_and_user() {
     let host = "refused.faro.test";
     sshgen_clear(host);
@@ -724,6 +731,7 @@ async fn live_cert_key_file_with_certificate() {
 /// mismatch.
 #[tokio::test]
 #[ignore = "needs scripts/cert-lab.yml"]
+#[allow(clippy::await_holding_lock)] // see sshgen_lock
 async fn live_cert_cloudflare_short_lived_certificate() {
     let lab = cert_lab();
     let host = "lab.faro.test";

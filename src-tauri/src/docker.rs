@@ -342,11 +342,11 @@ pub struct ContainerDetail {
 }
 
 fn text(v: &Value, path: &[&str]) -> String {
-    path.iter().fold(Some(v), |v, k| v?.get(k)).and_then(Value::as_str).unwrap_or("").to_string()
+    path.iter().try_fold(v, |v, k| v.get(k)).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
 fn int(v: &Value, path: &[&str]) -> i64 {
-    path.iter().fold(Some(v), |v, k| v?.get(k)).and_then(Value::as_i64).unwrap_or(0)
+    path.iter().try_fold(v, |v, k| v.get(k)).and_then(Value::as_i64).unwrap_or(0)
 }
 
 /// `docker inspect <container>` prints a one-element JSON array.

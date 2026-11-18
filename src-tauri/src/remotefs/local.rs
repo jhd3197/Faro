@@ -1,5 +1,5 @@
 use super::{Capabilities, ChangeSignal, DirEntry, FileKind, RemoteFs};
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use async_trait::async_trait;
 use std::path::Path;
 
@@ -113,7 +113,7 @@ impl RemoteFs for LocalFs {
         #[cfg(not(unix))]
         {
             let _ = (path, mode);
-            Err(anyhow!("chmod is not supported on this platform"))
+            Err(anyhow::anyhow!("chmod is not supported on this platform"))
         }
     }
 

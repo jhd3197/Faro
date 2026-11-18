@@ -175,7 +175,7 @@ fn parse_proxy_jump(value: &str) -> Option<Via> {
     if value.eq_ignore_ascii_case("none") {
         return None;
     }
-    let last = value.split(',').map(str::trim).filter(|h| !h.is_empty()).last()?;
+    let last = value.split(',').map(str::trim).rfind(|h| !h.is_empty())?;
     parse_hop(last.strip_prefix("ssh://").unwrap_or(last)).map(Via::Jump)
 }
 
@@ -286,7 +286,7 @@ fn translate_proxy_command(value: &str) -> Option<Via> {
             (_, Some(addr)) => proxy(ProxyKind::Http, addr, 3128),
             _ => None,
         },
-        "ssh" if args.iter().any(|a| *a == "-W") => {
+        "ssh" if args.contains(&"-W") => {
             // The bastion is the one positional argument that isn't -W's value.
             let mut skip = false;
             let mut user = None;

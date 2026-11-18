@@ -45,6 +45,9 @@ pub struct PairingWindow {
     pub expires_at: Instant,
 }
 
+/// Called with `(name, public_key_b64)` when a controller is pinned.
+type PairedHook = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 /// Shared daemon state handed to each connection.
 #[derive(Clone)]
 pub struct Daemon {
@@ -58,7 +61,7 @@ pub struct Daemon {
     /// connection so a job started on one channel is pollable after a re-dial.
     jobs: Arc<JobStore>,
     /// Invoked the moment a controller is pinned: `(name, public_key_b64)`.
-    on_paired: Arc<dyn Fn(&str, &str) + Send + Sync>,
+    on_paired: PairedHook,
     /// Pairing handshakes run one at a time, so the failure cap counts every
     /// guess (parallel attempts can't race past it).
     pairing_gate: Arc<Mutex<u32>>,

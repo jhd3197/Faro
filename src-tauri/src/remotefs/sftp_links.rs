@@ -126,11 +126,11 @@ AllowUsers {user}
     let stderr = child.stderr.take().unwrap();
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
-            if let Ok(line) = line {
-                let mut buf = log_for_reader.lock().unwrap();
-                buf.push_str(&line);
-                buf.push('\n');
-            }
+            // Skip an undecodable line but keep reading the rest.
+            let Ok(line) = line else { continue };
+            let mut buf = log_for_reader.lock().unwrap();
+            buf.push_str(&line);
+            buf.push('\n');
         }
     });
 

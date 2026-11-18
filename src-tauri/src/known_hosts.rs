@@ -150,8 +150,7 @@ fn fingerprint_b64(stored_b64: &str) -> String {
 
 fn base64_no_pad(bytes: &[u8]) -> String {
     use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes);
-    b64
+    base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes)
 }
 
 /// The host-field spellings that mean `host:port`, as OpenSSH reads them: a
