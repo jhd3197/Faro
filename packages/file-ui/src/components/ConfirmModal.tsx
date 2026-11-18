@@ -1,9 +1,9 @@
-import { useId, useRef } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { useDialog } from "../hooks/useDialog";
 
 interface Props {
-  title: string;
-  message: string;
+  title: ReactNode;
+  message: ReactNode;
   confirmLabel?: string;
   destructive?: boolean;
   onClose: () => void;

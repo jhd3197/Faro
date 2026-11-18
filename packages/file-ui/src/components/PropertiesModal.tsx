@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { DirEntry, Ownership, SessionId } from "../types";
 import { fmtSize, fmtMtime, formatMode } from "../lib/format";
+import { exactBytes } from "../lib/fileOps";
 import { useDialog } from "../hooks/useDialog";
 import { useFileUi } from "../context";
 
@@ -88,10 +89,10 @@ export function PropertiesModal({ entry, sessionId, canChangeOwner, onOwnerChang
     rows.push({
       label: "Size",
       value: (
-        <span>
+        <span title={exactBytes(entry.size)}>
           {fmtSize(entry.size)}
           <span className="ml-1.5 text-text-dim">
-            ({entry.size.toLocaleString()} bytes)
+            ({exactBytes(entry.size)})
           </span>
         </span>
       ),

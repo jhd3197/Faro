@@ -337,14 +337,15 @@ function DiskUsage() {
       )}
       {confirmDel && (
         <ConfirmModal
-          title={`Delete ${confirmDel.name}?`}
+          title={`Delete this ${confirmDel.kind === "directory" ? "folder" : "file"}?`}
           message={
-            `Path: ${confirmDel.path}` +
-            (confirmDel.kind === "directory"
-              ? `\nThis folder and everything under it (${fmtSize(
-                  confirmDel.size
-                )}) will be permanently removed.`
-              : `\n${fmtSize(confirmDel.size)} will be permanently removed.`)
+            <span>
+              <strong className="font-semibold text-text [overflow-wrap:anywhere]">{confirmDel.name}</strong>
+              {confirmDel.kind === "directory"
+                ? ` and everything in it (${fmtSize(confirmDel.size)}) will be permanently deleted.`
+                : ` (${fmtSize(confirmDel.size)}) will be permanently deleted.`}
+              <span className="mt-1 block font-mono text-xs text-text-dim [overflow-wrap:anywhere]">{confirmDel.path}</span>
+            </span>
           }
           destructive
           confirmLabel="Delete"
