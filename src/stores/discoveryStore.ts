@@ -4,6 +4,7 @@ import { ipc } from "@/lib/ipc";
 import { releaseChanges } from "@/lib/releaseNotes";
 import type { ConnectionProfile, ImporterKind, ProfilePreview } from "@/lib/types";
 import { useLayout } from "./layoutStore";
+import { SESSION_SNAPSHOT_KEY, startupSettled } from "./sessionStore";
 
 export interface ReleaseNotes { version: string; notes: string | null }
 /** Connections another client on this machine already has, not yet in Faro. */
@@ -26,6 +27,40 @@ function cachedNotes(version: string): ReleaseNotes | null {
     if (saved?.version === version && typeof saved.notes === "string") return saved;
   } catch { /* An incomplete cache entry; fetch on demand instead. */ }
   return null;
+}
+
+/** What startup shows: the welcome (a genuinely new install), What's New (a
+ *  minor/major update), the quiet "Updated" pill (a patch, or an upgrade
+ *  from a build that kept no record), or nothing. */
+export type DiscoveryPlan = "welcome" | "whatsNew" | "notice" | "quiet" | "none";
+
+export function planDiscovery({ seen, version, profileCount, priorLaunch }: {
+  /** The version last acknowledged, or null when none was ever recorded. */
+  seen: string | null;
+  version: string;
+  /** Saved connections; null when they couldn't be read. */
+  profileCount: number | null;
+  /** Any trace of an earlier launch (session snapshot, tips record…). */
+  priorLaunch: boolean;
+}): DiscoveryPlan {
+  if (seen === version) return "none";
+  if (!seen) {
+    if (profileCount === null) return "quiet";
+    return profileCount === 0 && !priorLaunch ? "welcome" : "notice";
+  }
+  const before = semver(seen), now = semver(version);
+  if (!before || !now || before.join(".") === now.join(".")
+    || before[0] > now[0] || (before[0] === now[0] && (before[1] > now[1] || (before[1] === now[1] && before[2] > now[2])))) {
+    // A downgrade or an unreadable record: nothing new to announce.
+    return "quiet";
+  }
+  return before[0] !== now[0] || before[1] !== now[1] ? "whatsNew" : "notice";
+}
+
+/** Rows only an earlier launch writes: a saved session or the tips record. */
+const LAUNCH_TRACES = [SESSION_SNAPSHOT_KEY, "discoveryTipsSeen"];
+function priorLaunch(settings: Record<string, string>): boolean {
+  return LAUNCH_TRACES.some(k => settings[k] !== undefined);
 }
 
 const key = (host: string, port: number, user: string) => `${host.toLowerCase()}\0${port}\0${user}`;
@@ -57,34 +92,32 @@ export const useDiscovery = create<{
       set({ version });
       const seen = settings[SEEN_KEY];
       if (seen === version) return;
-      const layout = useLayout.getState();
-      if (!seen) {
-        // Builds before the walkthrough never recorded a version, so a missing
-        // key alone doesn't mean a new user: saved connections say otherwise.
-        const profiles = await ipc.listProfiles().catch(() => [] as ConnectionProfile[]);
-        if (profiles.length === 0) {
-          // Never replace a deep-link or a dialog the user has already opened.
-          if (!layout.dialog) layout.openDialog("welcome");
-        } else {
-          set({ since: null, updateNotice: true });
-        }
-        return;
-      }
-      const before = semver(seen), now = semver(version);
-      if (!before || !now || before.join(".") === now.join(".")
-        || before[0] > now[0] || (before[0] === now[0] && (before[1] > now[1] || (before[1] === now[1] && before[2] > now[2])))) {
-        // A downgrade or an unreadable record: nothing new to announce.
+      // Builds before the walkthrough never recorded a version, so a missing
+      // key alone doesn't mean a new user: saved connections or any trace of
+      // an earlier launch say otherwise. Unreadable profiles count as "not new".
+      const profileCount = seen ? 0 : await ipc.listProfiles().then(p => p.length, () => null);
+      const plan = planDiscovery({ seen: seen ?? null, version, profileCount, priorLaunch: priorLaunch(settings) });
+      if (plan === "welcome") {
+        // Record the version first: a welcome that fails to render, or a
+        // window closed over it, must never bring it back next launch. It
+        // also keeps a brand-new user from getting What's New for this build.
         get().acknowledge();
+        // Never replace a deep-link or a dialog the user has already opened.
+        if (!useLayout.getState().dialog) useLayout.getState().openDialog("welcome");
         return;
       }
-      set({ since: seen, updateNotice: true });
+      if (plan === "quiet") { get().acknowledge(); return; }
+      set({ since: seen ?? null, updateNotice: true });
+      if (plan !== "whatsNew") return;
       // Patch releases ship several times a week: they get the quiet pill. A
-      // minor or major release with a real summary opens the notes once.
-      if (before[0] !== now[0] || before[1] !== now[1]) {
-        await get().loadReleases();
-        if (get().releases?.some(r => releaseChanges(r.notes)) && !useLayout.getState().dialog) {
-          useLayout.getState().openDialog("whatsNew");
-        }
+      // minor or major release with a real summary opens the notes once —
+      // after the startup restore and auto-connects settle, so a reconnecting
+      // server doesn't pull focus from (or land on top of) the notes.
+      await get().loadReleases();
+      if (!get().releases?.some(r => releaseChanges(r.notes))) return;
+      await startupSettled();
+      if (get().updateNotice && !useLayout.getState().dialog) {
+        useLayout.getState().openDialog("whatsNew");
       }
     } catch { /* Help remains available when startup settings cannot be read. */ }
   })(),

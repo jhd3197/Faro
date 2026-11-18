@@ -164,6 +164,19 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 }));
 
+/** Resolves once the startup restore has finished and startup connections
+ *  (the restored server, auto-connects) have landed — so a dialog opened
+ *  after it isn't covered or robbed of focus by a session that is still
+ *  arriving. Gives up waiting after `timeoutMs`. */
+export function startupSettled(timeoutMs = 30_000): Promise<void> {
+  const restored = new Promise<void>(resolve => {
+    if (useSession.getState().restored) return resolve();
+    const unsub = useSession.subscribe(s => { if (s.restored) { unsub(); resolve(); } });
+  });
+  const limit = new Promise<void>(resolve => setTimeout(resolve, timeoutMs));
+  return Promise.race([restored.then(connectionsSettled), limit]);
+}
+
 /** Resolves once no connection is in flight (or after 20 s). */
 function connectionsSettled(): Promise<void> {
   return new Promise(resolve => {
