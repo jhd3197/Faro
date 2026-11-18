@@ -15,6 +15,7 @@ export const SETTINGS_SECTIONS = [
   { id: "cli", label: "faro-cli", keywords: "cli command line updater path" },
   { id: "cloudflare", label: "Cloudflare", keywords: "cloudflare cloudflared access tunnel account" },
   { id: "backup", label: "Backup", keywords: "backup restore export" },
+  { id: "storage", label: "Storage", keywords: "cache clear thumbnails resume disk space" },
   { id: "about", label: "About", keywords: "version notifications about" },
 ] as const;
 
@@ -27,6 +28,8 @@ export const SETTINGS_FOCUS = {
   cloudflared: "settings-cloudflared",
   showPairingCode: "settings-show-pairing-code",
   keyboardSearch: "settings-keyboard-search",
+  themeMode: "settings-theme-mode",
+  transferConcurrency: "settings-transfer-concurrency",
 } as const;
 
 export interface SettingsTarget {

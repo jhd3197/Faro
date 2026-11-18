@@ -169,13 +169,16 @@ function NotificationsRow() {
           checked={notifications.enabled}
           onChange={(v) => setNotifications({ ...notifications, enabled: v })}
         />
-        <Toggle
-          label="Only when Faro isn't focused"
-          help="Skip toasts while the window is in the foreground (in-app toasts already cover it)."
-          checked={notifications.unfocusedOnly}
-          disabled={!notifications.enabled}
-          onChange={(v) => setNotifications({ ...notifications, unfocusedOnly: v })}
-        />
+        {/* Only matters while notifications are on: indented under it. */}
+        <div className="ml-2 border-l border-border pl-4" data-settings-dependent={notifications.enabled ? "on" : "off"}>
+          <Toggle
+            label="Only when Faro isn't focused"
+            help="Skip toasts while the window is in the foreground (in-app toasts already cover it)."
+            checked={notifications.unfocusedOnly}
+            disabled={!notifications.enabled}
+            onChange={(v) => setNotifications({ ...notifications, unfocusedOnly: v })}
+          />
+        </div>
       </div>
     </div>
   );

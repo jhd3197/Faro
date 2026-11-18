@@ -1,14 +1,19 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Cloud, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard } from "lucide-react";
+import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Cloud, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard, HardDrive, RotateCcw } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { ACCENTS } from "@/lib/accent";
 import type { UiLanguage } from "@/lib/i18n";
 import {
   useSettings,
-  COLOR_THEMES,
+  LIGHT_THEMES,
+  DARK_THEMES,
+  TERMINAL_THEMES,
+  SETTINGS_DEFAULTS,
   UI_ZOOM_STEPS,
   type AppTheme,
+  type PersistedSettings,
+  type ThemeMode,
   type FrameStyle,
   type OverwritePolicy,
   type SortField,
@@ -22,7 +27,9 @@ import { useBridge } from "@/stores/bridgeStore";
 import { ipc } from "@/lib/ipc";
 import { toast } from "@/stores/toastStore";
 import { toastError } from "@/lib/errors";
-import type { BackupSummary } from "@/lib/types";
+import type { BackupSummary, CacheId, CacheUsage } from "@/lib/types";
+import { fmtSize } from "@/lib/format";
+import { useBindings } from "@/stores/bindingsStore";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
 import { RemoteControlSettings } from "./RemoteControlSettings";
@@ -56,8 +63,72 @@ const SECTION_ICONS: Record<SettingsSectionId, React.ReactNode> = {
   cli: <TerminalSquare size={14} />,
   cloudflare: <Cloud size={14} />,
   backup: <ShieldAlert size={14} />,
+  storage: <HardDrive size={14} />,
   about: <Info size={14} />,
 };
+
+// Which saved settings each section shows, for the "changed" dot in the nav.
+// Sections that keep their config elsewhere are checked separately below.
+const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSettings)[]>> = {
+  appearance: ["themeMode", "lightTheme", "darkTheme", "accentColor", "uiZoom", "frameStyle", "uiLanguage"],
+  transfers: [
+    "overwritePolicy",
+    "promptOnOverwrite",
+    "autoOpenTransferPanel",
+    "transferConcurrency",
+    "transferThrottleKbps",
+    "transferSegments",
+    "transferVerify",
+    "deltaSync",
+    "defaultDownloadFolder",
+  ],
+  panes: [
+    "showHiddenFiles",
+    "sortField",
+    "sortDirection",
+    "paneViewMode",
+    "paneDensity",
+    "browserLayout",
+    "remoteImagePreviews",
+    "defaultEditor",
+  ],
+  terminal: [
+    "terminalFontSize",
+    "terminalFontFamily",
+    "terminalTheme",
+    "terminalScrollback",
+    "terminalCopyOnSelect",
+    "terminalSuggestions",
+  ],
+  connections: ["defaultPort", "storePasswordsInKeychain", "restoreLastSession"],
+  about: ["notifications"],
+};
+
+/** Values that count as untouched besides the default: new installs start
+ *  in System mode, older ones in Dark. */
+const ALSO_DEFAULT: Partial<Record<keyof PersistedSettings, unknown[]>> = {
+  themeMode: ["system"],
+};
+
+function isChangedSetting(key: keyof PersistedSettings, value: unknown): boolean {
+  const same = (v: unknown) => JSON.stringify(v) === JSON.stringify(value);
+  return !same(SETTINGS_DEFAULTS[key]) && !(ALSO_DEFAULT[key] ?? []).some(same);
+}
+
+/** Sections holding at least one non-default value. */
+function useChangedSections(): Set<SettingsSectionId> {
+  const s = useSettings();
+  const policy = useBridge((b) => b.status.policy);
+  const overrides = useBindings((b) => b.overrides);
+  const shortcutsOn = useBindings((b) => b.enabled);
+  const out = new Set<SettingsSectionId>();
+  for (const [sec, keys] of Object.entries(SECTION_SETTING_KEYS) as [SettingsSectionId, (keyof PersistedSettings)[]][]) {
+    if (keys.some((k) => isChangedSetting(k, s[k]))) out.add(sec);
+  }
+  if (policy.allowAll || policy.autoRead || policy.autoSafeExec) out.add("bridge");
+  if (Object.keys(overrides).length > 0 || !shortcutsOn) out.add("keyboard");
+  return out;
+}
 
 const SECTIONS: { id: SettingsSectionId; label: string; icon: React.ReactNode }[] =
   SETTINGS_SECTIONS.map((sec) => ({ ...sec, icon: SECTION_ICONS[sec.id] }));
@@ -70,6 +141,7 @@ function lastSection(): SettingsSectionId {
 
 export function Settings({ onClose }: Props) {
   const s = useSettings();
+  const changed = useChangedSections();
 
   // Agent Bridge approval policy lives in the Rust backend (it enforces it), so
   // these toggles read/write the same source as the Agent Bridge panel.
@@ -157,28 +229,52 @@ export function Settings({ onClose }: Props) {
           <>
             <Field
               label="Mode"
-              help="The light or dark base. Pick a named color palette below to override it."
+              focus={SETTINGS_FOCUS.themeMode}
+              help="Light, Dark, or System to follow your OS setting as it changes. Light and Dark each keep their own theme."
             >
-              <Segmented<AppTheme>
-                value={s.appTheme}
-                onChange={s.setAppTheme}
+              <Segmented<ThemeMode>
+                value={s.themeMode}
+                onChange={s.setThemeMode}
                 options={[
                   { value: "light", label: "Light" },
                   { value: "dark", label: "Dark" },
+                  { value: "system", label: "System" },
                 ]}
               />
             </Field>
+            {s.themeMode !== "dark" && (
+              <Field
+                label="Light theme"
+                help={s.themeMode === "system" ? "Used while your OS is in light mode." : undefined}
+              >
+                <PreviewCards<AppTheme>
+                  label="Light theme"
+                  items={LIGHT_THEMES}
+                  value={s.lightTheme}
+                  onChange={s.setLightTheme}
+                  preview={(v) => <ThemePreview theme={v} />}
+                />
+              </Field>
+            )}
+            {s.themeMode !== "light" && (
+              <Field
+                label="Dark theme"
+                help={s.themeMode === "system" ? "Used while your OS is in dark mode." : undefined}
+              >
+                <PreviewCards<AppTheme>
+                  label="Dark theme"
+                  items={DARK_THEMES}
+                  value={s.darkTheme}
+                  onChange={s.setDarkTheme}
+                  preview={(v) => <ThemePreview theme={v} />}
+                />
+              </Field>
+            )}
             <Field
               label="Accent color"
-              help="The highlight color for buttons, links, focus rings, the active rail pill and selection. Layers on top of the mode and palette below."
+              help="The highlight color for buttons, links, focus rings, the active rail pill and selection. Layers on top of the theme."
             >
               <AccentGrid value={s.accentColor} onChange={s.setAccentColor} />
-            </Field>
-            <Field
-              label="Color palette"
-              help="Full presets that also re-tint the surfaces, not just the accent."
-            >
-              <ThemeGrid value={s.appTheme} onChange={s.setAppTheme} />
             </Field>
             <Field
               label="UI zoom"
@@ -195,6 +291,18 @@ export function Settings({ onClose }: Props) {
                   label: z === 100 ? "100% (Default)" : `${z}%`,
                 }))}
               />
+              {s.uiZoom !== 100 && (
+                <button
+                  type="button"
+                  onClick={() => s.setUiZoom(100)}
+                  title="Reset to 100%"
+                  aria-label="Reset zoom to 100%"
+                  data-zoom-reset
+                  className="rounded-md p-1.5 text-text-muted hover:bg-bg-hover hover:text-text"
+                >
+                  <RotateCcw size={13} />
+                </button>
+              )}
             </Field>
             <Field
               label="Window frame"
@@ -266,27 +374,21 @@ export function Settings({ onClose }: Props) {
             />
             <Field
               label="Concurrent transfers"
+              focus={SETTINGS_FOCUS.transferConcurrency}
               help="How many transfers run at once. Extra transfers wait in a first-in, first-out queue."
             >
               <NumberInput
+                label="Concurrent transfers"
                 min={1}
                 max={32}
                 value={s.transferConcurrency}
                 onChange={s.setTransferConcurrency}
               />
             </Field>
-            <Field
-              label="Bandwidth limit"
-              help="Global cap shared by all active transfers. 0 = unlimited."
-            >
-              <NumberInput
-                min={0}
-                max={1024 * 1024}
-                value={s.transferThrottleKbps}
-                onChange={s.setTransferThrottleKbps}
-                suffix="KiB/s"
-              />
-            </Field>
+            <BandwidthLimit
+              kbps={s.transferThrottleKbps}
+              onChange={s.setTransferThrottleKbps}
+            />
             <Field
               label="Connections per file"
               help="Large downloads and object-store uploads are split across parallel connections. Auto starts with one and adds more while it helps; 1 turns splitting off."
@@ -302,6 +404,7 @@ export function Settings({ onClose }: Props) {
                 />
                 {s.transferSegments !== "auto" && (
                   <NumberInput
+                    label="Connections per file"
                     min={1}
                     max={16}
                     value={s.transferSegments}
@@ -327,12 +430,12 @@ export function Settings({ onClose }: Props) {
               help="Where downloads land. Leave blank to use your system Downloads folder."
             >
               <div className="flex w-full items-center gap-1.5">
-                <input
+                <DebouncedText
                   data-settings-focus={SETTINGS_FOCUS.downloadFolder}
                   value={s.defaultDownloadFolder}
-                  onChange={(e) => s.setDefaultDownloadFolder(e.target.value)}
+                  onCommit={s.setDefaultDownloadFolder}
                   placeholder="System Downloads"
-                  className="min-w-0 flex-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                  aria-label="Download folder"
                 />
                 <button
                   onClick={async () => {
@@ -432,11 +535,11 @@ export function Settings({ onClose }: Props) {
               help="Command used to open files for edit-in-place (e.g. code). Blank = your OS default app."
             >
               <div className="flex w-full items-center gap-1.5">
-                <input
+                <DebouncedText
                   value={s.defaultEditor}
-                  onChange={(e) => s.setDefaultEditor(e.target.value)}
+                  onCommit={s.setDefaultEditor}
                   placeholder="OS default app"
-                  className="min-w-0 flex-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                  aria-label="Default editor"
                 />
                 <button
                   onClick={() => s.setDefaultEditor("code")}
@@ -464,6 +567,7 @@ export function Settings({ onClose }: Props) {
           <>
             <Field label="Font size">
               <NumberInput
+                label="Font size"
                 min={8}
                 max={32}
                 value={s.terminalFontSize}
@@ -497,22 +601,14 @@ export function Settings({ onClose }: Props) {
                 ]}
               />
             </Field>
-            <Field label="Theme">
-              <Select<TerminalTheme>
+            <Field label="Theme" help="Applies live to open terminals.">
+              <PreviewCards<TerminalTheme>
+                label="Terminal theme"
+                items={TERMINAL_THEME_OPTIONS}
                 value={s.terminalTheme}
                 onChange={s.setTerminalTheme}
-                options={[
-                  { value: "dark", label: "Dark" },
-                  { value: "light", label: "Light" },
-                  { value: "dracula", label: "Dracula" },
-                  { value: "solarized-dark", label: "Solarized Dark" },
-                  { value: "gruvbox-dark", label: "Gruvbox Dark" },
-                  { value: "onedark", label: "One Dark" },
-                  { value: "rosepine", label: "Rosé Pine" },
-                  { value: "everforest", label: "Everforest" },
-                ]}
+                preview={(v) => <TerminalPreview theme={v} />}
               />
-              <Help>Applies live to open terminals.</Help>
             </Field>
             <Field label="Scrollback">
               <Select<number>
@@ -547,6 +643,7 @@ export function Settings({ onClose }: Props) {
           <>
             <Field label="Default port for new profiles">
               <NumberInput
+                label="Default port"
                 min={1}
                 max={65535}
                 value={s.defaultPort}
@@ -593,22 +690,24 @@ export function Settings({ onClose }: Props) {
               checked={policy.allowAll}
               onChange={(v) => setPolicy({ ...policy, allowAll: v })}
             />
-            {!policy.allowAll && (
-              <>
-                <ToggleField
-                  label="Auto-approve read-only operations"
-                  help="List directories, read files and search run without asking. Downloads & uploads write to disk, so they still prompt unless Allow all is on."
-                  checked={policy.autoRead}
-                  onChange={(v) => setPolicy({ ...policy, autoRead: v })}
-                />
-                <ToggleField
-                  label="Auto-approve safe shell commands"
-                  help="Read-only commands (ls, cat, df, grep…) run without asking; anything that could change the server still prompts. Best-effort heuristic."
-                  checked={policy.autoSafeExec}
-                  onChange={(v) => setPolicy({ ...policy, autoSafeExec: v })}
-                />
-              </>
-            )}
+            {/* Only meaningful while prompts are on: Allow all already
+                approves everything. */}
+            <Dependent enabled={!policy.allowAll} reason="Allow all already approves these.">
+              <ToggleField
+                label="Auto-approve read-only operations"
+                help="List directories, read files and search run without asking. Downloads & uploads write to disk, so they still prompt unless Allow all is on."
+                checked={policy.allowAll || policy.autoRead}
+                disabled={policy.allowAll}
+                onChange={(v) => setPolicy({ ...policy, autoRead: v })}
+              />
+              <ToggleField
+                label="Auto-approve safe shell commands"
+                help="Read-only commands (ls, cat, df, grep…) run without asking; anything that could change the server still prompts. Best-effort heuristic."
+                checked={policy.allowAll || policy.autoSafeExec}
+                disabled={policy.allowAll}
+                onChange={(v) => setPolicy({ ...policy, autoSafeExec: v })}
+              />
+            </Dependent>
             <Help>
               Same setting as the Agent Bridge panel — applies to every
               agent-enabled session and persists across restarts.
@@ -621,6 +720,9 @@ export function Settings({ onClose }: Props) {
 
       case "backup":
         return <BackupSettings />;
+
+      case "storage":
+        return <StorageSettings />;
 
       case "about":
         return <AboutSettings />;
@@ -652,6 +754,7 @@ export function Settings({ onClose }: Props) {
           </div>
           {SECTIONS.map((sec) => {
             const on = active === sec.id;
+            const isChanged = changed.has(sec.id);
             return (
               <button
                 key={sec.id}
@@ -670,6 +773,15 @@ export function Settings({ onClose }: Props) {
                   {sec.icon}
                 </span>
                 <span className="truncate">{sec.label}</span>
+                {isChanged && (
+                  <span
+                    data-settings-changed
+                    title="Changed from the default"
+                    className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                  >
+                    <span className="sr-only">(changed)</span>
+                  </span>
+                )}
               </button>
             );
           })}
@@ -696,7 +808,7 @@ export function Settings({ onClose }: Props) {
 
           <div className="flex items-center justify-between border-t border-border px-6 py-3">
             <span className="text-xs text-text-dim">
-              Settings persist locally.
+              Changes save automatically.
             </span>
             <button
               onClick={onClose}
@@ -760,14 +872,17 @@ function InfoTip({ text }: { text: string }) {
 function Field({
   label,
   help,
+  focus,
   children,
 }: {
   label: string;
   help?: string;
+  /** `data-settings-focus` id so a deep link can land on this field. */
+  focus?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div>
+    <div data-settings-focus={focus}>
       <div className="mb-1.5 flex items-center gap-1.5">
         <span className="text-sm">{label}</span>
         {help && <InfoTip text={help} />}
@@ -1003,20 +1118,46 @@ function ToggleField({
   label,
   help,
   checked,
+  disabled,
   onChange,
 }: {
   label: string;
   help?: string;
   checked: boolean;
+  disabled?: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
     <div className="flex items-center gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className="text-sm">{label}</span>
+        <span className={cn("text-sm", disabled && "text-text-dim")}>{label}</span>
         {help && <InfoTip text={help} />}
       </div>
-      <Toggle checked={checked} onChange={onChange} />
+      <Toggle checked={checked} onChange={onChange} disabled={disabled} label={label} />
+    </div>
+  );
+}
+
+/** Settings that only matter while a parent setting is on: indented under it
+ *  and inert until then. */
+function Dependent({
+  enabled,
+  reason,
+  children,
+}: {
+  enabled: boolean;
+  /** Why the children are off, for screen readers and hover. */
+  reason?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      data-settings-dependent={enabled ? "on" : "off"}
+      aria-disabled={!enabled}
+      title={!enabled ? reason : undefined}
+      className={cn("ml-2 space-y-3 border-l border-border pl-4", !enabled && "opacity-60")}
+    >
+      {children}
     </div>
   );
 }
@@ -1024,18 +1165,24 @@ function ToggleField({
 function Toggle({
   checked,
   onChange,
+  disabled,
+  label,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
+  label?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
+        "relative h-5 w-9 shrink-0 rounded-full border transition-colors disabled:cursor-not-allowed",
         checked
           ? "bg-accent border-accent"
           : "bg-bg-subtle border-border hover:border-text-dim"
@@ -1051,43 +1198,135 @@ function Toggle({
   );
 }
 
-function ThemeGrid({
+const CARD_COLUMNS = 4;
+
+/**
+ * A radio group of small preview cards (themes, terminal themes). The selected
+ * card gets a ring; arrow keys, Home and End move and select, and only the
+ * selected card is in the tab order.
+ */
+function PreviewCards<T extends string>({
+  label,
+  items,
   value,
   onChange,
+  preview,
 }: {
-  value: AppTheme;
-  onChange: (v: AppTheme) => void;
+  label: string;
+  items: readonly { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  preview: (v: T) => React.ReactNode;
 }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const selected = items.findIndex((t) => t.value === value);
+  if (!items.length) {
+    return <div className="text-xs text-text-dim">No themes available.</div>;
+  }
+  const onKeyDown = (e: React.KeyboardEvent, i: number) => {
+    const n = items.length;
+    let next: number | null = null;
+    if (e.key === "ArrowRight") next = (i + 1) % n;
+    else if (e.key === "ArrowLeft") next = (i - 1 + n) % n;
+    else if (e.key === "ArrowDown") next = Math.min(n - 1, i + CARD_COLUMNS);
+    else if (e.key === "ArrowUp") next = Math.max(0, i - CARD_COLUMNS);
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = n - 1;
+    if (next === null) return;
+    e.preventDefault();
+    onChange(items[next].value);
+    refs.current[next]?.focus();
+  };
   return (
-    <div className="grid w-full grid-cols-3 gap-2">
-      {COLOR_THEMES.map((t) => {
-        const active = value === t.value;
+    <div role="radiogroup" aria-label={label} className="grid w-full grid-cols-4 gap-2">
+      {items.map((t, i) => {
+        const active = i === selected;
         return (
           <button
             key={t.value}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active || (selected < 0 && i === 0) ? 0 : -1}
+            data-theme-card={t.value}
             onClick={() => onChange(t.value)}
+            onKeyDown={(e) => onKeyDown(e, i)}
             className={cn(
-              "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors",
+              "flex flex-col gap-1.5 rounded-lg border p-1.5 text-left outline-none transition-colors focus-visible:border-accent",
               active
-                ? "border-accent bg-accent/10"
-                : "border-border bg-bg-subtle hover:border-text-dim"
+                ? "border-accent ring-2 ring-accent/40"
+                : "border-border hover:border-text-dim"
             )}
           >
-            <span
-              className="h-4 w-4 shrink-0 rounded-full border border-white/10"
-              style={{ background: t.swatch }}
-            />
+            {preview(t.value)}
             <span
               className={cn(
-                "truncate text-xs font-medium",
+                "flex items-center gap-1 truncate px-0.5 text-[11px] font-medium",
                 active ? "text-text" : "text-text-muted"
               )}
             >
-              {t.label}
+              {active && <Check size={11} className="shrink-0 text-accent" />}
+              <span className="truncate">{t.label}</span>
             </span>
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** A miniature window painted with the theme's own tokens: the nested
+ *  `data-theme` re-scopes every color variable to that theme. */
+function ThemePreview({ theme }: { theme: AppTheme }) {
+  return (
+    <div
+      data-theme={theme}
+      aria-hidden
+      className="pointer-events-none flex h-12 overflow-hidden rounded-md border border-border bg-bg"
+    >
+      <div className="w-1/4 space-y-1 border-r border-border-subtle bg-bg-subtle p-1">
+        <div className="h-1.5 rounded-sm bg-accent" />
+        <div className="h-1 rounded-sm bg-text-dim/50" />
+        <div className="h-1 rounded-sm bg-text-dim/30" />
+      </div>
+      <div className="flex-1 space-y-1 bg-bg-panel p-1.5">
+        <div className="h-1.5 w-3/4 rounded-sm bg-text/80" />
+        <div className="h-1 w-1/2 rounded-sm bg-text-muted/60" />
+        <div className="h-1 w-2/3 rounded-sm bg-text-muted/40" />
+        <div className="h-1.5 w-5 rounded-sm bg-accent" />
+      </div>
+    </div>
+  );
+}
+
+const TERMINAL_THEME_OPTIONS: { value: TerminalTheme; label: string }[] = [
+  { value: "dark", label: "Dark" },
+  { value: "light", label: "Light" },
+  { value: "dracula", label: "Dracula" },
+  { value: "solarized-dark", label: "Solarized Dark" },
+  { value: "gruvbox-dark", label: "Gruvbox Dark" },
+  { value: "onedark", label: "One Dark" },
+  { value: "rosepine", label: "Rosé Pine" },
+  { value: "everforest", label: "Everforest" },
+];
+
+/** A prompt line in the terminal theme's own background, text and cursor. */
+function TerminalPreview({ theme }: { theme: TerminalTheme }) {
+  const c = TERMINAL_THEMES[theme];
+  return (
+    <div
+      aria-hidden
+      style={{ background: c.background, color: c.foreground }}
+      className="pointer-events-none h-12 overflow-hidden rounded-md border border-border px-1.5 py-1 font-mono text-[9px] leading-[13px]"
+    >
+      <div className="opacity-70">$ ls</div>
+      <div>logs  www</div>
+      <div className="flex items-center">
+        $&nbsp;<span className="inline-block h-2.5 w-1.5" style={{ background: c.cursor }} />
+      </div>
     </div>
   );
 }
@@ -1236,37 +1475,312 @@ function Select<T extends string | number>({
   );
 }
 
+/** "Default port must be 1–65535". */
+function rangeError(label: string, min: number, max: number): string {
+  // Ports read as plain numbers; only big limits get thousands separators.
+  const n = (v: number) => (v >= 100_000 ? v.toLocaleString("en-US") : String(v));
+  return `${label} must be ${n(min)}–${n(max)}`;
+}
+
+/**
+ * A whole-number setting. A valid value saves shortly after typing stops;
+ * an invalid one stays in the box (not clamped under your cursor) and is
+ * reported only once you leave the field, naming the field. Leaving
+ * Settings with an invalid draft keeps the last valid value.
+ */
 function NumberInput({
+  label,
   min,
   max,
   value,
   onChange,
   suffix,
+  disabled,
 }: {
+  /** Field name used in the error message. */
+  label: string;
   min: number;
   max: number;
   value: number;
   onChange: (n: number) => void;
   suffix?: string;
+  disabled?: boolean;
 }) {
+  const [draft, setDraft] = useState(String(value));
+  const [touched, setTouched] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  const errorId = useId();
+  const pending = useRef<number | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const commitRef = useRef(onChange);
+  commitRef.current = onChange;
+
+  // Saved shortly after typing stops (so "40" never applies a passing "4"),
+  // and at once on blur or when Settings closes.
+  const flush = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = undefined;
+    if (pending.current !== null) {
+      const n = pending.current;
+      pending.current = null;
+      commitRef.current(n);
+    }
+  }, []);
+  useEffect(() => flush, [flush]);
+
+  // Follow outside changes (another window, the transfer panel) unless the
+  // user is typing here.
+  useEffect(() => {
+    if (document.activeElement !== ref.current) setDraft(String(value));
+  }, [value]);
+
+  const parse = (raw: string): number | null => {
+    if (!/^\d+$/.test(raw.trim())) return null;
+    const n = Number(raw);
+    return n >= min && n <= max ? n : null;
+  };
+  const invalid = parse(draft) === null;
+  const error = touched && invalid && !disabled ? rangeError(label, min, max) : null;
+
   return (
-    <div className="flex items-center gap-1.5">
-      <input
-        type="number"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) =>
-          onChange(
-            Math.max(
-              min,
-              Math.min(max, parseInt(e.target.value) || min)
-            )
-          )
-        }
-        className="w-20 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1.5">
+        <input
+          ref={ref}
+          type="text"
+          inputMode="numeric"
+          aria-label={label}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
+          disabled={disabled}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            const n = parse(e.target.value);
+            if (timer.current) clearTimeout(timer.current);
+            pending.current = n !== null && n !== value ? n : null;
+            if (pending.current !== null) timer.current = setTimeout(flush, 400);
+          }}
+          onBlur={() => {
+            setTouched(true);
+            flush();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+          className={cn(
+            "w-24 rounded-md border bg-bg-subtle px-2.5 py-1.5 text-sm tabular-nums outline-none disabled:cursor-not-allowed disabled:opacity-60",
+            error ? "border-danger focus:border-danger" : "border-border focus:border-accent"
+          )}
+        />
+        {suffix && <span className="text-xs text-text-dim">{suffix}</span>}
+      </div>
+      {error && (
+        <span id={errorId} role="alert" data-settings-error className="text-xs text-danger">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A text setting saved shortly after typing stops instead of on every
+ * keystroke; leaving the field or closing Settings saves at once.
+ */
+function DebouncedText({
+  value,
+  onCommit,
+  delay = 400,
+  ...rest
+}: {
+  value: string;
+  onCommit: (v: string) => void;
+  delay?: number;
+  placeholder?: string;
+  "aria-label"?: string;
+  "data-settings-focus"?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const pending = useRef<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+
+  const flush = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = undefined;
+    if (pending.current !== null) {
+      const v = pending.current;
+      pending.current = null;
+      commitRef.current(v);
+    }
+  }, []);
+
+  // Outside changes (Browse…, Reset) replace the draft when nothing is pending.
+  useEffect(() => {
+    if (pending.current === null) setDraft(value);
+  }, [value]);
+
+  // Closing Settings or switching section saves what was typed.
+  useEffect(() => flush, [flush]);
+
+  return (
+    <input
+      {...rest}
+      value={draft}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        pending.current = e.target.value;
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(flush, delay);
+      }}
+      onBlur={flush}
+      className="min-w-0 flex-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+    />
+  );
+}
+
+/** Bandwidth cap as a switch with the limit indented under it. 0 in the store
+ *  means unlimited; the last limit is kept for when it's switched back on. */
+function BandwidthLimit({ kbps, onChange }: { kbps: number; onChange: (n: number) => void }) {
+  const on = kbps > 0;
+  const [last, setLast] = useState(on ? kbps : 1024);
+  useEffect(() => {
+    if (kbps > 0) setLast(kbps);
+  }, [kbps]);
+  return (
+    <div className="space-y-3">
+      <ToggleField
+        label="Limit bandwidth"
+        help="A global cap shared by all active transfers. Off = unlimited. Also adjustable from the transfer panel."
+        checked={on}
+        onChange={(v) => onChange(v ? last : 0)}
       />
-      {suffix && <span className="text-xs text-text-dim">{suffix}</span>}
+      <Dependent enabled={on} reason="Turn on Limit bandwidth first.">
+        <Field label="Limit">
+          <NumberInput
+            label="Bandwidth limit"
+            min={1}
+            max={1024 * 1024}
+            value={on ? kbps : last}
+            onChange={onChange}
+            suffix="KiB/s"
+            disabled={!on}
+          />
+        </Field>
+      </Dependent>
+    </div>
+  );
+}
+
+const CACHE_INFO: Record<CacheId, { title: string; note: string; cleared: string }> = {
+  thumbnails: {
+    title: "Image thumbnails",
+    note: "Previews of remote images. They're fetched again the next time you view the folder.",
+    cleared: "Thumbnails cleared",
+  },
+  transferResume: {
+    title: "Transfer resume data",
+    note: "Partial downloads that let paused or failed transfers continue. Clearing cancels those transfers; running ones are left alone.",
+    cleared: "Resume data cleared",
+  },
+  editCopies: {
+    title: "Leftover edit copies",
+    note: "Local copies from edit-in-place sessions that are no longer open.",
+    cleared: "Edit copies cleared",
+  },
+};
+
+const CACHE_ORDER: CacheId[] = ["thumbnails", "transferResume", "editCopies"];
+
+function plural(n: number, one: string, many = `${one}s`) {
+  return `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+}
+
+/** Settings › Storage: one card per clearable cache with its live size. */
+function StorageSettings() {
+  const [usage, setUsage] = useState<Partial<Record<CacheId, CacheUsage>>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState<CacheId | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const rows = await ipc.cacheUsage();
+      setUsage(Object.fromEntries(rows.map((r) => [r.id, r])));
+    } catch (e) {
+      toastError(e, "Couldn't read cache sizes");
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  // Sizes stay live while the section is open (thumbnails fill as you browse).
+  useEffect(() => {
+    void refresh();
+    const t = setInterval(() => void refresh(), 5000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  const clear = async (id: CacheId) => {
+    const before = usage[id]?.bytes ?? 0;
+    setBusy(id);
+    try {
+      const after = await ipc.cacheClear(id);
+      setUsage((u) => ({ ...u, [id]: after }));
+      const freed = Math.max(0, before - after.bytes);
+      toast.success(CACHE_INFO[id].cleared, freed > 0 ? `Freed ${fmtSize(freed)}.` : undefined);
+    } catch (e) {
+      toastError(e, `Couldn't clear ${CACHE_INFO[id].title.toLowerCase()}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <Help>Space Faro uses for things it can rebuild. Clearing never touches your files or settings.</Help>
+      {CACHE_ORDER.map((id) => {
+        const u = usage[id];
+        const empty = !u || (u.bytes === 0 && u.items === 0);
+        return (
+          <div
+            key={id}
+            data-cache-card={id}
+            className="flex items-center gap-3 rounded-lg border border-border bg-bg-subtle/60 px-3.5 py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-medium">{CACHE_INFO[id].title}</span>
+                <span data-cache-size className="text-xs tabular-nums text-text-muted">
+                  {!loaded
+                    ? "…"
+                    : !u
+                      ? "Unavailable"
+                      : empty
+                        ? "Empty"
+                        : `${fmtSize(u.bytes)} · ${plural(u.items, id === "thumbnails" ? "file" : id === "transferResume" ? "transfer" : "folder")}`}
+                </span>
+              </div>
+              <div className="mt-0.5 text-xs text-text-dim">{CACHE_INFO[id].note}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void clear(id)}
+              disabled={empty || busy !== null}
+              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-text transition-colors hover:bg-bg-hover disabled:opacity-50"
+            >
+              {busy === id ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 size={13} className="animate-spin" /> Clearing…
+                </span>
+              ) : (
+                "Clear"
+              )}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
