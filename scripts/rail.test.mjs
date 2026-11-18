@@ -402,6 +402,9 @@ test("the rail in the app", { timeout: 300_000, skip: !CHROME && "no Chrome/Edge
           const btn = el.querySelector("button");
           return { bg: getComputedStyle(btn).backgroundColor, outline: getComputedStyle(btn).outlineStyle, pill: el.querySelector("span[aria-hidden]").className.includes("bg-accent") };
         });
+      // The tint animates in (transition-colors), so read it once it settles.
+      await page.waitForFunction((sel) => getComputedStyle(document.querySelector(sel)).backgroundColor !== "rgba(0, 0, 0, 0)", {}, `${row("filler-1")} button`);
+      await sleep(250);
       const sel = await look("filler-1");
       const act = await look(active);
       assert.notEqual(sel.bg, act.bg, "selection is a tint");
