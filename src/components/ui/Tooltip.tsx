@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 
@@ -34,6 +34,8 @@ function fixedCoords(side: Side, r: DOMRect): { left: number; top: number } {
   }
 }
 
+export const SHOW_DELAY_MS = 200;
+
 // Lightweight hover tooltip. Lets icon-only buttons stay compact while remaining
 // discoverable. Pass `portal` when the trigger sits inside an `overflow`-clipping
 // container (a scroll area) so the tooltip renders to <body> and isn't cut off.
@@ -43,6 +45,7 @@ export function Tooltip({
   side = "top",
   portal = false,
   className,
+  delay = SHOW_DELAY_MS,
 }: {
   label: ReactNode;
   children: ReactNode;
@@ -50,6 +53,8 @@ export function Tooltip({
   portal?: boolean;
   /** Extra classes for the wrapper span (e.g. `w-full` for list rows). */
   className?: string;
+  /** Milliseconds to wait before showing; hiding is always immediate. */
+  delay?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<{ left: number; top: number } | null>(
@@ -57,13 +62,25 @@ export function Tooltip({
   );
   const ref = useRef<HTMLSpanElement>(null);
 
-  const show = () => {
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const reveal = () => {
     if (portal && ref.current) {
       setCoords(fixedCoords(side, ref.current.getBoundingClientRect()));
     }
     setOpen(true);
   };
-  const hide = () => setOpen(false);
+  // Passing over a row of icons shouldn't flash a tooltip for each one.
+  const show = () => {
+    window.clearTimeout(timer.current);
+    if (delay <= 0) reveal();
+    else timer.current = window.setTimeout(reveal, delay);
+  };
+  const hide = () => {
+    window.clearTimeout(timer.current);
+    setOpen(false);
+  };
 
   const tipClass =
     "anim-fade pointer-events-none z-tooltip whitespace-nowrap rounded-md border border-border bg-bg-panel px-2 py-1 text-[10px] font-medium text-text shadow-elev-2";
