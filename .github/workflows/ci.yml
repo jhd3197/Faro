@@ -107,7 +107,6 @@ jobs:
           path: src-tauri/target/s3-cli-audit.json
           if-no-files-found: ignore
 
-      - name: cargo clippy (warnings allowed for now)
+      - name: cargo clippy (warnings are errors)
         working-directory: src-tauri
-        run: cargo clippy --workspace -- -D warnings -A clippy::all
-        continue-on-error: true
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
