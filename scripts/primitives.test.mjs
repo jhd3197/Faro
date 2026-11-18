@@ -188,6 +188,7 @@ test('Menu: search filters (terms ANDed) and typing from the list goes into it',
   assert.equal(labels, 1);
   // Groups are labelled.
   await page.evaluate(() => window.__primitives.menu({ searchable: true, value: 'staging' }));
+  await page.waitForSelector('[data-menu]');
   const text = await page.$eval('[data-menu]', (m) => m.textContent);
   assert.match(text, /Production.*Staging/);
   await sleep(150);
@@ -196,6 +197,7 @@ test('Menu: search filters (terms ANDed) and typing from the list goes into it',
 
 test('Dropdown: matches trigger width, Esc closes only the menu and refocuses the button', async () => {
   await page.evaluate(() => window.__primitives.dropdown());
+  await page.waitForSelector('[data-dropdown]');
   await page.click('[data-dropdown]');
   await page.waitForSelector('[data-popover] [role="listbox"]');
   await sleep(50);

@@ -173,7 +173,7 @@ test("shortcuts in the app", { timeout: 300_000, skip: !CHROME && "no Chrome/Edg
 
     await t.test("context menus show live hints and run a pressed shortcut", async () => {
       const openMenu = async () => {
-        const box = await (await page.$(`${pane} [aria-selected="true"]`)).boundingBox();
+        const box = await (await page.waitForSelector(`${pane} [aria-selected="true"]`)).boundingBox();
         await page.mouse.click(box.x + 40, box.y + box.height / 2, { button: "right" });
         await page.waitForSelector('[role="menu"]');
       };
