@@ -22,6 +22,17 @@ There are two ways to set this up:
 
 Both need the Access CA trusted first.
 
+**Faro can do this for you.** If you can already log in to the server with
+Faro another way (your own key or password, with root or sudo), edit the
+Cloudflare connection: **Cloudflare login on the server** shows which way the
+server is set up, adds and removes listed people, and turns the opt-in on or
+off. It shows the exact files and commands first, backs them up, checks
+`sshd_config` with `sshd -t`, reloads sshd (your session stays open), tries a
+certificate login, and puts the backup back if any step fails. When someone's
+sign-in is refused and you have that admin login saved, the error offers
+**Allow *name* to log in as *user*** in one click. The steps below are the
+same changes, by hand.
+
 ## What you need
 
 - Root on the server.
