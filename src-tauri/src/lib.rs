@@ -22,6 +22,7 @@ pub mod cloudflared;
 pub mod cloudflare_api;
 pub mod cf_forward;
 pub mod cf_setup;
+pub mod cf_login;
 pub mod credentials;
 pub mod db;
 mod deeplink;
@@ -530,6 +531,11 @@ pub fn run() {
             cf_setup::cf_tunnel_status,
             cf_setup::cf_setup_undo,
             cf_setup::check_open_ports,
+            cf_login::cf_login_state,
+            cf_login::cf_login_plan,
+            cf_login::cf_login_apply,
+            cf_login::cf_login_person_command,
+            cf_login::cf_login_ca,
             cloudflare_api::cf_account_zones,
             cf_forward::cf_forwards_status,
             cf_forward::cf_forward_start,
