@@ -79,11 +79,11 @@ function persistNavigation(): Promise<void> {
       lastSaved = value;
       saveFailed = false;
     } catch (e) {
-      if (!saveFailed) toast.error("Couldn't save site folders", String(e));
+      if (!saveFailed) toast.error("Couldn't save site folders", String(e), undefined, { id: "sites-save", detail: String(e) });
       saveFailed = true;
     }
   }).catch(e => {
-    if (!saveFailed) toast.error("Couldn't save site folders", String(e));
+    if (!saveFailed) toast.error("Couldn't save site folders", String(e), undefined, { id: "sites-save", detail: String(e) });
     saveFailed = true;
   });
   return navigationWrites;

@@ -93,7 +93,7 @@ function DiskUsage() {
 
   const copyPath = (node: DuNode) => {
     navigator.clipboard.writeText(node.path);
-    toast.info("Path copied", node.path);
+    toast.info("Path copied", node.path, undefined, { log: false });
   };
 
   const openMenu = (node: DuNode, x: number, y: number) => {

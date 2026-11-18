@@ -15,8 +15,8 @@ export function CopyTextButton({
   className,
 }: {
   text: string;
-  /** Show a text label next to the icon. */
-  label?: boolean;
+  /** Show a text label next to the icon ("Copy", or this text). */
+  label?: boolean | string;
   className?: string;
 }) {
   const [copied, setCopied] = useState(false);
@@ -34,15 +34,19 @@ export function CopyTextButton({
     <button
       type="button"
       onClick={copy}
-      title={copied ? "Copied" : "Copy the full text"}
-      aria-label={copied ? "Copied" : "Copy the full text"}
+      title={copied ? "Copied" : typeof label === "string" ? label : "Copy the full text"}
+      aria-label={copied ? "Copied" : typeof label === "string" ? label : "Copy the full text"}
       className={cn(
         "inline-flex shrink-0 items-center gap-1 rounded p-0.5 text-text-dim hover:bg-bg-hover hover:text-text",
         className
       )}
     >
       {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-      {label && <span className="text-[10px]">{copied ? "Copied" : "Copy"}</span>}
+      {label && (
+        <span className={typeof label === "string" ? undefined : "text-[10px]"}>
+          {copied ? "Copied" : typeof label === "string" ? label : "Copy"}
+        </span>
+      )}
     </button>
   );
 }

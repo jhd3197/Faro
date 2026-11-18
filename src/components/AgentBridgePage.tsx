@@ -160,7 +160,7 @@ export function AgentBridgePage({ onClose }: { onClose: () => void }) {
     }
     try {
       await navigator.clipboard.writeText(mcpAddCmd(status.url, status.token));
-      toast.success("MCP command copied", "Paste it in a terminal to add Faro to Claude Code.");
+      toast.success("MCP command copied", "Paste it in a terminal to add Faro to Claude Code.", undefined, { log: false });
     } catch (e) {
       toast.error("Couldn't copy the MCP command", String(e));
     }

@@ -116,7 +116,7 @@ function DirectoryDiff() {
 
   const copyPath = (path: string) => {
     navigator.clipboard.writeText(path);
-    toast.info("Path copied", path);
+    toast.info("Path copied", path, undefined, { log: false });
   };
 
   // Copy-across reuses the local↔remote transfer engine, so it needs exactly

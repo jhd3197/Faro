@@ -54,7 +54,7 @@ export function TransferQueue() {
       if (cancelled) u();
       else unsub = u;
     });
-    loadInitial().catch((e) => toastError(e, "Load transfers"));
+    loadInitial().catch((e) => toastError(e, "Couldn't load saved transfers"));
     return () => {
       cancelled = true;
       unsub?.();

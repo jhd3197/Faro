@@ -158,7 +158,11 @@ async function runBatch(
     catch (error) {
       const message = `${item.path}: ${String(error)}`;
       outcome.errors.push(message);
-      toast.error("Transfer could not start", message);
+      // One card per batch, counting up, instead of one per failed item.
+      toast.error(`Couldn't start transferring ${baseName(item.path) || item.path}`, String(error), undefined, {
+        id: `transfer-start:${destDir}`,
+        detail: message,
+      });
     }
   };
   const settings = useSettings.getState();
@@ -261,7 +265,10 @@ export const useTransfers = create<TransfersState>((set, get) => ({
         update({ validation: "done", verifiedDirectories: report.directories, destination });
       } catch (error) {
         update({ validation: "error", errors: [...report.errors, String(error)], verifiedDirectories: 0 });
-        toast.error("Upload verification failed", String(error));
+        toast.error("Couldn't verify the upload", String(error), undefined, {
+          id: `upload-verify:${report.sessionId}`,
+          detail: String(error),
+        });
       }
     }
   },
@@ -297,7 +304,13 @@ export const useTransfers = create<TransfersState>((set, get) => ({
           useTips.getState().trigger("first-transfer");
         }
       } else if (kind === "error") {
-        toast.error("Transfer failed", t.error || baseName(t.source));
+        // Retries of the same transfer replace its card.
+        toast.error(
+          `Couldn't ${t.kind === "upload" ? "upload" : "download"} ${baseName(t.source)}`,
+          t.error || undefined,
+          undefined,
+          { id: `transfer:${t.id}`, detail: t.error || undefined },
+        );
       }
     });
     // One set() per 250 ms batch, however many transfers are running.
@@ -418,7 +431,7 @@ export const useTransfers = create<TransfersState>((set, get) => ({
     } catch (error) {
       if (!report.transferIds.length) report.retryItems = items;
       report.errors.push(String(error));
-      toast.error("Upload incomplete", String(error));
+      toast.error("Upload incomplete", String(error), undefined, { id: `upload:${report.id}`, detail: String(error) });
     } finally {
       report.preparing = false;
       publish();
@@ -439,7 +452,7 @@ export const useTransfers = create<TransfersState>((set, get) => ({
       await ipc.transferResume(id);
     } catch (e) {
       // A row restored from the last session needs its connection open.
-      toast.error("Can't resume yet", String(e));
+      toast.error("Can't resume yet", String(e), undefined, { id: `transfer-resume:${id}`, detail: String(e) });
     }
   },
 

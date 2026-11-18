@@ -63,7 +63,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       });
     });
     await onEditError((e) => {
-      toast.error("Save failed", `${baseName(e.remotePath)} — ${e.message}`);
+      // Every save in the editor retries the upload: one card per file.
+      toast.error(`Couldn't upload ${baseName(e.remotePath)}`, e.message, undefined, {
+        id: `edit-save:${e.editId}`,
+        detail: `${e.remotePath}: ${e.message}`,
+      });
       set((s) => {
         const existing = s.edits[e.editId];
         if (!existing) return s;
@@ -84,7 +88,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     try {
       ev = await ipc.startEdit(sessionId, remotePath, editor);
     } catch (e) {
-      toast.error("Couldn't open editor", `${baseName(remotePath)} — ${e}`);
+      toast.error(`Couldn't open ${baseName(remotePath)} for editing`, String(e), undefined, { detail: `${remotePath}: ${e}` });
       throw e;
     }
     toast.info(

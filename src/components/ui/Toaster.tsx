@@ -1,12 +1,14 @@
 import { CheckCircle2, AlertCircle, Info, AlertTriangle, X, ExternalLink } from "lucide-react";
 import {
   followToastAction,
+  toastDetails,
   useToasts,
   type Toast as ToastT,
   type ToastVariant,
 } from "@/stores/toastStore";
 import { cn } from "@/lib/cn";
 import { CopyTextButton, notificationText } from "./CopyText";
+import { useDiscovery } from "@/stores/discoveryStore";
 
 const ICON = {
   info: Info,
@@ -51,6 +53,8 @@ function ToastCard({
   onDismiss: () => void;
 }) {
   const Icon = ICON[toast.variant];
+  const version = useDiscovery((s) => s.version);
+  const isError = toast.variant === "error";
   return (
     <div
       role={toast.variant === "error" ? "alert" : "status"}
@@ -58,12 +62,21 @@ function ToastCard({
     >
       <Icon size={15} className={cn("mt-0.5 shrink-0", ACCENT[toast.variant])} />
       <div className="min-w-0 flex-1">
-        <div className="select-text text-xs font-medium">{toast.title}</div>
+        <div className="select-text text-xs font-medium [overflow-wrap:anywhere]">
+          {toast.title}
+          {toast.repeat && toast.repeat > 1 && (
+            <span data-toast-repeat="" className="ml-1.5 rounded bg-bg-subtle px-1 text-[10px] font-normal tabular-nums text-text-dim">
+              ×{toast.repeat}
+            </span>
+          )}
+        </div>
         {toast.message && (
           <div className="mt-0.5 max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] text-text-muted">
             {toast.message}
           </div>
         )}
+        {(toast.action || isError) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
         {toast.action && (
           <button
             onClick={() => {
@@ -71,14 +84,23 @@ function ToastCard({
               // Connect is a one-shot: leave nothing to press twice.
               if (toast.action!.connect) onDismiss();
             }}
-            className="mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent hover:bg-bg-hover"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent hover:bg-bg-hover"
           >
             {toast.action.url && <ExternalLink size={11} />}
             {toast.action.label}
           </button>
         )}
+        {isError && (
+          <CopyTextButton
+            text={toastDetails(toast, version)}
+            label="Copy details"
+            className="px-1.5 py-0.5 text-[11px] text-text-muted"
+          />
+        )}
+          </div>
+        )}
       </div>
-      <CopyTextButton text={notificationText(toast)} />
+      {!isError && <CopyTextButton text={notificationText(toast)} />}
       <button
         onClick={onDismiss}
         className="rounded p-0.5 text-text-dim hover:bg-bg-hover hover:text-text"

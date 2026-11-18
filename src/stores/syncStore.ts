@@ -78,7 +78,7 @@ export const useSync = create<SyncStoreState>((set, get) => ({
     try {
       set({ pairs: await ipc.folderSyncSyncNow(id) });
     } catch (e) {
-      toast.error("Couldn't start sync", String(e));
+      toast.error("Couldn't start sync", String(e), undefined, { id: `sync-start:${id}`, detail: String(e) });
     }
   },
 }));

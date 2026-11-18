@@ -90,7 +90,7 @@ export function AccessSignIn({
       setStatus(await ipc.cfAccessLogin(hostname.trim()));
       setError(null);
     } catch (e) {
-      toastError(e, "Cloudflare sign-in");
+      toastError(e, "Couldn't sign in to Cloudflare");
     } finally {
       setBusy(false);
     }
@@ -147,7 +147,7 @@ export function useCloudflared() {
     try {
       setStatus(await f());
     } catch (e) {
-      toastError(e, "cloudflared");
+      toastError(e, "Couldn't install or update cloudflared");
     } finally {
       setBusy(false);
     }

@@ -156,7 +156,8 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
             error: messageOf(e),
             connectFailures: { ...s.connectFailures, [profileId]: { kind: kindOf(e), message: messageOf(e) } },
           }));
-          toastError(e, profile ? `Couldn't connect to ${profile.name}` : "Connection failed");
+          // Retries and auto-connects of the same server replace one toast.
+          toastError(e, profile ? `Couldn't connect to ${profile.name}` : "Connection failed", { id: `connect:${profileId}` });
           throw e;
         } finally {
           pendingConnections.delete(profileId);

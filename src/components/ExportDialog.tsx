@@ -105,7 +105,7 @@ export function ExportDialog({ request, onClose }: Props) {
       );
       onClose();
     } catch (e) {
-      toastError(e, "Export failed");
+      toastError(e, "Couldn't export connections");
     } finally {
       setBusy(false);
     }

@@ -169,7 +169,7 @@ function AuthPromptDialog({
     );
     try {
       await navigator.clipboard.writeText(pw);
-      toast.success("Password generated", "Copied to clipboard");
+      toast.success("Password generated", "Copied to clipboard", undefined, { log: false });
     } catch {
       // clipboard unavailable; fields are still filled
     }

@@ -943,7 +943,7 @@ function BackupSettings() {
         }, and app state — encrypted.`
       );
     } catch (e) {
-      toastError(e, "Backup failed");
+      toastError(e, "Couldn't create the backup");
     } finally {
       setExporting(false);
     }
@@ -989,7 +989,7 @@ function BackupSettings() {
         "Restart Faro to finish applying it — your connections and secrets are ready."
       );
     } catch (e) {
-      toastError(e, "Restore failed");
+      toastError(e, "Couldn't restore the backup");
     } finally {
       setImporting(false);
     }

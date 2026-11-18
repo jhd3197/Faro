@@ -1828,7 +1828,7 @@ function KeyAuthSection({
       setJustSaved(false);
       const copiedOk = await copyLine(res.publicKey);
       if (copiedOk)
-        toast.success("Public key copied", "Add it to the server's authorized_keys.");
+        toast.success("Public key copied", "Add it to the server's authorized_keys.", undefined, { log: false });
     } catch (e) {
       const msg = String(e);
       toast.error(
@@ -2946,7 +2946,7 @@ function WordPressSection({
             type="button"
             onClick={() => {
               void navigator.clipboard.writeText(link);
-              toast.success("Link copied");
+              toast.success("Link copied", undefined, undefined, { log: false });
             }}
             className="underline hover:text-text"
           >

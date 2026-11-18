@@ -807,7 +807,7 @@ export function ServerRail() {
     };
     try {
       await saveProfile(copy);
-      toast.success(`Duplicated as “${name}”`);
+      toast.success(`Duplicated as “${name}”`, undefined, undefined, { log: false });
     } catch (e) {
       toastError(e, `Couldn't duplicate ${p.name}`);
     }

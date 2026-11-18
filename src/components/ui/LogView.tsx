@@ -223,7 +223,7 @@ export function LogView({
 
   const copyAll = () => {
     void navigator.clipboard.writeText(linesRef.current.join("\n"));
-    toast.info("Log copied", `${linesRef.current.length} lines`);
+    toast.info("Log copied", `${linesRef.current.length} lines`, undefined, { log: false });
   };
 
   const theme = TERMINAL_THEMES[themeKey];

@@ -150,8 +150,16 @@ export const tauriFileSystem: FileSystemAdapter = {
   copy: (sessionId, from, to) => ipc.copyPath(sessionId, from, to),
 
   // Copy / paste / move confirmations and failures go to the toast stack.
+  // Confirmations ("Copied 3 items") are ephemeral: they stay out of the
+  // notification centre and its unread count; failures are logged.
   notify: (message, variant = "success") => {
-    useToasts.getState().push({ variant, title: message, duration: variant === "error" ? 8000 : 3000 });
+    useToasts.getState().push({
+      variant,
+      title: message,
+      duration: variant === "error" ? 8000 : 3000,
+      log: variant === "error",
+      detail: variant === "error" ? message : undefined,
+    });
   },
 
   // Server-side archive then download. Returns once the transfer is queued; the

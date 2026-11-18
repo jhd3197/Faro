@@ -208,7 +208,7 @@ export const useDedupe = create<DedupeStoreState>((set, get) => ({
         );
       }
     } catch (e) {
-      toast.error("Delete failed", String(e));
+      toast.error("Couldn't delete the duplicates", String(e), undefined, { detail: String(e) });
     } finally {
       set({ deleting: false });
     }

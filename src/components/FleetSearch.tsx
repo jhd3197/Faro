@@ -112,7 +112,7 @@ function FleetSearch() {
   };
   const copyPath = (path: string) => {
     navigator.clipboard.writeText(path);
-    toast.info("Path copied", path);
+    toast.info("Path copied", path, undefined, { log: false });
   };
 
   const done = state === "done";
