@@ -69,3 +69,6 @@ docs/screenshots/*.png
 __pycache__/
 *.pyc
 scripts/.cert-lab/
+
+# Local verification screenshots
+.shots/
