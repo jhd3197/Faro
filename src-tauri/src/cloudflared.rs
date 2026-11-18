@@ -119,14 +119,32 @@ pub fn parse_version(out: &str) -> Option<String> {
 }
 
 pub async fn version(path: &Path) -> Option<String> {
-    let out = tokio::time::timeout(
-        QUICK_TIMEOUT,
-        tokio::process::Command::new(path).arg("--version").no_console_window().output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    parse_version(&String::from_utf8_lossy(&out.stdout)).or_else(|| parse_version(&String::from_utf8_lossy(&out.stderr)))
+    // A binary written moments ago (an install) can still be open for writing
+    // in a child some other thread forked meanwhile, and Unix then refuses to
+    // run it ("text file busy"). That clears as soon as the child execs, so
+    // try again shortly instead of calling the download broken.
+    for attempt in 1..=5 {
+        let run = tokio::time::timeout(
+            QUICK_TIMEOUT,
+            tokio::process::Command::new(path).arg("--version").no_console_window().output(),
+        )
+        .await
+        .ok()?;
+        match run {
+            Ok(out) => {
+                return parse_version(&String::from_utf8_lossy(&out.stdout))
+                    .or_else(|| parse_version(&String::from_utf8_lossy(&out.stderr)))
+            }
+            Err(e) if text_file_busy(&e) && attempt < 5 => tokio::time::sleep(Duration::from_millis(100)).await,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// ETXTBSY: the executable is still open for writing somewhere.
+fn text_file_busy(e: &std::io::Error) -> bool {
+    cfg!(unix) && e.raw_os_error() == Some(26)
 }
 
 /// `2026.10.4` < `2026.11.0`; non-numeric parts compare as 0.
