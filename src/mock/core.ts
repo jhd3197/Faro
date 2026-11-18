@@ -252,6 +252,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "list_directory":
       return vfs.list(a.sessionId, a.path);
     case "browse_directory":
+      // window.__listDelay (ms) slows listings so the deferred skeleton shows.
+      { const ms = Number((window as unknown as { __listDelay?: number }).__listDelay) || 0; if (ms) await new Promise((r) => setTimeout(r, ms)); }
       return { entries: vfs.list(a.sessionId, a.path), skippedEntries: 0 };
     case "capabilities":
       return data.capabilities(a.sessionId);
