@@ -2,6 +2,7 @@
 // data so the whole UI renders populated without the Rust backend. Unhandled
 // commands resolve to null, which is harmless for the screens we capture.
 import * as data from "./data";
+import * as vfs from "./vfs";
 import * as transfers from "./transfers";
 import * as sysmon from "./sysmon";
 import * as docker from "./docker";
@@ -242,9 +243,9 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
 
     // ---- files ----
     case "list_directory":
-      return data.listDir(a.sessionId, a.path);
+      return vfs.list(a.sessionId, a.path);
     case "browse_directory":
-      return { entries: data.listDir(a.sessionId, a.path), skippedEntries: 0 };
+      return { entries: vfs.list(a.sessionId, a.path), skippedEntries: 0 };
     case "capabilities":
       return data.capabilities(a.sessionId);
     case "read_file_preview":
@@ -260,10 +261,16 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       // UI (toggle → thumbnail render → downscale) without a real backend.
       return "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAANElEQVR42n3EQQEAEAAEwY0jhBDe3kIIIYQQQmjFJdjHDKXfZ6jJ0JJhJMNMhpUMOxlOMh/OWKPBK+ZUdQAAAABJRU5ErkJggg==";
     case "rename_path":
+      return vfs.rename(a.sessionId, a.from, a.to), null;
     case "delete_path":
+      return vfs.remove(a.sessionId, a.path), null;
     case "create_directory":
-    case "chmod_path":
+      return vfs.mkdir(a.sessionId, a.path), null;
     case "duplicate_path":
+      return vfs.duplicate(a.sessionId, a.path), null;
+    case "copy_path":
+      return vfs.copy(a.sessionId, a.from, a.to), null;
+    case "chmod_path":
       return null;
     case "start_archive_download":
       return "t-archive";
@@ -328,6 +335,13 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     }
     case "start_upload":
       return transfers.start("upload", a.localPath, a.remoteDir);
+    case "inspect_upload_paths":
+      // What an upload would send: one entry per picked path (a name with an
+      // extension is a file, anything else a folder).
+      return (a.paths as string[]).map((p) => {
+        const dir = !/\.[^\\/.]+$/.test(p);
+        return { path: p, kind: dir ? "directory" : "file", files: dir ? 0 : 1, directories: dir ? 1 : 0, directoryPaths: [], fingerprint: `mock:${p}`, size: dir ? 0 : 1204 };
+      });
     case "start_archive":
       return "t-new";
     case "start_directory_download":
