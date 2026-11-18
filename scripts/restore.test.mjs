@@ -34,6 +34,13 @@ async function boot(page, url) {
   throw new Error("app never booted");
 }
 
+// Close requests resolve only once the gate is answered, so never await
+// them inside page.evaluate; poll a flag instead.
+const startClose = page => page.evaluate(() => {
+  window.__closeDone = false;
+  window.__demo.requestClose().then(() => { window.__closeDone = true; });
+});
+const closeDone = page => page.waitForFunction(() => window.__closeDone, { timeout: 10000 });
 const settle = page => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
 const saved = page => page.evaluate(() => {
   const all = JSON.parse(sessionStorage.getItem("faro-mock-discovery") || "{}");
@@ -55,7 +62,8 @@ test("session restore and quit gate", { timeout: 240000 }, async () => {
     page.on("pageerror", e => errors.push(e.message));
     await boot(page, url);
 
-    // --- split ratio persists -------------------------------------------
+    // --- split ratio persists ---
+    console.log("step: split ratio persists");
     await page.waitForFunction(() => window.__demo.useConnections.getState().activeSessionId, { timeout: 20000 });
     await page.evaluate(() => window.__demo.useSettings.getState().setBrowserLayout("dual"));
     await page.waitForSelector(SEP);
@@ -73,7 +81,8 @@ test("session restore and quit gate", { timeout: 240000 }, async () => {
     assert.equal(snap.activeProfileId, focused, "snapshot keys the server by profile id");
     assert.equal(snap.connected, true);
 
-    // --- Settings: Restore last session toggle + last section ------------
+    // --- Settings: Restore last session toggle + last section ---
+    console.log("step: Settings: Restore last session toggle + last section");
     await page.evaluate(() => window.__demo.useLayout.getState().openDialog("settings"));
     await page.waitForSelector('[data-settings-section="connections"]');
     await page.click('[data-settings-section="connections"]');
@@ -87,7 +96,8 @@ test("session restore and quit gate", { timeout: 240000 }, async () => {
     snap = await saved(page);
     assert.equal(snap.settingsSection, "connections");
 
-    // --- reload: split, section and focused server come back -------------
+    // --- reload: split, section and focused server come back ---
+    console.log("step: reload: split, section and focused server come back");
     // Focus a different server first so the restore has something to do.
     const other = await page.evaluate((cur) => {
       const d = window.__demo.useConnections.getState();
@@ -107,7 +117,8 @@ test("session restore and quit gate", { timeout: 240000 }, async () => {
     await page.waitForSelector('[data-settings-section="connections"][aria-current="page"]');
     await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
 
-    // --- "Restore last session" off: no reconnect -----------------------
+    // --- "Restore last session" off: no reconnect ---
+    console.log("step: restore setting off");
     const page2 = await browser.newPage();
     page2.on("pageerror", e => errors.push(e.message));
     await page2.evaluateOnNewDocument(() => {
@@ -124,14 +135,25 @@ test("session restore and quit gate", { timeout: 240000 }, async () => {
     assert.equal(await page2.evaluate(() => window.__demo.useSession.getState().snapshot.splitRatio), 0.3, "injected snapshot read before paint");
     await page2.close();
 
-    // --- quit gate --------------------------------------------------------
+    // --- quit gate ---
+    console.log("step: quit gate");
     // Nothing pending: closes straight away.
     await page.evaluate(() => { window.__destroyed = false; });
     await page.evaluate(() => {
       window.__demo.useTransfers.setState({ byId: {} });
       window.__demo.useEditor.setState({ edits: {} });
     });
-    await page.evaluate(() => window.__demo.requestClose());
+    await startClose(page);
+    try {
+      await closeDone(page);
+    } catch {
+      const why = await page.evaluate(() => ({
+        gate: document.querySelector("[data-quit-gate]")?.textContent ?? null,
+        transfers: Object.values(window.__demo.useTransfers.getState().byId).map(t => `${t.id}:${t.status}`),
+        edits: Object.keys(window.__demo.useEditor.getState().edits),
+      }));
+      assert.fail(`idle close never finished: ${JSON.stringify(why)}`);
+    }
     assert.equal(await page.evaluate(() => window.__destroyed), true, "idle app closes without asking");
     assert.equal(await page.$("[data-quit-gate]"), null);
 
@@ -149,7 +171,7 @@ test("session restore and quit gate", { timeout: 240000 }, async () => {
       window.__demo.useEditor.setState({ edits: { e1: { editId: "e1", sessionId: "s", remotePath: "/etc/nginx/nginx.conf",
         localTempPath: "C:/tmp/nginx.conf", lastSavedAt: 0, lastBytes: null, lastError: null } } });
     });
-    let closing = page.evaluate(() => window.__demo.requestClose());
+    await startClose(page);
     await page.waitForSelector("[data-quit-gate]");
     const rows = await page.$$eval("[data-quit-list] li:not([data-quit-more])", els => els.map(e => e.textContent.trim()));
     assert.equal(rows.length, 5);
@@ -160,23 +182,26 @@ test("session restore and quit gate", { timeout: 240000 }, async () => {
 
     // Cancel keeps the window.
     await page.click("[data-quit-gate] button:not([data-quit-anyway])");
-    await closing;
+    await closeDone(page);
     assert.equal(await page.$("[data-quit-gate]"), null);
     assert.equal(await page.evaluate(() => window.__destroyed), false, "Cancel keeps Faro open");
 
     // Escape cancels too.
-    closing = page.evaluate(() => window.__demo.requestClose());
+    await startClose(page);
     await page.waitForSelector("[data-quit-gate]");
+    // Focus starts on Cancel, so Escape and Enter can't quit by accident.
+    await page.waitForFunction(() => document.activeElement?.closest("[data-quit-gate]")
+      && !document.activeElement.hasAttribute("data-quit-anyway"), { timeout: 5000 });
     await page.keyboard.press("Escape");
-    await closing;
+    await closeDone(page);
     assert.equal(await page.evaluate(() => window.__destroyed), false);
 
     // Quit anyway flushes the snapshot and closes.
     await page.evaluate(() => window.__demo.useSession.getState().setSplitRatio(0.4));
-    closing = page.evaluate(() => window.__demo.requestClose());
+    await startClose(page);
     await page.waitForSelector("[data-quit-anyway]");
     await page.click("[data-quit-anyway]");
-    await closing;
+    await closeDone(page);
     assert.equal(await page.evaluate(() => window.__destroyed), true, "Quit anyway closes");
     assert.equal((await saved(page)).splitRatio, 0.4, "close flushes the pending snapshot immediately");
 
