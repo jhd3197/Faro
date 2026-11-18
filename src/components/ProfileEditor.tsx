@@ -65,6 +65,7 @@ import { ipc, type OAuthApp } from "@/lib/ipc";
 import { messageOf } from "@/lib/errors";
 import { ConnectionHelp } from "@/components/ui/ConnectionHelp";
 import { CopyTextButton } from "@/components/ui/CopyText";
+import { ShowMore } from "@/components/ui/ShowMore";
 import { toast } from "@/stores/toastStore";
 import { isComposing } from "@faro/file-ui";
 
@@ -1532,9 +1533,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                   {testResult.ok ? "Connection works" : testResult.title}
                 </div>
                 {!testResult.ok && (
-                  <div className="mt-0.5 max-h-32 select-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] text-text-muted">
+                  <ShowMore lines={4} className="mt-0.5 max-h-48 select-text overflow-y-auto text-[11px] text-text-muted">
                     {testResult.message}
-                  </div>
+                  </ShowMore>
                 )}
                 {!testResult.ok && <AccessGuideLink detail={testResult.message} />}
               </div>

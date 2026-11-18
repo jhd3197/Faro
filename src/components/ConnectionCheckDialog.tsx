@@ -9,6 +9,7 @@ import { CopyTextButton } from "./ui/CopyText";
 import { ConnectionHelp } from "@/components/ui/ConnectionHelp";
 import type { ConnectionProfile, DiagnosticReport } from "@/lib/types";
 import { AccessGuideLink } from "./CloudflareConnectSheet";
+import { ShowMore } from "@/components/ui/ShowMore";
 
 // Right-click › Test connection…: runs the same step-by-step check as the
 // editor's Test connection on a saved server, and shows where it stopped.
@@ -124,7 +125,7 @@ function CheckPanel({
                   <StepMark state={s.ok ? "ok" : "fail"} />
                   <div className="min-w-0 flex-1">
                     <div className={cn("text-[12.5px] font-medium", !s.ok && "text-danger")}>{s.label}</div>
-                    {!s.ok && <div className="mt-0.5 text-[11.5px] leading-relaxed text-text-muted">{s.detail}</div>}
+                    {!s.ok && <ShowMore lines={4} className="mt-0.5 text-[11.5px] leading-relaxed text-text-muted">{s.detail}</ShowMore>}
                     {!s.ok && <AccessGuideLink detail={s.detail} />}
                   </div>
                   <span className="shrink-0 font-mono text-[10.5px] text-text-dim">{fmtMs(s.elapsedMs)}</span>

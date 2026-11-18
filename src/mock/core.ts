@@ -554,6 +554,23 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       // `window.__diag = "auth"` makes the check fail at sign-in (screenshots).
       const diag = (window as unknown as { __diag?: string }).__diag;
       await new Promise((r) => setTimeout(r, diag ? 900 : 0));
+      // `"long"`: a multi-line failure, for the Show more toggle.
+      if (diag === "long")
+        return {
+          ok: false,
+          steps: [
+            {
+              label: "Destination connection and sign-in",
+              ok: false,
+              detail:
+                "ssh: handshake failed: no matching host key type found. Their offer: ssh-rsa,ssh-dss\n" +
+                "Tried: C:\\Users\\demo\\.ssh\\id_ed25519, C:\\Users\\demo\\.ssh\\id_rsa, agent (2 keys)\n" +
+                "Server said: Permission denied (publickey,password).\n" +
+                "The server only offers legacy host key types. Enable ssh-rsa for this host in the connection's Advanced settings, or update the server's sshd_config.",
+              elapsedMs: 1412,
+            },
+          ],
+        };
       if (diag === "auth")
         return {
           ok: false,

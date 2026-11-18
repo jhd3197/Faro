@@ -25,6 +25,8 @@ import type {
 } from "@/lib/types";
 import { SyncRecovery } from "./SyncRecovery";
 import { cn } from "@/lib/cn";
+import { SelectAll } from "@/components/ui/SelectAll";
+import { ShowMore } from "@/components/ui/ShowMore";
 
 interface Props {
   localPath: string;
@@ -217,7 +219,7 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
         {error && (
           <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-2 text-[11.5px]">
             <AlertTriangle size={12} className="mt-0.5 shrink-0 text-danger" />
-            <span className="break-all">{error}</span>
+            <ShowMore lines={3} className="min-w-0">{error}</ShowMore>
           </div>
         )}
 
@@ -226,7 +228,7 @@ export function SyncDialog({ localPath, remotePath, onClose }: Props) {
             root={direction === "remoteToLocal" ? localPath : remotePath} local={direction === "remoteToLocal"}
             onRestored={() => { setPlan(null); setSkipped(new Set()); }} />
         ) : plan && (
-          <PlanSummary plan={plan} skipped={skipped} disabled={executing} onToggle={(relative) => setSkipped(before => {
+          <PlanSummary plan={plan} skipped={skipped} disabled={executing} onSetSkipped={setSkipped} onToggle={(relative) => setSkipped(before => {
             const next = new Set(before);
             if (next.has(relative)) next.delete(relative); else next.add(relative);
             return next;
@@ -344,8 +346,9 @@ function DirectionButton({
   );
 }
 
-function PlanSummary({ plan, skipped, onToggle, disabled }: {
-  plan: SyncPlan; skipped: Set<string>; onToggle: (relative: string) => void; disabled: boolean;
+function PlanSummary({ plan, skipped, onToggle, onSetSkipped, disabled }: {
+  plan: SyncPlan; skipped: Set<string>; onToggle: (relative: string) => void;
+  onSetSkipped: (next: Set<string>) => void; disabled: boolean;
 }) {
   const [visibleCopies, setVisibleCopies] = useState(200);
   const both = plan.copies.length > 0 && plan.deletes.length > 0;
@@ -369,6 +372,25 @@ function PlanSummary({ plan, skipped, onToggle, disabled }: {
               title={`Copy (${plan.copies.length})`}
               icon={<ArrowRightLeft size={11} className="text-accent" />}
             >
+              {plan.copies.length > 1 && (() => {
+                // One box for every copy: mixed when some are skipped.
+                const all = plan.copies.map((c) => c.relative);
+                const chosen = new Set(all.filter((r) => !skipped.has(r)));
+                return (
+                  <Row>
+                    <SelectAll
+                      visible={all}
+                      selected={chosen}
+                      disabled={disabled}
+                      label="Copy all"
+                      onChange={(next) => onSetSkipped(new Set(all.filter((r) => !next.has(r))))}
+                    />
+                    <span className="text-text-dim">
+                      {chosen.size === all.length ? "All copies" : `${chosen.size} of ${all.length} copies`}
+                    </span>
+                  </Row>
+                );
+              })()}
               {plan.copies.slice(0, visibleCopies).map((c) => (
                 <Row key={c.relative}>
                   <input type="checkbox" checked={!skipped.has(c.relative)} disabled={disabled}

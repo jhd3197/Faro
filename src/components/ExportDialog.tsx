@@ -9,6 +9,8 @@ import { toastError } from "@/lib/errors";
 import type { ExportRequest } from "@/stores/layoutStore";
 import type { ConnectionProfile, ExportFormat } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { SelectAll } from "@/components/ui/SelectAll";
+import { matchesQuery } from "@/components/ui/Menu";
 
 interface Props {
   request: ExportRequest | null;
@@ -32,6 +34,7 @@ export function ExportDialog({ request, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(request?.ids ?? profiles.map((p) => p.id))
   );
+  const [query, setQuery] = useState("");
   const [encrypt, setEncrypt] = useState(true);
   const [secrets, setSecrets] = useState(false);
   const [pass, setPass] = useState("");
@@ -42,14 +45,18 @@ export function ExportDialog({ request, onClose }: Props) {
   useDialog(panelRef, { onClose });
 
   // Ungrouped first, then each group, like the rail.
+  const matches = (p: ConnectionProfile) =>
+    matchesQuery({ label: p.name, keywords: `${p.username ?? ""} ${p.host} ${p.group ?? ""}` }, query);
   const sections = useMemo(() => {
     const groups = new Map<string, ConnectionProfile[]>();
     for (const p of profiles) {
+      if (!matches(p)) continue;
       const g = p.group ?? "";
       groups.set(g, [...(groups.get(g) ?? []), p]);
     }
     return [...groups.entries()].sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)));
-  }, [profiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profiles, query]);
 
   const usable = (p: ConnectionProfile) => format === "faro" || isSsh(p);
   const chosen = profiles.filter((p) => selected.has(p.id) && usable(p));
@@ -60,7 +67,8 @@ export function ExportDialog({ request, onClose }: Props) {
       else next.add(id);
       return next;
     });
-  const allChosen = profiles.filter(usable).every((p) => selected.has(p.id));
+  // Select all acts on the rows the filter shows (and the format allows).
+  const shownIds = sections.flatMap(([, members]) => members.filter(usable).map((p) => p.id));
 
   const encrypted = encrypt || secrets;
   const passProblem =
@@ -163,20 +171,36 @@ export function ExportDialog({ request, onClose }: Props) {
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-bg-subtle">
-            <label className="flex items-center gap-2 border-b border-border bg-bg-panel px-3 py-1.5 text-[11px] text-text-muted">
-              <input
-                type="checkbox"
-                checked={allChosen}
-                onChange={(e) =>
-                  setSelected(e.target.checked ? new Set(profiles.filter(usable).map((p) => p.id)) : new Set())
-                }
-                className="accent-accent"
+            <div className="flex items-center gap-2 border-b border-border bg-bg-panel px-3 py-1.5 text-[11px] text-text-muted">
+              <SelectAll
+                visible={shownIds}
+                selected={selected}
+                onChange={setSelected}
+                label={query ? "Select all shown" : "Select all"}
               />
-              <span data-testid="export-count">
+              <span data-testid="export-count" className="flex-1">
                 {chosen.length} of {profiles.filter(usable).length} selected
               </span>
-            </label>
+              {profiles.length > 5 && (
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDownCapture={(e) => {
+                    if (e.key === "Escape" && query) {
+                      e.stopPropagation();
+                      setQuery("");
+                    }
+                  }}
+                  placeholder="Filter"
+                  aria-label="Filter connections"
+                  className="w-32 min-w-0 rounded border border-border bg-bg-subtle px-1.5 py-0.5 text-[11px] text-text outline-none focus:border-accent"
+                />
+              )}
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
+              {sections.length === 0 && (
+                <div className="px-3 py-6 text-center text-[11.5px] text-text-dim">No connections match “{query}”.</div>
+              )}
               {sections.map(([group, members]) => (
                 <div key={group || "(ungrouped)"}>
                   {group && (
