@@ -29,6 +29,8 @@ import { useCfConnect } from "@/components/CloudflareConnectSheet";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
 import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
 import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocker } from "./docker";
+// window.__primitives: a bench for the shared UI primitives (tests only).
+import "./primitives";
 
 (window as any).__demo = {
   useLayout,
