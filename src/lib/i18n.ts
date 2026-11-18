@@ -738,6 +738,21 @@ const ZH: Record<string, string> = {
   "Key file or path not found last time": "上次找不到密钥文件或路径",
   "Sorted by name": "已按名称排序",
   "Switch the sort to Custom order to rearrange servers.": "将排序切换为自定义顺序后即可重新排列服务器。",
+  // Command palette: sections, footer keys, empty states
+  Recent: "最近使用",
+  Servers: "服务器",
+  "All commands": "全部命令",
+  navigate: "选择",
+  jump: "翻页",
+  run: "运行",
+  search: "搜索",
+  clear: "清空",
+  back: "返回",
+  close: "关闭",
+  "Search commands": "搜索命令",
+  "No saved servers yet.": "还没有保存的服务器。",
+  "opens every command": "打开全部命令",
+  "Search snippets": "搜索片段",
 };
 
 const ATTRIBUTES = ["title", "aria-label", "placeholder", "alt"];
@@ -757,6 +772,15 @@ function translate(value: string): string {
   }
   const duplicated = normalized.match(/^Duplicated as “(.+)”$/);
   if (duplicated) return value.replace(trimmed, `已复制为“${duplicated[1]}”`);
+  const noMatch = normalized.match(/^No (commands|servers|snippets) match “(.*)”\.$/);
+  if (noMatch) {
+    const what: Record<string, string> = { commands: "命令", servers: "服务器", snippets: "片段" };
+    return value.replace(trimmed, `没有与“${noMatch[2]}”匹配的${what[noMatch[1]]}。`);
+  }
+  const searchFor = normalized.match(/^Search servers for “(.*)”$/);
+  if (searchFor) return value.replace(trimmed, `在服务器中搜索“${searchFor[1]}”`);
+  const why = normalized.match(/^matches: (.+)$/);
+  if (why) return value.replace(trimmed, `匹配：${why[1]}`);
   const deleteMany = normalized.match(/^Delete (\d+) connections$/);
   if (deleteMany) return value.replace(trimmed, `删除 ${deleteMany[1]} 个连接`);
   if (normalized === "Folder Sync — keep folders mirrored to your servers") {

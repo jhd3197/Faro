@@ -21,6 +21,7 @@ import { useTips } from "@/stores/tipsStore";
 import { useSites } from "@/stores/sitesStore";
 import { useSession } from "@/stores/sessionStore";
 import { useEditor } from "@/stores/editorStore";
+import { usePalette } from "@/stores/paletteStore";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "./event";
 import { useCfConnect } from "@/components/CloudflareConnectSheet";
@@ -49,6 +50,8 @@ import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocke
   // Restored session (split, last server, Settings section) and open edits.
   useSession,
   useEditor,
+  // Palette recent commands.
+  usePalette,
   // Ask the window to close, as the title bar's close button does.
   requestClose: () => getCurrentWindow().close(),
   // Convenience: focus a server by profile id (connects if needed).
