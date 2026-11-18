@@ -101,7 +101,7 @@ fn guidance(message: &str) -> String {
     let lower = message.to_lowercase();
     // ssh_cert's refusal for a Cloudflare certificate: the fix is on the server.
     if lower.contains("cloudflare issued a certificate") || lower.contains("refused the cloudflare certificate") {
-        return "The server didn't accept your Cloudflare sign-in. Its admin needs to trust certificates from your Cloudflare Access team once; the Access policy then decides who gets in.".into();
+        return "The server didn't accept your Cloudflare sign-in for this user. Its admin can add you to the people allowed to log in as it, or let anyone your Access policy allows log in.".into();
     }
     if [
         "host key",
@@ -312,7 +312,8 @@ mod tests {
         let advice = guidance(
             "Cloudflare issued a certificate for `jane.doe`, but the server refused it for user `deploy`.",
         );
-        assert!(advice.contains("Cloudflare Access team"));
+        assert!(advice.contains("didn't accept your Cloudflare sign-in"));
+        assert!(advice.contains("add you to the people allowed"));
         assert!(!advice.contains("jane.doe"));
         assert!(!advice.contains("deploy"));
     }

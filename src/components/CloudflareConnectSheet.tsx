@@ -57,6 +57,8 @@ interface CfConnectState {
   steps: Record<StepId, Step>;
   /** The first-time host-key question, answered in the sheet. */
   hostPrompt: HostPromptEvent | null;
+  /** After a refusal: the name on the certificate (e.g. jane.doe). */
+  principal: string | null;
   /** Bumped by Cancel, so a running pass ignores what it gets back. */
   run: number;
   /** After it connects (a `site` link opens its folder). */
@@ -77,9 +79,10 @@ export const useCfConnect = create<CfConnectState>((set, get) => {
     phase: "ready",
     steps: FRESH,
     hostPrompt: null,
+    principal: null,
     run: 0,
     start: (profile, { saved, onDone }) =>
-      set({ profile, saved, onDone, phase: "ready", steps: FRESH, hostPrompt: null }),
+      set({ profile, saved, onDone, phase: "ready", steps: FRESH, hostPrompt: null, principal: null }),
     close: () => {
       const { hostPrompt } = get();
       if (hostPrompt) void ipc.respondToHostPrompt(hostPrompt.requestId, "reject").catch(() => {});
@@ -176,18 +179,22 @@ export const useCfConnect = create<CfConnectState>((set, get) => {
         const message = messageOf(e);
         const refused = /cloudflare issued a certificate|refused the cloudflare certificate/i.test(message);
         step("server", { state: "done", detail: "Trusted" });
+        // The name on the certificate, from ssh_cert's refusal, else the
+        // signed-in email's user part (cloudflared names it that way).
+        const signedIn = /Signed in as ([^@\s]+)@/.exec(get().steps.signin.detail ?? "")?.[1];
+        const principal = /certificate for `([^`]+)`/.exec(message)?.[1] ?? signedIn ?? null;
         step("open", {
           state: "failed",
           detail: refused ? `The server didn't accept your Cloudflare sign-in for ${profile.username}.` : message,
         });
-        set({ phase: refused ? "refused" : "failed" });
+        set({ phase: refused ? "refused" : "failed", principal: refused ? principal : null });
       }
     },
   };
 });
 
 export function CloudflareConnectSheet() {
-  const { profile, saved, phase, steps, hostPrompt, connect, close, answerHost } = useCfConnect();
+  const { profile, saved, phase, steps, hostPrompt, principal, connect, close, answerHost } = useCfConnect();
   const panelRef = useRef<HTMLDivElement>(null);
   useDialog(panelRef, { onClose: close });
   if (!profile) return null;
@@ -200,10 +207,11 @@ export function CloudflareConnectSheet() {
       useLayout.getState().openNewConnection(rest);
     }
   };
+  const who = principal ?? "my Cloudflare login";
   const adminNote =
-    `Faro couldn't log in to ${profile.host} as ${profile.username} with a Cloudflare Access certificate. ` +
-    `Could you let the Access policy decide who logs in as ${profile.username}? It's a one-time change on the server: ` +
-    ACCESS_SSH_GUIDE;
+    `Faro couldn't log in to ${profile.host} as ${profile.username} with my Cloudflare Access certificate` +
+    (principal ? ` (it's for ${principal})` : "") +
+    `. Could you allow ${who} to log in as ${profile.username} on that server? How: ${ACCESS_SSH_GUIDE}`;
 
   const title =
     phase === "ready"
@@ -285,10 +293,12 @@ export function CloudflareConnectSheet() {
             <div className="rounded-md border border-border bg-bg-subtle px-3 py-2.5 text-[11.5px] leading-relaxed text-text-muted">
               <div className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-text">
                 <AlertTriangle size={13} className="text-warning" />
-                One change on the server fixes this for everyone
+                Ask the server's admin to let you in
               </div>
-              The server has to trust certificates from your Cloudflare Access team. After that, the Access policy
-              decides who gets in. Nobody has to be added to the server by hand.
+              The server only lets listed people log in as{" "}
+              <span className="font-mono text-text">{profile.username}</span>. Its admin can add{" "}
+              {principal ? <span className="font-mono text-text">{principal}</span> : "you"} to that list. Or, to manage
+              access only in Cloudflare, they can let anyone your Access policy allows log in.
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -356,9 +366,9 @@ export function CloudflareConnectSheet() {
 }
 
 /// Under a check that failed on a refused Cloudflare certificate: the guide
-/// for the one-time server change.
+/// for the server change.
 export function AccessGuideLink({ detail }: { detail: string }) {
-  if (!/Cloudflare Access team/.test(detail)) return null;
+  if (!/didn't accept your Cloudflare sign-in/.test(detail)) return null;
   return (
     <button
       type="button"

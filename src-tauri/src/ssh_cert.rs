@@ -109,13 +109,12 @@ pub fn refusal(cert: &Certificate, username: &str, issuer: Issuer) -> String {
     }
     if !principals.is_empty() && !principals.iter().any(|p| p == username) {
         return match issuer {
-            // The fix belongs on the server, once: trust the Access team's
-            // certificates for this user, so the Access policy decides who gets
-            // in (docs/cloudflare-access-ssh.md), not a per-person list.
+            // The fix is on the server: list the name for this user (or, opt
+            // in, trust the whole Access policy). docs/cloudflare-access-ssh.md
             Issuer::Cloudflare => format!(
                 "Cloudflare issued a certificate for {}, but the server refused it for user `{username}`. \
-                 The server's admin can let your Cloudflare Access policy decide who logs in as `{username}`, \
-                 or log in as {}.",
+                 Ask the server's admin to allow {} to log in as `{username}`, or log in as {}.",
+                listed(principals),
                 listed(principals),
                 listed(principals)
             ),
@@ -255,8 +254,7 @@ pub(crate) mod tests {
         assert_eq!(
             refusal(&cert, "deploy", Issuer::Cloudflare),
             "Cloudflare issued a certificate for `jane.doe`, but the server refused it for user `deploy`. \
-             The server's admin can let your Cloudflare Access policy decide who logs in as `deploy`, \
-             or log in as `jane.doe`."
+             Ask the server's admin to allow `jane.doe` to log in as `deploy`, or log in as `jane.doe`."
         );
         assert!(refusal(&cert, "jane.doe", Issuer::Cloudflare).contains("TrustedUserCAKeys"));
         assert!(refusal(&cert, "deploy", Issuer::File).contains("get a certificate that includes `deploy`"));

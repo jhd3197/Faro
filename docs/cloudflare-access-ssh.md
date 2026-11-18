@@ -1,4 +1,4 @@
-# Let the Cloudflare Access policy decide who logs in
+# Let people log in with their Cloudflare sign-in
 
 When you connect to a server with **Cloudflare sign-in**, Cloudflare Access
 issues a short-lived SSH certificate for you. The certificate is named after
@@ -6,23 +6,29 @@ your email: `jane.doe@example.com` gets a certificate for `jane.doe`.
 
 Out of the box, OpenSSH only accepts that certificate for the account with the
 same name (`jane.doe`). To log in to a shared account such as `deploy`, the
-server has to say who may use it. Listing people one by one in a principals
-file works, but then every new teammate means editing every server.
+server has to say who may use it.
 
-This guide sets the server up once so that **anyone the Access policy lets
-through can log in as the accounts you choose**. Adding or removing a person
-happens in the Access policy, not on the server.
+> If Faro shows *"Cloudflare issued a certificate for `jane.doe`, but the server
+> refused it for user `deploy`"*, this page is the fix. Send it to the server's
+> admin.
 
-> If you see *"Cloudflare issued a certificate for `jane.doe`, but the server
-> refused it for user `deploy`"* in Faro, this is the fix. Send this page to the
-> server's admin.
+There are two ways to set this up:
+
+- **[Listed people](#listed-people) (recommended).** The server keeps a list of
+  who may log in as each account. Adding someone means adding a line.
+- **[Anyone the Access policy allows](#anyone-the-access-policy-allows)
+  (opt-in).** The server accepts any certificate from your Access team for the
+  accounts you choose, so access is managed only in Cloudflare.
+
+Both need the Access CA trusted first.
 
 ## What you need
 
 - Root on the server.
 - The public key of the SSH application's certificate authority (CA) in
   Cloudflare Zero Trust. If the server was set up with Faro's **Move behind
-  Cloudflare**, it is already at `/etc/ssh/faro_cloudflare_ca.pub`.
+  Cloudflare**, the CA and the listed-people setup below are already in place:
+  use **Share › Invite…** on the connection to add someone.
 
 ## 1. Trust the Access CA
 
@@ -31,17 +37,43 @@ Skip this if `TrustedUserCAKeys` already points at the Access CA in
 
 ```sh
 # Paste the CA public key (one line starting with ecdsa-sha2-nistp256 …)
-sudo tee /etc/ssh/cloudflare_access_ca.pub
-sudo chmod 644 /etc/ssh/cloudflare_access_ca.pub
+sudo tee /etc/ssh/faro_cloudflare_ca.pub
+sudo chmod 644 /etc/ssh/faro_cloudflare_ca.pub
 ```
 
 Add near the top of `/etc/ssh/sshd_config`, before any `Match` block:
 
 ```
-TrustedUserCAKeys /etc/ssh/cloudflare_access_ca.pub
+TrustedUserCAKeys /etc/ssh/faro_cloudflare_ca.pub
 ```
 
-## 2. Accept any Access certificate for the shared accounts
+## Listed people
+
+Each account gets a file listing the certificate names that may log in as it,
+one per line. Add this line to `/etc/ssh/sshd_config`, next to the one above:
+
+```
+AuthorizedPrincipalsFile /etc/ssh/faro_principals/%u
+```
+
+Then, to let `jane.doe` log in as `deploy`:
+
+```sh
+sudo mkdir -p /etc/ssh/faro_principals
+echo jane.doe | sudo tee -a /etc/ssh/faro_principals/deploy
+```
+
+To let her log in as her own account too, add `jane.doe` to
+`/etc/ssh/faro_principals/jane.doe`. With this line in place, an account with no
+file accepts no certificates. Remove a line to take someone's access away. The
+Access policy still has to let them in as well.
+
+## Anyone the Access policy allows
+
+**Opt-in.** Anyone your Access policy admits can then log in as the accounts you
+list here, without being added on the server. Use it when Cloudflare is where
+you manage who gets in. Removing someone from the policy takes effect at their
+next sign-in, and certificates expire within minutes.
 
 This small script prints the names inside the certificate sshd is checking.
 sshd only asks after it has confirmed the certificate was signed by the trusted
@@ -66,22 +98,12 @@ Match User deploy,www-data
     AuthorizedPrincipalsCommandUser nobody
 ```
 
-## 3. Check and reload
+This works alongside the listed-people file: other accounts keep their lists.
+
+## Check and reload
 
 ```sh
 sudo sshd -t && sudo systemctl reload ssh   # or: reload sshd
 ```
 
 Then use **Try again** in Faro.
-
-## What this allows, and what it doesn't
-
-- Anyone the Access policy admits can log in as the accounts in the `Match User`
-  line. Remove someone from the policy and they lose access at their next
-  sign-in; certificates expire within minutes.
-- Other accounts keep the normal rule: a certificate for `jane.doe` only logs in
-  as `jane.doe`.
-- Certificates not signed by the Access CA are refused, as before.
-- Want a per-person list for one account instead? Keep using
-  `AuthorizedPrincipalsFile` for that account and leave it out of the
-  `Match User` line.

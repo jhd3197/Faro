@@ -134,7 +134,7 @@ const ZH: Record<string, string> = {
   "Use a key or password instead": "改用密钥或密码",
   "Copy note for your admin": "复制给管理员的说明",
   "Server setup guide": "服务器设置指南",
-  "One change on the server fixes this for everyone": "在服务器上改一次，所有人都能用",
+  "Ask the server's admin to let you in": "请服务器管理员允许你登录",
   "New group…": "新建分组…",
   "Rename group…": "重命名分组…",
   "Move to ": "移动到 ",

@@ -234,7 +234,7 @@ try {
     await link("ssh.locked.example.com");
     await until(sheet);
     await press("Connect");
-    ok("a refused certificate shows the server-side fix", !!(await until(async () => (await sheet()).includes("One change on the server"))));
+    ok("a refused certificate shows the server-side fix", !!(await until(async () => (await sheet()).includes("Ask the server's admin to let you in"))));
     ok("…with the admin note and guide", (await sheet()).includes("Copy note for your admin") && (await sheet()).includes("Server setup guide"));
     await shootDialog("link-refused", '[data-testid="cf-connect"]');
     await press("Close");

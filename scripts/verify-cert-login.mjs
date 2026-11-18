@@ -274,7 +274,7 @@ try {
   openLink(`faro://connect?protocol=sftp&host=${HOST}&username=deploy&via=cloudflare&auth=cloudflarecert&name=e2e%20link%20deploy`);
   await waitFor(async () => ((await sheet()).includes("Connect to e2e link deploy") ? true : null), 20000);
   await sheetButton("Connect");
-  const refusedSheet = await waitFor(async () => ((await sheet()).includes("One change on the server") ? await sheet() : null), 60000);
+  const refusedSheet = await waitFor(async () => ((await sheet()).includes("Ask the server's admin to let you in") ? await sheet() : null), 60000);
   check(
     "a refused certificate shows the server fix, with the admin note and guide",
     !!refusedSheet && /Copy note for your admin/.test(refusedSheet) && /Server setup guide/.test(refusedSheet),
