@@ -11,6 +11,7 @@ import { FileBrowser } from "./components/FileBrowser";
 import { FileUiBridge } from "./components/FileUiBridge";
 import { TerminalDock } from "./components/Terminal";
 import { TransferQueue } from "./components/TransferQueue";
+import { ResizablePanel } from "./components/ResizablePanel";
 import { CliUpdatePrompt } from "./components/CliUpdatePrompt";
 import { UpdatePrompt } from "./components/UpdatePrompt";
 import { Settings } from "./components/Settings";
@@ -96,6 +97,9 @@ export default function App() {
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const supportsTerminal = activeProfile?.protocol === "sftp";
 
+  // Containers the docked panels measure against (their size caps).
+  const columnRef = useRef<HTMLDivElement>(null);
+  const workRowRef = useRef<HTMLDivElement>(null);
   const terminalOpen = useLayout((s) => s.terminalOpen);
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
   const terminalVisible = !!activeSessionId && terminalOpen && supportsTerminal;
@@ -216,8 +220,8 @@ export default function App() {
       <KeyboardShortcutsDialog />
       <div className="flex flex-1 overflow-hidden">
         {!zen && <ServerRail />}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="relative flex flex-1 overflow-hidden">
+        <div ref={columnRef} className="flex min-w-0 flex-1 flex-col">
+          <div ref={workRowRef} className="relative flex min-h-[160px] flex-1 overflow-hidden">
             {/* The Agent Bridge page covers the work area (panes stay mounted
                 underneath so their paths survive opening it). */}
             {dialog === "agentBridge" && <AgentBridgePage onClose={closeDialog} />}
@@ -234,29 +238,39 @@ export default function App() {
                 {browserLayout === "dual" ? <DualPaneBrowser /> : <FileBrowser />}
               </FileUiBridge>
             </div>
-            {agentDrawerOpen && !zen && <AgentDrawer />}
+            {agentDrawerOpen && !zen && (
+              <ResizablePanel id="agentDrawer" label="Agent" axis="x" defaultSize={340} min={280} maxFraction={0.5} containerRef={workRowRef}>
+                <AgentDrawer />
+              </ResizablePanel>
+            )}
           </div>
           {consoleOpen && !zen && (
-            <div className="h-64 border-t border-border">
+            <ResizablePanel id="console" label="Agent console" axis="y" defaultSize={256} min={120} maxFraction={0.7} containerRef={columnRef}>
               <AgentConsoleDock />
-            </div>
+            </ResizablePanel>
           )}
           {/* The terminal dock stays mounted even when hidden so background
               shells survive connection-tab switches and toggling it closed;
               visibility is CSS, not mount/unmount. */}
-          <div
-            className={cn(
-              terminalVisible ? "h-72 border-t border-border" : "h-0 overflow-hidden"
-            )}
+          <ResizablePanel
+            id="terminal"
+            label="Terminal"
+            axis="y"
+            defaultSize={288}
+            min={120}
+            maxFraction={0.75}
+            containerRef={columnRef}
+            hidden={!terminalVisible}
+            keepMounted
           >
             <TerminalDock
               sessionId={supportsTerminal ? activeSessionId : null}
               visible={terminalVisible}
             />
-          </div>
+          </ResizablePanel>
           <NativeFileDrop />
           <UploadReports />
-          <TransferQueue />
+          <TransferQueue containerRef={columnRef} />
           <UpdatePrompt />
           <CliUpdatePrompt />
           {!zen && <TipStrip />}

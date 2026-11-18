@@ -753,6 +753,16 @@ const ZH: Record<string, string> = {
   "No saved servers yet.": "还没有保存的服务器。",
   "opens every command": "打开全部命令",
   "Search snippets": "搜索片段",
+  // Resizable panels and collapsed strips
+  Preview: "预览",
+  "Agent console": "智能代理控制台",
+  "Drag to resize; double-click to reset": "拖动调整大小；双击重置",
+  "Expand Local": "展开本地",
+  "Expand Remote": "展开远程",
+  "Expand Preview": "展开预览",
+  "Expand Terminal": "展开终端",
+  "Expand Agent": "展开智能代理",
+  "Expand Agent console": "展开智能代理控制台",
 };
 
 const ATTRIBUTES = ["title", "aria-label", "placeholder", "alt"];

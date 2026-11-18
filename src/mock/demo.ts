@@ -22,6 +22,7 @@ import { useSites } from "@/stores/sitesStore";
 import { useSession } from "@/stores/sessionStore";
 import { useEditor } from "@/stores/editorStore";
 import { usePalette } from "@/stores/paletteStore";
+import { usePanelSizes } from "@/stores/panelSizesStore";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "./event";
 import { useCfConnect } from "@/components/CloudflareConnectSheet";
@@ -52,6 +53,7 @@ import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocke
   useEditor,
   // Palette recent commands.
   usePalette,
+  usePanelSizes,
   // Ask the window to close, as the title bar's close button does.
   requestClose: () => getCurrentWindow().close(),
   // Convenience: focus a server by profile id (connects if needed).

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -21,8 +21,9 @@ import { cn } from "@/lib/cn";
 import { fmtEta, fmtRate } from "@/lib/format";
 import { toastError } from "@/lib/errors";
 import { Elapsed } from "./ui/Elapsed";
+import { ResizablePanel } from "./ResizablePanel";
 
-export function TransferQueue() {
+export function TransferQueue({ containerRef }: { containerRef: RefObject<HTMLElement | null> }) {
   const {
     byId,
     panelOpen,
@@ -74,7 +75,19 @@ export function TransferQueue() {
   );
 
   return (
-    <div className="anim-slide-up flex max-h-64 flex-col border-t border-border bg-bg-panel">
+    <ResizablePanel
+      id="transfers"
+      label="Transfers"
+      axis="y"
+      defaultSize={256}
+      min={96}
+      maxFraction={0.7}
+      collapsible={false}
+      fit="max"
+      containerRef={containerRef}
+      className="anim-slide-up"
+    >
+    <div className="flex min-h-0 flex-1 flex-col bg-bg-panel">
       <div className="flex items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1.5">
         <span className="text-xs font-semibold uppercase tracking-wider text-text-muted">
           Transfers
@@ -148,6 +161,7 @@ export function TransferQueue() {
         ))}
       </div>
     </div>
+    </ResizablePanel>
   );
 }
 

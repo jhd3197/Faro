@@ -15,6 +15,7 @@ import { LOCAL_SESSION, type DirEntry } from "@/lib/types";
 import { useSiteBrowser } from "@/hooks/useSiteBrowser";
 import { useRememberedLocalPath } from "@/hooks/useRememberedLocalPath";
 import { FilePreview } from "./FilePreview";
+import { ResizablePanel } from "./ResizablePanel";
 import { cn } from "@/lib/cn";
 
 // Single-pane file browser: the active server is the main view. Uploads go
@@ -82,6 +83,7 @@ export function FileBrowser() {
 
   // Download destination: the setting if present, else the OS Downloads dir.
   const downloadsRef = useRef<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const resolveDest = async (): Promise<string | null> => {
     if (defaultDownloadFolder) return defaultDownloadFolder;
     if (downloadsRef.current == null) {
@@ -190,7 +192,7 @@ export function FileBrowser() {
   const showPreview = filePreview && !!target && !!selectedFile;
 
   return (
-    <div className="relative flex h-full flex-1">
+    <div ref={rootRef} className="relative flex h-full flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
       {/* No connections yet: the server view is the two ways to get one; the
           local listing stays usable with a strip above it. */}
@@ -226,13 +228,23 @@ export function FileBrowser() {
       </div>
       </div>
       {showPreview && (
-        <FilePreview
-          key={`${target}:${selectedFile!.path}`}
-          sessionId={target!}
-          entry={selectedFile!}
-          onDownload={browseLocal ? undefined : () => void onTransfer([selectedFile!])}
-          onClose={() => setFilePreview(false)}
-        />
+        <ResizablePanel
+          id="preview"
+          label="Preview"
+          axis="x"
+          defaultSize={416}
+          min={240}
+          maxFraction={0.6}
+          containerRef={rootRef}
+        >
+          <FilePreview
+            key={`${target}:${selectedFile!.path}`}
+            sessionId={target!}
+            entry={selectedFile!}
+            onDownload={browseLocal ? undefined : () => void onTransfer([selectedFile!])}
+            onClose={() => setFilePreview(false)}
+          />
+        </ResizablePanel>
       )}
       {siteBrowser.dialog}
       {uploadMenu && (
