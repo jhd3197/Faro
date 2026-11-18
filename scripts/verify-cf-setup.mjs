@@ -138,6 +138,7 @@ const directId = crypto.randomUUID();
 /** Run the Move dialog for `name` up to the ports step. */
 async function moveBehindCloudflare(name) {
   await rightClick(`[data-rail-profile-id="${directId}"] button`);
+  await clickText("More", '[role="menu"]', "button[aria-haspopup]");
   await clickText("Move behind Cloudflare…");
   await page.waitForSelector('[role="dialog"] [aria-label="Name"]', { timeout: 10000 });
   await waitFor(() => page.evaluate(() => document.querySelector('[aria-label="Domain"]')?.value));
@@ -282,6 +283,7 @@ try {
   await rightClick(`[data-rail-profile-id="${cf.id}"] button`);
   await clickText("Connect");
   await rightClick(`[data-rail-profile-id="${cf.id}"] button`);
+  await clickText("Share", '[role="menu"]', "button[aria-haspopup]");
   await clickText("Invite…");
   await page.waitForSelector('[aria-label="Email to invite"]', { timeout: 10000 });
   await page.type('[aria-label="Email to invite"]', "bob@example.test");
@@ -309,7 +311,9 @@ try {
   let cli = "";
   try {
     cli = execFileSync(FARO_CLI, ["ls", `${cf.name}:/`], {
-      env: { ...process.env, FARO_DATA_DIR: FARO_E2E_DATA },
+      // A debug faro-cli asks the Bridge to approve direct calls (ecfc942);
+      // this test build skips that, as the CI audit does.
+      env: { ...process.env, FARO_DATA_DIR: FARO_E2E_DATA, FARO_CLI_UNGOVERNED: "1" },
       timeout: 60000,
     }).toString();
   } catch (e) {

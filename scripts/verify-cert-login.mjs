@@ -8,12 +8,17 @@
 //      the hint and the error both name the principal and the user.
 //   3. No service token on the form (it lives with the Cloudflare account).
 //   4. Save: profiles.json keeps the auth type, the rail tooltip names it.
+//   5. Right-click › Test connection: the Cloudflare steps, then the login.
+//   6. A real faro://connect link (issue #86): the connect sheet signs in,
+//      asks about the host key in place, connects; a refused certificate
+//      shows the one-time server fix. ~/.ssh/known_hosts is put back after.
 // The fake cloudflared (examples/stdio_relay.rs copied as cloudflared) needs,
 // next to it: token-lab.faro.test.json, target-lab.faro.test (the lab's
 // host:port) and sshgen-lab.faro.test-key / -cert.pub, signed by the lab CA
 // for principal jane.doe.
 // Env: FARO_E2E_DATA, FAKE_CF, SHOT_DIR. Exit 0 = every check passed.
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer from "puppeteer-core";
@@ -116,6 +121,21 @@ const authOption = () =>
   });
 
 let savedId = null;
+const linkIds = [];
+// "Trust & connect" in the sheet saves the lab's key; put the file back after.
+const knownHosts = path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".ssh", "known_hosts");
+const knownHostsBefore = existsSync(knownHosts) ? readFileSync(knownHosts) : null;
+const sheet = () => page.evaluate(() => document.querySelector('[data-testid="cf-connect"]')?.innerText ?? "");
+const sheetButton = (label) =>
+  page.evaluate(
+    (l) => {
+      const b = [...document.querySelectorAll('[data-testid="cf-connect"] button')].find((x) => x.textContent.trim() === l && !x.disabled);
+      b?.click();
+      return !!b;
+    },
+    label
+  );
+const openLink = (url) => execFileSync("rundll32", ["url.dll,FileProtocolHandler", url]);
 try {
   await invoke("cloudflared_set_custom_path", { path: FAKE_CF });
   await page.reload();
@@ -201,12 +221,86 @@ try {
   check("the rail tooltip names the certificate login", tip === "via Cloudflare Access · Cloudflare certificate", tip ?? "(no tooltip)");
   await page.screenshot({ path: path.join(OUT, "cert-rail.png") });
   await page.mouse.move(800, 500);
+
+  // ---- 5. Right-click › Test connection ------------------------------------
+  await page.click('[aria-label="e2e cert login"]', { button: "right" });
+  await clickButton("Test connection", '[role="menu"]');
+  const report = await waitFor(
+    () =>
+      page.evaluate(() => {
+        const accept = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Accept once");
+        if (accept) accept.click();
+        const d = document.querySelector('[data-testid="connection-check"]');
+        return d && !/Testing /.test(d.innerText) ? d.innerText : null;
+      }),
+    90000
+  );
+  check(
+    "Test connection checks cloudflared and the Access sign-in, then logs in",
+    /works/.test(report ?? "") && /cloudflared/.test(report ?? "") && /Cloudflare sign-in/.test(report ?? "") && /Starting folder access/.test(report ?? ""),
+    (report ?? "(timed out)").replace(/\n/g, " | ")
+  );
+  await page.screenshot({ path: path.join(OUT, "cert-test-popup.png") });
+  await page.keyboard.press("Escape");
+  await waitFor(() => page.evaluate(() => !document.querySelector('[data-testid="connection-check"]')), 5000);
+
+  // ---- 6. A faro://connect link through Cloudflare -------------------------
+  openLink(`faro://connect?protocol=sftp&host=${HOST}&username=jane.doe&via=cloudflare&auth=cloudflarecert&name=e2e%20link`);
+  const ready = await waitFor(async () => ((await sheet()).includes("Connect to e2e link") ? true : null), 20000);
+  check("a Cloudflare link opens the connect sheet, waiting for Connect", !!ready, await sheet());
+  await page.screenshot({ path: path.join(OUT, "cert-link-ready.png") });
+  await sheetButton("Connect");
+  const asked = await waitFor(async () => ((await sheet()).includes("First time connecting") ? await sheet() : null), 60000);
+  check(
+    "it gets cloudflared, signs in, and asks about the new host key in the sheet",
+    !!asked && /Ready/.test(asked) && /Signed in as jane\.doe@example\.com/.test(asked) && /SHA256:/.test(asked),
+    (asked ?? (await sheet())).replace(/\n/g, " | ")
+  );
+  check("…not in the separate host-key dialog", !(await page.evaluate(() => document.body.innerText.includes("Unknown host"))));
+  await page.screenshot({ path: path.join(OUT, "cert-link-hostkey.png") });
+  await sheetButton("Trust & connect");
+  const closed = await waitFor(async () => ((await sheet()) === "" ? true : null), 60000);
+  const linked = (await invoke("list_profiles")).find((p) => p.name === "e2e link");
+  if (linked) linkIds.push(linked.id);
+  check(
+    "then it connects, saves the connection with Cloudflare sign-in, and closes",
+    !!closed && linked?.auth?.kind === "cloudflarecert" && linked?.proxyCommand?.kind === "cloudflare",
+    JSON.stringify(linked?.auth ?? null)
+  );
+  const open = await waitFor(() => page.evaluate(() => (document.body.innerText.includes("jane.doe@lab.faro.test:22") ? true : null)), 20000);
+  check("…and the server is open", !!open);
+  await page.screenshot({ path: path.join(OUT, "cert-link-connected.png") });
+
+  openLink(`faro://connect?protocol=sftp&host=${HOST}&username=deploy&via=cloudflare&auth=cloudflarecert&name=e2e%20link%20deploy`);
+  await waitFor(async () => ((await sheet()).includes("Connect to e2e link deploy") ? true : null), 20000);
+  await sheetButton("Connect");
+  const refusedSheet = await waitFor(async () => ((await sheet()).includes("One change on the server") ? await sheet() : null), 60000);
+  check(
+    "a refused certificate shows the server fix, with the admin note and guide",
+    !!refusedSheet && /Copy note for your admin/.test(refusedSheet) && /Server setup guide/.test(refusedSheet),
+    (refusedSheet ?? (await sheet())).replace(/\n/g, " | ")
+  );
+  await page.screenshot({ path: path.join(OUT, "cert-link-refused.png") });
+  await sheetButton("Close");
+  const deployLink = (await invoke("list_profiles")).find((p) => p.name === "e2e link deploy");
+  if (deployLink) linkIds.push(deployLink.id);
 } catch (e) {
   failures++;
   console.log("  ✗ FAIL  script error —", e.message);
   await page.screenshot({ path: path.join(OUT, "cert-error.png") }).catch(() => {});
 } finally {
   if (savedId) await invoke("delete_profile", { id: savedId }).catch(() => {});
+  for (const name of ["e2e link", "e2e link deploy"]) {
+    // Disconnect through the server menu first (only shown while connected).
+    await page.click(`[aria-label="${name}"]`, { button: "right" }).catch(() => {});
+    await page
+      .evaluate(() => [...document.querySelectorAll('[role="menu"] button')].find((b) => b.textContent.trim().startsWith("Disconnect"))?.click())
+      .catch(() => {});
+    await page.keyboard.press("Escape").catch(() => {});
+  }
+  for (const id of linkIds) await invoke("delete_profile", { id }).catch(() => {});
+  if (knownHostsBefore) writeFileSync(knownHosts, knownHostsBefore);
+  else if (existsSync(knownHosts)) unlinkSync(knownHosts);
   await invoke("cloudflared_set_custom_path", { path: null }).catch(() => {});
   browser.disconnect();
 }
