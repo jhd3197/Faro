@@ -18,6 +18,8 @@ import { HostKeyModal } from "./components/HostKeyModal";
 import { AuthPromptModal } from "./components/AuthPromptModal";
 import { TitleBar } from "./components/TitleBar";
 import { ProfileEditor } from "./components/ProfileEditor";
+import { CloudflareConnectSheet, useCfConnect } from "./components/CloudflareConnectSheet";
+import { ConnectionCheckDialog } from "./components/ConnectionCheckDialog";
 import { GrantDialog } from "./components/GrantDialog";
 import { ImportDialog } from "./components/ImportDialog";
 import { ExportDialog } from "./components/ExportDialog";
@@ -191,6 +193,8 @@ export default function App() {
       )}
       {dialog === "grant" && <GrantDialog onClose={closeDialog} />}
       {dialog === "about" && <AboutDialog onClose={closeDialog} />}
+      <CloudflareConnectSheet />
+      <ConnectionCheckDialog />
       <HostKeyModal />
       <AuthPromptModal />
       <Toaster />
@@ -807,8 +811,42 @@ async function openConnectLink(
   dl: DeepLink,
   openNewConnection: (prefill?: Partial<ConnectionProfile>) => void
 ) {
-  const match = matchLinkProfile(useConnections.getState().profiles, dl);
+  const { profiles, sessions } = useConnections.getState();
+  const match = matchLinkProfile(profiles, dl);
   const path = dl.path?.trim() ? cleanRemotePath(dl.path) : undefined;
+  // Through Cloudflare (issue #86) a link goes from click to files in one
+  // sheet: one Connect, then cloudflared, the Access sign-in, the first host
+  // key. Once connected, this runs again and opens the folder or site.
+  const again = () => void openConnectLink(dl, openNewConnection);
+  const seed = deepLinkToPrefill(dl);
+  if (
+    !match &&
+    seed.protocol === "sftp" &&
+    seed.proxyCommand?.kind === "cloudflare" &&
+    seed.auth?.kind === "cloudflarecert" &&
+    seed.host?.trim() &&
+    seed.username?.trim()
+  ) {
+    const host = seed.host.trim();
+    useCfConnect.getState().start(
+      {
+        ...seed,
+        id: crypto.randomUUID(),
+        name: seed.name?.trim() || host,
+        protocol: "sftp",
+        host,
+        port: seed.port ?? 22,
+        username: seed.username.trim(),
+        auth: { kind: "cloudflarecert" },
+      },
+      { saved: false, onDone: again }
+    );
+    return;
+  }
+  if (match?.proxyCommand?.kind === "cloudflare" && !sessions.some((x) => x.profileId === match.id)) {
+    useCfConnect.getState().start(match, { saved: true, onDone: again });
+    return;
+  }
   if (!match) {
     const prefill = deepLinkToPrefill(dl);
     openNewConnection(prefill);

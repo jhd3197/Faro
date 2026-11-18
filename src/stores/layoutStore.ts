@@ -69,6 +69,10 @@ interface LayoutState {
   connectionPrefill: Partial<ConnectionProfile> | null;
   openNewConnection: (prefill?: Partial<ConnectionProfile>) => void;
 
+  // A saved connection whose editor should open (the rail owns that editor).
+  editProfileId: string | null;
+  openEditProfile: (id: string | null) => void;
+
   // Seed for the grant consent dialog (faro://grant deep link). Cleared when
   // the dialog closes.
   grantPrefill: GrantPrefill | null;
@@ -143,6 +147,9 @@ export const useLayout = create<LayoutState>((set) => ({
   connectionPrefill: null,
   openNewConnection: (prefill) =>
     set({ dialog: "newConnection", connectionPrefill: prefill ?? null }),
+
+  editProfileId: null,
+  openEditProfile: (id) => set({ editProfileId: id }),
 
   grantPrefill: null,
   openGrant: (prefill) => set({ dialog: "grant", grantPrefill: prefill }),

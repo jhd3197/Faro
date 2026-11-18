@@ -764,3 +764,106 @@ async fn live_cert_cloudflare_short_lived_certificate() {
     assert!(err.contains("Cloudflare Access"), "{err}");
     sshgen_clear(host);
 }
+
+/// Acceptance (#86 follow-up): Cloudflare login set up from an admin's
+/// password session on a plain sshd (scripts/cf-setup-lab.yml, deploy /
+/// lab-pass with sudo), certificates signed by the cert lab's CA.
+///
+/// FARO_LIVE_CF_LOGIN=127.0.0.1:2224 FARO_LIVE_CERT=127.0.0.1:2223
+/// FARO_LIVE_CERT_CA=<repo>/scripts/.cert-lab/ca
+/// cargo test -p faro --lib live_cf_login -- --ignored
+#[tokio::test]
+#[ignore = "needs scripts/cf-setup-lab.yml and the cert lab CA"]
+async fn live_cf_login_listed_people_policy_and_restore() {
+    use crate::cf_login::*;
+    use ssh_key::{rand_core::OsRng, Algorithm, LineEnding, PrivateKey};
+    let lab = cert_lab();
+    let port: u16 = std::env::var("FARO_LIVE_CF_LOGIN").expect("FARO_LIVE_CF_LOGIN=host:port").rsplit(':').next().unwrap().parse().unwrap();
+    let ca_pub = lab.ca.public_key().to_openssh().unwrap();
+    let profile = |user: &str, auth: crate::profiles::AuthMethod| {
+        let mut p = lab.profile(user, auth);
+        p.port = port;
+        p
+    };
+
+    // The admin's own session, by password; it must survive every reload.
+    let admin_profile = profile("deploy", crate::profiles::AuthMethod::Password { password: "lab-pass".into() });
+    let conn = connect(&admin_profile).await.unwrap();
+    let admin = crate::session::SshSession::new(admin_profile, conn.handle);
+
+    // Certificates for jane.doe and ana, as key files.
+    let dir = scratch("live-cf-login");
+    let cert_login = |who: &'static str| {
+        let key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
+        let path = dir.join(format!("id_{who}"));
+        std::fs::write(&path, key.to_openssh(LineEnding::LF).unwrap()).unwrap();
+        std::fs::write(dir.join(format!("id_{who}-cert.pub")), lab.sign(key.public_key().key_data().clone(), &[who], 3600)).unwrap();
+        profile("deploy", crate::profiles::AuthMethod::Key { path: path.to_string_lossy().into_owned(), passphrase: None, cert_path: None })
+    };
+    let (jane, ana) = (cert_login("jane.doe"), cert_login("ana"));
+    let logs_in = |p: crate::profiles::ConnectionProfile| async move { connect(&p).await.map(|_| ()) };
+
+    let plan_for = |req: LoginRequest| {
+        let admin = &admin;
+        async move { build_plan(&req, &read_state(admin, "deploy").await.unwrap()).unwrap() }
+    };
+    let req = |people: &[&str], policy: bool| LoginRequest {
+        user: "deploy".into(),
+        ca_key: Some(ca_pub.clone()),
+        add_people: people.iter().map(|s| s.to_string()).collect(),
+        policy,
+        remove: false,
+    };
+    let no_test: Option<fn() -> std::future::Ready<anyhow::Result<()>>> = None;
+
+    // Start clean.
+    let reset = plan_for(LoginRequest { remove: true, ..req(&[], false) }).await;
+    assert!(apply(&admin, &reset, None, no_test).await.unwrap().ok);
+    assert_eq!(read_state(&admin, "deploy").await.unwrap().mode, Mode::NotSetUp);
+    assert!(logs_in(jane.clone()).await.is_err());
+
+    // Listed people: jane.doe, tested with her certificate.
+    let plan = plan_for(req(&["jane.doe@example.com"], false)).await;
+    let r = apply(&admin, &plan, None, Some(|| logs_in(jane.clone()))).await.unwrap();
+    assert!(r.ok && r.tested, "{r:?}");
+    let s = read_state(&admin, "deploy").await.unwrap();
+    assert_eq!((s.mode, s.people.clone()), (Mode::Listed, vec!["jane.doe".to_string()]));
+    assert!(logs_in(ana.clone()).await.is_err(), "ana isn't listed");
+
+    // A failing test login puts everything back.
+    let plan = plan_for(req(&[], true)).await;
+    let r = apply(&admin, &plan, None, Some(|| async { anyhow::bail!("simulated refusal") })).await.unwrap();
+    assert!(!r.ok && r.restored, "{r:?}");
+    assert_eq!(read_state(&admin, "deploy").await.unwrap().mode, Mode::Listed);
+    assert!(logs_in(ana.clone()).await.is_err());
+
+    // A config sshd rejects never goes live.
+    let mut bad = plan_for(req(&[], true)).await;
+    bad.script = bad.script.replace("echo 'TrustedUserCAKeys", "echo 'NoSuchOption yes'\n  echo 'TrustedUserCAKeys");
+    let r = apply(&admin, &bad, None, no_test).await.unwrap();
+    assert!(!r.ok && r.restored && r.output.contains("nothing changed"), "{r:?}");
+    assert_eq!(read_state(&admin, "deploy").await.unwrap().mode, Mode::Listed);
+
+    // Opt in: anyone the CA signed logs in as deploy.
+    let plan = plan_for(req(&[], true)).await;
+    let r = apply(&admin, &plan, None, Some(|| logs_in(ana.clone()))).await.unwrap();
+    assert!(r.ok, "{r:?}");
+    assert_eq!(read_state(&admin, "deploy").await.unwrap().mode, Mode::Policy);
+    logs_in(jane.clone()).await.unwrap();
+
+    // Opt out again: back to the list.
+    let plan = plan_for(LoginRequest { ca_key: None, ..req(&[], false) }).await;
+    assert!(apply(&admin, &plan, None, Some(|| logs_in(jane.clone()))).await.unwrap().ok);
+    assert!(logs_in(ana.clone()).await.is_err());
+
+    // Removing a person from the list.
+    let rm = crate::cf_setup::principal_command("deploy", "jane.doe", false).unwrap();
+    assert!(crate::cf_setup::run_root(&admin, &rm, None).await.unwrap().ok);
+    assert!(logs_in(jane.clone()).await.is_err());
+
+    // The admin's session was never dropped.
+    let me = admin.exec_bounded("whoami", 64, std::time::Duration::from_secs(10), None).await.unwrap();
+    assert_eq!(me.stdout.trim(), "deploy");
+    let reset = plan_for(LoginRequest { remove: true, ..req(&[], false) }).await;
+    assert!(apply(&admin, &reset, None, no_test).await.unwrap().ok);
+}

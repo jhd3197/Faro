@@ -20,6 +20,7 @@ import { useDiscovery } from "@/stores/discoveryStore";
 import { useTips } from "@/stores/tipsStore";
 import { useSites } from "@/stores/sitesStore";
 import { emit } from "./event";
+import { useCfConnect } from "@/components/CloudflareConnectSheet";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
 import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
 import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocker } from "./docker";
@@ -45,6 +46,8 @@ import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocke
   // Convenience: focus a server by profile id (connects if needed).
   focusProfile: (profileId: string) =>
     useConnections.getState().connect(profileId),
+  // Issue #86: the Cloudflare link flow's store (start / connect / close).
+  useCfConnect,
   // Push a mock Tauri event (e.g. a bridge://approval) for screenshots.
   emit,
   // Plan 17 test hooks: replace the mock transfer world (the store re-reads

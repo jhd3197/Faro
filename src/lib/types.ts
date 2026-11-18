@@ -506,6 +506,64 @@ export interface RootRun {
   needsPassword: boolean;
 }
 
+/** Cloudflare login on a server (mirrors `cf_login`). */
+export type CfLoginMode = "notSetUp" | "listed" | "policy";
+
+export interface CfLoginState {
+  user: string;
+  mode: CfLoginMode;
+  caInstalled: boolean;
+  caKey?: string | null;
+  /** A `TrustedUserCAKeys` set by hand, outside Faro's block. */
+  otherCa?: string | null;
+  /** Certificate names allowed to log in as `user`. */
+  people: string[];
+  /** Users anyone in the Access policy may log in as. */
+  policyUsers: string[];
+  unreadable: boolean;
+}
+
+export interface CfLoginRequest {
+  user: string;
+  caKey?: string;
+  addPeople?: string[];
+  policy?: boolean;
+  remove?: boolean;
+}
+
+/** What a change does, shown before it runs. */
+export interface CfLoginPlan {
+  user: string;
+  changes: string[];
+  files: string[];
+  script: string;
+  restoreScript: string;
+  principals: string[];
+  policyUsers: string[];
+}
+
+export interface CfLoginApplyResult {
+  ok: boolean;
+  needsPassword: boolean;
+  output: string;
+  tested: boolean;
+  testError?: string | null;
+  restored: boolean;
+  restoreOutput?: string | null;
+}
+
+export interface CfLoginCa {
+  key?: string | null;
+  error?: string | null;
+  /** A Cloudflare account is connected in Settings. */
+  account: boolean;
+}
+
+export interface CfPersonCommand {
+  principal: string;
+  command: string;
+}
+
 export interface CfZone {
   id: string;
   name: string;

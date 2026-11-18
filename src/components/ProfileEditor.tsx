@@ -43,6 +43,7 @@ import {
   Settings2,
   FolderOpen,
   KeyRound,
+  Plus,
   Copy,
   Sparkles,
   X,
@@ -52,6 +53,8 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
 import { BrandIcon, protocolIcon } from "@/lib/brandIcons";
 import { AccessSignIn, InstallCloudflared } from "./CloudflareSettings";
+import { AccessGuideLink } from "./CloudflareConnectSheet";
+import { ServerLoginSection } from "./CloudflareServerLogin";
 import type { CfSshHostname } from "@/lib/types";
 import { TunnelHealth } from "./CloudflareAccount";
 import { BRAND_ICONS } from "@/lib/brandIconData";
@@ -219,6 +222,14 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [authKind, setAuthKind] = useState<AuthMethod["kind"]>(
     seedAuth?.kind ?? "password"
   );
+  // The last key/password/agent login, so "Your own key or password" through
+  // Cloudflare comes back to it instead of resetting to a password.
+  const lastOwnAuth = useRef<AuthMethod["kind"]>(
+    seedAuth?.kind && seedAuth.kind !== "cloudflarecert" ? seedAuth.kind : "password"
+  );
+  useEffect(() => {
+    if (authKind !== "cloudflarecert") lastOwnAuth.current = authKind;
+  }, [authKind]);
   const [password, setPassword] = useState(
     seedAuth?.kind === "password" ? seedAuth.password : ""
   );
@@ -783,6 +794,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const cfRoute = protocol === "sftp" && reach === "cloudflare" && proxyCmd.kind === "cloudflare";
   const jumpMissing = protocol === "sftp" && reach === "jump" && !jumpProfile;
   const cfServiceToken = cfRoute && !!proxyCmd.serviceTokenId.trim();
+  const cfCertLogin = cfRoute && authKind === "cloudflarecert";
   const cfCertBlocked =
     protocol === "sftp" && authKind === "cloudflarecert" && (!cfRoute || cfServiceToken);
   const canSave = isS3
@@ -886,7 +898,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 </option>
                 {/* Only through Cloudflare (or a saved one that lost its route,
                     so the select still shows what it has). */}
-                {!isFtp && (cfRoute || authKind === "cloudflarecert") && (
+                {!isFtp && !cfRoute && authKind === "cloudflarecert" && (
                   <option
                     value="cloudflarecert"
                     disabled={cfServiceToken && authKind !== "cloudflarecert"}
@@ -1204,22 +1216,15 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               />
             )}
             {cfRoute ? (
+              <>
               <CloudflareServerFields
                 server={proxyCmd.hostname}
                 setServer={setCfServer}
-                host={host}
-                setHost={setHost}
-                port={port}
-                setPort={(p) => {
-                  setPort(p);
-                  setPortTouched(true);
-                }}
-                certLogin={authKind === "cloudflarecert"}
                 serviceTokenId={proxyCmd.serviceTokenId}
                 onRemoveToken={() => setProxyCmd({ ...proxyCmd, serviceTokenId: "", serviceTokenSecret: "" })}
-                forwards={forwards}
-                setForwards={setForwards}
               />
+              <CfSignInLine server={proxyCmd.hostname.trim()} />
+              </>
             ) : (
             <div className="flex gap-2">
               <Field label={reach === "jump" && protocol === "sftp" ? "Host (as the jump host sees it)" : "Host"} className="flex-1">
@@ -1246,7 +1251,14 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             </div>
             )}
 
-            <div className={isSftp ? "grid grid-cols-2 gap-3" : undefined}>
+            {cfRoute && profile?.auth.kind !== "keyref" && (
+              <CfLoginPicker
+                value={cfCertLogin ? "cloudflare" : "own"}
+                onChange={(v) => setAuthKind(v === "cloudflare" ? "cloudflarecert" : lastOwnAuth.current)}
+                certBlocked={cfServiceToken}
+              />
+            )}
+            <div className={isSftp && !cfCertLogin ? "grid grid-cols-2 gap-3" : undefined}>
             <Field label={cfRoute ? "Log in as" : "Username"}>
               <input
                 value={username}
@@ -1256,7 +1268,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
               />
             </Field>
 
-            {isSftp && profile?.auth.kind !== "keyref" && authenticationField}
+            {isSftp && profile?.auth.kind !== "keyref" && !cfCertLogin && authenticationField}
             </div>
 
             {profile?.jumpHost && (
@@ -1310,6 +1322,19 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             )}
               </>
             )}
+
+            {cfRoute && (
+              <ServerLoginSection
+                target={{
+                  id,
+                  host: host.trim(),
+                  port,
+                  accessHost: (proxyCmd.hostname.trim() || host.trim()).toLowerCase(),
+                }}
+                user={username.trim()}
+                testProfile={buildProfile}
+              />
+            )}
           </>
         )}
 
@@ -1322,6 +1347,20 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             <ChevronRight size={12} className="ml-auto transition-transform group-open:rotate-90" />
           </summary>
           <div className="pt-4">
+          {cfRoute && (
+            <CloudflareRouteDetails
+              server={proxyCmd.hostname}
+              host={host}
+              setHost={setHost}
+              port={port}
+              setPort={(p) => {
+                setPort(p);
+                setPortTouched(true);
+              }}
+              forwards={forwards}
+              setForwards={setForwards}
+            />
+          )}
           {organizationFields}
           {localFolderField}
         {group.trim() && protocol === "sftp" && <Field label="Group gateway" help={<>Saved immediately for this group and nested groups. Explicit connection routes take precedence. Use / in group names to inherit a parent gateway.</>}>
@@ -1496,6 +1535,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                     {testResult.message}
                   </div>
                 )}
+                {!testResult.ok && <AccessGuideLink detail={testResult.message} />}
               </div>
               {!testResult.ok && (
                 <CopyTextButton
@@ -1623,6 +1663,9 @@ function CloudflareCertHint({
       </Hint>
     );
   }
+  // Who the certificate is for only matters once a server refuses it; the
+  // connect error says so then, with what to send the admin.
+  if (routed) return null;
   const principal =
     status?.state === "loggedIn" && status.identity?.includes("@")
       ? status.identity.split("@")[0]
@@ -3482,38 +3525,21 @@ function JumpHostField({
   );
 }
 
-/// "Through Cloudflare": the server's Access hostname, the sign-in status,
-/// and the SSH host and port as optional details.
+/// "Through Cloudflare": the server's Access hostname. The sign-in sits with
+/// the login below; the SSH host, port and forwards live under More options.
 function CloudflareServerFields({
   server,
   setServer,
-  host,
-  setHost,
-  port,
-  setPort,
-  certLogin,
   serviceTokenId,
   onRemoveToken,
-  forwards,
-  setForwards,
 }: {
   server: string;
   setServer: (v: string) => void;
-  host: string;
-  setHost: (v: string) => void;
-  port: number;
-  setPort: (v: number) => void;
-  certLogin: boolean;
   serviceTokenId: string;
   onRemoveToken: () => void;
-  forwards: ForwardDraft[];
-  setForwards: (next: ForwardDraft[]) => void;
 }) {
   const hostnames = useCloudflareHostnames();
   const listId = useId();
-  const custom = (!!host.trim() && host.trim() !== server.trim()) || port !== 22;
-  const [details, setDetails] = useState(custom);
-  const known = hostnames.find((h) => h.hostname === server.trim());
   return (
     <>
       <Field label="Server">
@@ -3535,29 +3561,6 @@ function CloudflareServerFields({
         </datalist>
       </Field>
       <InstallCloudflared />
-      {server.trim() && (
-        <div className="mb-3 rounded-md border border-border px-2.5 py-2" data-testid="editor-access-signin">
-          <AccessSignIn
-            hostname={server.trim()}
-            compact
-            extra={(signedIn) => (
-              <>
-                {known?.tunnelStatus && (
-                  <span data-testid="cf-tunnel-status">
-                    {" · "}
-                    <TunnelHealth
-                      status={known.tunnelStatus}
-                      lastSeen={known.connectorLastSeen}
-                      version={known.connectorVersion}
-                    />
-                  </span>
-                )}
-                {certLogin && signedIn && <span> · certificate login ready</span>}
-              </>
-            )}
-          />
-        </div>
-      )}
       {serviceTokenId.trim() && (
         <Hint tone="warn">
           This connection uses a legacy service token. Account tokens are in{" "}
@@ -3568,37 +3571,146 @@ function CloudflareServerFields({
           </button>
         </Hint>
       )}
-      <button
-        type="button"
-        onClick={() => setDetails((d) => !d)}
-        aria-expanded={details}
-        className="mb-2 flex items-center gap-1 text-[11px] text-text-muted hover:text-text"
-      >
-        <ChevronRight size={11} className={cn("transition-transform", details && "rotate-90")} />
-        SSH host and port{custom ? `: ${host.trim() || server.trim()}:${port}` : " (optional)"}
-      </button>
-      {details && (
-        <div className="flex gap-2">
-          <Field label="SSH host, if not the server" className="flex-1">
-            <input
-              value={host === server ? "" : host}
-              onChange={(e) => setHost(e.target.value || server)}
-              placeholder={server.trim() || "same as the server"}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Port" className="w-24">
-            <input
-              type="number"
-              value={port}
-              onChange={(e) => setPort(parseInt(e.target.value) || 22)}
-              className={inputCls}
-            />
-          </Field>
-        </div>
-      )}
-      <ForwardsEditor server={server.trim()} forwards={forwards} setForwards={setForwards} />
     </>
+  );
+}
+
+/// The Access sign-in as one quiet line; "Log in again" appears only when it
+/// has expired or is about to.
+function CfSignInLine({ server }: { server: string }) {
+  const hostnames = useCloudflareHostnames();
+  const known = hostnames.find((h) => h.hostname === server);
+  if (!server) return null;
+  return (
+    <div className="mb-3" data-testid="editor-access-signin">
+      <AccessSignIn
+        hostname={server}
+        compact
+        quiet
+        extra={() =>
+          known?.tunnelStatus && (
+            <span data-testid="cf-tunnel-status">
+              {" · "}
+              <TunnelHealth
+                status={known.tunnelStatus}
+                lastSeen={known.connectorLastSeen}
+                version={known.connectorVersion}
+              />
+            </span>
+          )
+        }
+      />
+    </div>
+  );
+}
+
+type CfLogin = "cloudflare" | "own";
+
+const CF_LOGINS = [
+  {
+    id: "cloudflare",
+    label: "Cloudflare sign-in",
+    hint: "Your Access login is the key.",
+    Icon: Cloud,
+  },
+  {
+    id: "own",
+    label: "Your own key or password",
+    hint: "Cloudflare only carries the connection.",
+    Icon: KeyRound,
+  },
+] as const;
+
+/// Through Cloudflare there are two real choices: Cloudflare is the login
+/// (short-lived certificate), or Cloudflare is only the tunnel and the server
+/// checks a key or password as usual.
+function CfLoginPicker({
+  value,
+  onChange,
+  certBlocked,
+}: {
+  value: CfLogin;
+  onChange: (v: CfLogin) => void;
+  certBlocked: boolean;
+}) {
+  return (
+    <div className="mb-3">
+      <div className="mb-1.5 text-xs text-text-muted">Log in with</div>
+      <div role="radiogroup" aria-label="Log in with" className="grid grid-cols-2 gap-2">
+        {CF_LOGINS.map(({ id, label, hint, Icon }) => {
+          const off = id === "cloudflare" && certBlocked;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={value === id}
+              disabled={off}
+              onClick={() => onChange(id)}
+              className={cn(
+                "rounded-md border px-2.5 py-2 text-left transition-colors disabled:opacity-50",
+                value === id ? "border-accent bg-accent-soft" : "border-border bg-bg-subtle hover:bg-bg-hover"
+              )}
+            >
+              <span className="flex items-center gap-1.5 text-xs font-medium">
+                <Icon size={13} className={value === id ? "text-accent" : "text-text-dim"} />
+                {label}
+                {id === "cloudflare" && !off && (
+                  <span className="ml-auto text-[10px] font-normal text-text-dim">Recommended</span>
+                )}
+              </span>
+              <span className="mt-0.5 block text-[11px] text-text-muted">
+                {off ? "Not with a service token" : hint}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/// More options › Cloudflare: where SSH listens behind the tunnel, and TCP
+/// forwards. Most people never need either.
+function CloudflareRouteDetails({
+  server,
+  host,
+  setHost,
+  port,
+  setPort,
+  forwards,
+  setForwards,
+}: {
+  server: string;
+  host: string;
+  setHost: (v: string) => void;
+  port: number;
+  setPort: (v: number) => void;
+  forwards: ForwardDraft[];
+  setForwards: (next: ForwardDraft[]) => void;
+}) {
+  return (
+    <div className="mb-3">
+      <div className="flex gap-2">
+        <Field label="SSH host, if not the server" className="flex-1">
+          <input
+            value={host === server ? "" : host}
+            onChange={(e) => setHost(e.target.value || server)}
+            placeholder={server.trim() || "same as the server"}
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Port" className="w-24">
+          <input
+            type="number"
+            value={port}
+            onChange={(e) => setPort(parseInt(e.target.value) || 22)}
+            className={inputCls}
+          />
+        </Field>
+      </div>
+      <ForwardsEditor server={server.trim()} forwards={forwards} setForwards={setForwards} />
+    </div>
   );
 }
 
@@ -3646,22 +3758,36 @@ function ForwardsEditor({
   const clash = ports.find((p, i) => ports.indexOf(p) !== i);
   return (
     <div className="mb-3" data-testid="cf-forward-editor">
-      <div className="mb-1 text-[11px] font-medium text-text">TCP forwards</div>
-      <p className="mb-2 text-[11px] leading-relaxed text-text-muted">
-        A database, remote desktop, internal API or web panel behind Access. Faro runs{" "}
-        <span className="font-mono">cloudflared access tcp</span> on the local port while this
-        connection is open, and closes it when you disconnect.
-        {server ? ` Leave the hostname empty to use ${server}.` : ""}
-      </p>
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span className="text-xs text-text-muted">TCP forwards</span>
+        <ConnectionHelp label="TCP forwards help">
+          Reach a database, remote desktop, internal API or web panel behind Access on a local
+          port. It opens with this connection and closes when you disconnect.
+          {server ? ` An empty hostname means ${server}.` : ""}
+        </ConnectionHelp>
+        <button
+          type="button"
+          onClick={() => setForwards([...forwards, { name: "", hostname: "", localPort: "", web: false }])}
+          className="ml-auto inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text"
+        >
+          <Plus size={11} />
+          Add
+        </button>
+      </div>
+      {forwards.length === 0 && (
+        <div className="rounded-md border border-dashed border-border px-2.5 py-2 text-[11px] text-text-dim">
+          None
+        </div>
+      )}
       <div className="flex flex-col gap-1.5">
         {forwards.map((row, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-1.5">
+          <div key={i} className="grid grid-cols-[7rem_minmax(0,1fr)_5rem_auto_auto] items-center gap-1.5">
             <input
               aria-label="Forward name"
               value={row.name}
               onChange={(e) => update(i, { name: e.target.value })}
               placeholder="Name"
-              className={inputCls + " w-28"}
+              className={inputCls}
             />
             <input
               aria-label="Access hostname"
@@ -3669,7 +3795,7 @@ function ForwardsEditor({
               onChange={(e) => update(i, { hostname: e.target.value })}
               placeholder={server || "hostname"}
               spellCheck={false}
-              className={inputCls + " min-w-0 flex-1"}
+              className={inputCls}
             />
             <input
               aria-label="Local port"
@@ -3677,9 +3803,9 @@ function ForwardsEditor({
               onChange={(e) => update(i, { localPort: e.target.value.replace(/[^\d]/g, "") })}
               placeholder="5433"
               inputMode="numeric"
-              className={inputCls + " w-20"}
+              className={inputCls}
             />
-            <label className="flex items-center gap-1 text-[11px] text-text-muted">
+            <label className="flex items-center gap-1 whitespace-nowrap text-[11px] text-text-muted">
               <input
                 type="checkbox"
                 checked={row.web}
@@ -3701,13 +3827,6 @@ function ForwardsEditor({
       {clash && (
         <p className="mt-1 text-[11px] text-warning">Local port {clash} is used by more than one forward.</p>
       )}
-      <button
-        type="button"
-        onClick={() => setForwards([...forwards, { name: "", hostname: "", localPort: "", web: false }])}
-        className="mt-1.5 text-[11px] font-medium text-accent hover:underline"
-      >
-        Add a forward
-      </button>
     </div>
   );
 }

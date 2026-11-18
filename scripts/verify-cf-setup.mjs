@@ -138,6 +138,7 @@ const directId = crypto.randomUUID();
 /** Run the Move dialog for `name` up to the ports step. */
 async function moveBehindCloudflare(name) {
   await rightClick(`[data-rail-profile-id="${directId}"] button`);
+  await clickText("More", '[role="menu"]', "button[aria-haspopup]");
   await clickText("Move behind Cloudflare…");
   await page.waitForSelector('[role="dialog"] [aria-label="Name"]', { timeout: 10000 });
   await waitFor(() => page.evaluate(() => document.querySelector('[aria-label="Domain"]')?.value));
@@ -196,13 +197,12 @@ try {
     const t = await dialogText();
     return t.includes("Log in as") ? t : null;
   }, 5000)) ?? (await dialogText());
-  const auth = await page.evaluate(() => {
-    const d = document.querySelector('[role="dialog"]');
-    for (const el of d.querySelectorAll("label, div.mb-3")) {
-      const cap = el.firstElementChild;
-      if (cap?.tagName === "DIV" && cap.textContent.trim() === "Authentication") return el.querySelector("select")?.value;
-    }
-  });
+  // Through Cloudflare the login is a choice of two cards (issue #86).
+  const auth = await page.evaluate(() =>
+    document.querySelector('[role="dialog"] [aria-label="Log in with"] [aria-checked="true"]')?.textContent.startsWith("Cloudflare sign-in")
+      ? "cloudflarecert"
+      : "other"
+  );
   check(
     "Through Cloudflare asks for the server and who to log in as",
     form.includes("Server") && form.includes("Log in as") && form.includes("Connect via"),
@@ -263,12 +263,15 @@ try {
     JSON.stringify(cf)
   );
   await rightClick(`[data-rail-profile-id="${cf.id}"] button`);
-  await clickText("Properties / Edit…");
+  await clickText("Edit…");
   const status = await waitFor(async () => {
     const t = await page.evaluate(() => document.querySelector('[data-testid="editor-access-signin"]')?.innerText ?? "");
-    return /tunnel healthy/.test(t) && /certificate login ready/.test(t) ? t : null;
+    const card = await page.evaluate(
+      () => document.querySelector('[role="dialog"] [aria-label="Log in with"] [aria-checked="true"]')?.textContent ?? ""
+    );
+    return /Signed in as/.test(t) && /tunnel healthy/.test(t) && card.startsWith("Cloudflare sign-in") ? t : null;
   }, 20000);
-  check("its editor shows sign-in, tunnel health and the certificate login", !!status, status ?? "");
+  check("its editor shows sign-in, tunnel health and the Cloudflare sign-in login", !!status, status ?? "");
   const reachChecked = await page.evaluate(
     () => document.querySelector('[aria-label="Connect via"] [aria-checked="true"]')?.textContent ?? ""
   );
@@ -280,6 +283,7 @@ try {
   await rightClick(`[data-rail-profile-id="${cf.id}"] button`);
   await clickText("Connect");
   await rightClick(`[data-rail-profile-id="${cf.id}"] button`);
+  await clickText("Share", '[role="menu"]', "button[aria-haspopup]");
   await clickText("Invite…");
   await page.waitForSelector('[aria-label="Email to invite"]', { timeout: 10000 });
   await page.type('[aria-label="Email to invite"]', "bob@example.test");
@@ -307,7 +311,9 @@ try {
   let cli = "";
   try {
     cli = execFileSync(FARO_CLI, ["ls", `${cf.name}:/`], {
-      env: { ...process.env, FARO_DATA_DIR: FARO_E2E_DATA },
+      // A debug faro-cli asks the Bridge to approve direct calls (ecfc942);
+      // this test build skips that, as the CI audit does.
+      env: { ...process.env, FARO_DATA_DIR: FARO_E2E_DATA, FARO_CLI_UNGOVERNED: "1" },
       timeout: 60000,
     }).toString();
   } catch (e) {

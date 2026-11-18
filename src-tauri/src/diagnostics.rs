@@ -34,11 +34,75 @@ impl DiagnosticReport {
         });
         ok
     }
+
+    /// A step whose outcome and wording Faro decides itself (no error text).
+    fn record_plain(&mut self, label: &str, started: Instant, ok: bool, detail: &str) -> bool {
+        self.steps.push(DiagnosticStep {
+            label: label.into(),
+            ok,
+            detail: detail.into(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+        ok
+    }
+}
+
+/// Through Cloudflare: is cloudflared there, and is the Access sign-in good?
+/// Returns false when connecting would only fail on one of these.
+async fn cloudflare_steps(report: &mut DiagnosticReport, profile: &ConnectionProfile) -> bool {
+    let Ok(hostname) = crate::cf_setup::access_hostname(profile) else {
+        return true;
+    };
+    let started = Instant::now();
+    let bin = match crate::proxy_command::resolve_cloudflared() {
+        Ok(bin) => {
+            report.record_plain("cloudflared", started, true, "Passed");
+            bin
+        }
+        Err(_) => {
+            return report.record_plain(
+                "cloudflared",
+                started,
+                false,
+                "cloudflared isn't installed. Install it from Settings › Cloudflare, or open the connection and Faro offers to.",
+            )
+        }
+    };
+    let started = Instant::now();
+    let status = crate::cloudflared::access_status(&bin, &hostname).await;
+    use crate::cloudflared::AccessState;
+    match status.state {
+        AccessState::LoggedIn | AccessState::NotProtected => {
+            report.record_plain("Cloudflare sign-in", started, true, "Passed")
+        }
+        AccessState::Expired => report.record_plain(
+            "Cloudflare sign-in",
+            started,
+            false,
+            "Your Cloudflare sign-in has expired. Log in again from the connection's editor or by connecting.",
+        ),
+        AccessState::LoggedOut => report.record_plain(
+            "Cloudflare sign-in",
+            started,
+            false,
+            "You aren't signed in to Cloudflare for this server. Connecting opens the sign-in in your browser.",
+        ),
+        AccessState::Unknown => report.record_plain(
+            "Cloudflare sign-in",
+            started,
+            false,
+            "Faro couldn't check the Cloudflare sign-in. Check that the server address is the Access hostname.",
+        ),
+    }
 }
 
 fn guidance(message: &str) -> String {
     use crate::error::{classify_message, ErrorKind};
     let lower = message.to_lowercase();
+    // ssh_cert's refusal for a Cloudflare certificate: the fix is on the server.
+    if lower.contains("cloudflare issued a certificate") || lower.contains("refused the cloudflare certificate") {
+        return "The server didn't accept your Cloudflare sign-in for this user. Its admin can add you to the people allowed to log in as it, or let anyone your Access policy allows log in.".into();
+    }
     if [
         "host key",
         "host-key",
@@ -110,6 +174,9 @@ pub async fn run(
         Instant::now(),
         gateways(&profile, &mut hops, 0),
     ) {
+        return report;
+    }
+    if !cloudflare_steps(&mut report, &profile).await {
         return report;
     }
     let first = hops.first().unwrap_or(&profile);
@@ -239,6 +306,16 @@ mod tests {
             assert!(!advice.contains("secret"));
             assert!(!advice.contains("private.example"));
         }
+    }
+    #[test]
+    fn a_refused_cloudflare_certificate_points_at_the_server() {
+        let advice = guidance(
+            "Cloudflare issued a certificate for `jane.doe`, but the server refused it for user `deploy`.",
+        );
+        assert!(advice.contains("didn't accept your Cloudflare sign-in"));
+        assert!(advice.contains("add you to the people allowed"));
+        assert!(!advice.contains("jane.doe"));
+        assert!(!advice.contains("deploy"));
     }
     #[test]
     fn diagnostics_preserve_failed_step_without_claiming_success() {

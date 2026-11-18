@@ -11,9 +11,10 @@ magnet link for a server.
 A registered protocol handler can be invoked by *any* web page, so a Faro deep
 link is treated as **untrusted input**:
 
-- **A link never connects on its own.** It only ever *prefills* the connection
-  editor. The user sees exactly what they're about to connect to and clicks
-  **Connect** (or **Pair**) themselves.
+- **A link never connects on its own.** It prefills the connection editor, or
+  for a Cloudflare server shows a short **Connect to …** sheet. Either way the
+  user sees exactly what they're about to connect to and clicks **Connect** (or
+  **Pair**) themselves.
 - **A link never carries a password, secret, or passphrase.** Those parameters
   are ignored (and logged as a warning) if present. Credentials are entered in
   Faro or come from the OS keychain — never from a URL that could sit in a
@@ -105,6 +106,14 @@ certificate (nothing to install or type):**
 ```
 faro://connect?protocol=sftp&host=ssh.example.com&username=jane.doe&via=cloudflare&auth=cloudflarecert&name=Prod%20box
 ```
+
+A Cloudflare link with `auth=cloudflarecert`, `host` and `username` skips the
+editor. Faro shows a **Connect to …** sheet; after **Connect** it installs
+cloudflared if needed, opens the Access sign-in in the browser, asks about the
+server's key the first time, saves the connection and opens it (and the `path`
+or site). A saved Cloudflare server that isn't connected opens the same sheet.
+If the server refuses the certificate, the sheet links the server-side fix in
+**`docs/cloudflare-access-ssh.md`**.
 
 ### `faro://site` — open one website's folder on a shared server
 
