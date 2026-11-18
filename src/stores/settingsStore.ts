@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
 import type { UiLanguage } from "@/lib/i18n";
+import type { RailSort } from "@/lib/railOps";
 
 export type OverwritePolicy = "overwrite" | "skip" | "rename";
 export type SortField = "name" | "size" | "modified";
@@ -184,6 +185,9 @@ interface SettingsState {
   setRailExpanded: (v: boolean) => void;
   toggleRailGroup: (name: string) => void;
   setFilePreview: (v: boolean) => void;
+  /** How the rail orders servers. A–Z / Z–A are a view: the drag-and-drop
+   *  order (profile.sortOrder) is kept and comes back with "custom". */
+  railSort: RailSort;
   setTerminalFontSize: (n: number) => void;
   setTerminalFontFamily: (s: string) => void;
   setTerminalTheme: (t: TerminalTheme) => void;
@@ -242,6 +246,7 @@ type Persisted = Omit<
   | "setRailExpanded"
   | "toggleRailGroup"
   | "setFilePreview"
+  setRailSort: (v: RailSort) => void;
   | "setTerminalFontSize"
   | "setTerminalFontFamily"
   | "setTerminalTheme"
@@ -305,6 +310,7 @@ export const SETTINGS_KEYS = Object.keys(DEFAULTS) as (keyof Persisted)[];
  *  popouts and mock builds. */
 function readInjected(): Partial<Persisted> | null {
   try {
+  | "setRailSort"
     const inj = (globalThis as { __FARO_SETTINGS__?: unknown }).__FARO_SETTINGS__;
     if (inj && typeof inj === "object") return inj as Partial<Persisted>;
   } catch {
@@ -351,6 +357,7 @@ function mutate<K extends keyof Persisted>(
   set(() => ({ [key]: value }) as Partial<SettingsState>);
   persistKey(key, value);
 }
+  railSort: "custom",
 
 export const useSettings = create<SettingsState>((set, get) => ({
   ...initial,
@@ -493,3 +500,4 @@ export const TERMINAL_THEMES: Record<
     cursor: "#a7c080",
   },
 };
+  setRailSort: (v) => mutate(set, get, "railSort", v),

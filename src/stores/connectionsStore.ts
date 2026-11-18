@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
 import { toast } from "./toastStore";
-import { toastError, messageOf } from "@/lib/errors";
+import { toastError, messageOf, kindOf } from "@/lib/errors";
+import type { ConnectFailure } from "@/lib/railOps";
 import type { ConnectionProfile, ProfileOrganization, SessionId } from "@/lib/types";
 import { useTerminals } from "./terminalsStore";
 import { useServerView } from "./serverViewStore";
@@ -31,6 +32,9 @@ interface ConnectionsState {
   connecting: boolean;
   reordering: boolean;
   error: string | null;
+  /** How the last connect attempt failed, per profile, for this run only.
+   *  Cleared when that profile connects. Drives the rail's broken marker. */
+  connectFailures: Record<string, ConnectFailure>;
 
   loadProfiles: () => Promise<void>;
   saveProfile: (p: ConnectionProfile) => Promise<void>;
@@ -63,6 +67,7 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
   connecting: false,
   reordering: false,
   error: null,
+  connectFailures: {},
 
   loadProfiles: async () => {
     const profiles = await ipc.listProfiles();
@@ -71,6 +76,13 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
 
   saveProfile: async (p) => {
     await ipc.saveProfile(p);
+    // An edited profile gets a fresh start: its last failure may be fixed.
+    if (get().connectFailures[p.id]) {
+      set(s => {
+        const { [p.id]: _cleared, ...connectFailures } = s.connectFailures;
+        return { connectFailures };
+      });
+    }
     await get().loadProfiles();
   },
 
@@ -134,10 +146,16 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
       pending = (async () => {
         try {
           const sessionId = await ipc.connect(profileId);
-          set(s => ({ sessions: [...s.sessions, { sessionId, profileId }] }));
+          set(s => {
+            const { [profileId]: _cleared, ...connectFailures } = s.connectFailures;
+            return { sessions: [...s.sessions, { sessionId, profileId }], connectFailures };
+          });
           toast.success("Connected", profile ? `${profile.name} — ${profile.username}@${profile.host}` : undefined);
         } catch (e) {
-          set({ error: messageOf(e) });
+          set(s => ({
+            error: messageOf(e),
+            connectFailures: { ...s.connectFailures, [profileId]: { kind: kindOf(e), message: messageOf(e) } },
+          }));
           toastError(e, profile ? `Couldn't connect to ${profile.name}` : "Connection failed");
           throw e;
         } finally {
