@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Plus,
   X,
@@ -9,6 +9,8 @@ import {
   SplitSquareHorizontal,
   SplitSquareVertical,
   Maximize2,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import type { SessionId } from "@/lib/types";
 import {
@@ -29,6 +31,9 @@ import {
 import { openTerminalWindow, popoutBufferKey } from "@/lib/popout";
 import { InlineRename } from "@faro/file-ui";
 import { useKeyOf } from "@/lib/keybindings";
+import { TERMINAL_CHORDS } from "@/lib/terminalChords";
+import { useLayout } from "@/stores/layoutStore";
+import { useTabDrag } from "@/hooks/useTabDrag";
 import { keyCombo } from "@/lib/shortcuts";
 import { toast } from "@/stores/toastStore";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -51,6 +56,8 @@ export function TerminalDock({
   const activeId = useTerminals((s) => s.activeId);
   const openTab = useTerminals((s) => s.openTab);
   const closeTab = useTerminals((s) => s.closeTab);
+  const closeTabs = useTerminals((s) => s.closeTabs);
+  const moveTab = useTerminals((s) => s.moveTab);
   const setActive = useTerminals((s) => s.setActive);
   const renameTab = useTerminals((s) => s.renameTab);
   const splitActivePane = useTerminals((s) => s.splitActivePane);
@@ -61,6 +68,8 @@ export function TerminalDock({
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(
     null
   );
+  const keyOf = useKeyOf();
+  const { stripRef, dragId, onPointerDown, onClickCapture } = useTabDrag(moveTab);
 
   // Move the active pane's shell into its own window: hand the live PTY over
   // (scrollback serialized through localStorage) and drop it here.
@@ -84,7 +93,7 @@ export function TerminalDock({
           .sessions.find((x) => x.sessionId === tab.sessionId)?.profileId,
       });
       // Dispose won't close the handed-off PTY; the new window owns it now.
-      useTerminals.getState().closePane(tab.id, tab.activePaneId);
+      useTerminals.getState().closePane(tab.id, tab.activePaneId, { remember: false });
     } catch (e) {
       if (entry && terminalId) {
         entry.setHandedOff(false);
@@ -94,37 +103,120 @@ export function TerminalDock({
     }
   };
 
-  const tabMenuItems = (tab: TerminalTab): MenuItem[] => [
-    {
-      label: "Split right",
-      icon: <SplitSquareHorizontal size={12} />,
-      onClick: () => splitActivePane(tab.id, "row"),
-    },
-    {
-      label: "Split down",
-      icon: <SplitSquareVertical size={12} />,
-      onClick: () => splitActivePane(tab.id, "col"),
-      separatorAfter: true,
-    },
-    {
-      label: "Pop out active pane",
-      icon: <PictureInPicture2 size={12} />,
-      // No PTY id yet (shell still opening) → nothing to hand off.
-      disabled: !getPane(tab.activePaneId)?.getTerminalId(),
-      onClick: () => void popOut(tab),
-      separatorAfter: true,
-    },
-    {
-      label: "Close",
-      icon: <X size={12} />,
-      destructive: true,
-      onClick: () => closeTab(tab.id),
-    },
-  ];
-
   const sessionTabs = sessionId
     ? tabs.filter((t) => t.sessionId === sessionId)
     : [];
+
+  // The split items act on the right-clicked tab, so their chord is shown as a
+  // hint only (pressed, a chord acts on the active tab, maybe another one).
+  const hintOf = (id: string, def: string) => ({ hint: keyOf(id, def).hint });
+
+  const tabMenuItems = (tab: TerminalTab): MenuItem[] => {
+    const at = sessionTabs.findIndex((t) => t.id === tab.id);
+    const others = sessionTabs.filter((t) => t.id !== tab.id).map((t) => t.id);
+    const toRight = sessionTabs.slice(at + 1).map((t) => t.id);
+    return [
+      {
+        label: "Split right",
+        icon: <SplitSquareHorizontal size={12} />,
+        onClick: () => splitActivePane(tab.id, "row"),
+        ...hintOf("term-split-right", TERMINAL_CHORDS.splitRight),
+      },
+      {
+        label: "Split down",
+        icon: <SplitSquareVertical size={12} />,
+        onClick: () => splitActivePane(tab.id, "col"),
+        separatorAfter: true,
+        ...hintOf("term-split-down", TERMINAL_CHORDS.splitDown),
+      },
+      {
+        label: "Pop out active pane",
+        icon: <PictureInPicture2 size={12} />,
+        // No PTY id yet (shell still opening) → nothing to hand off.
+        disabled: !getPane(tab.activePaneId)?.getTerminalId(),
+        onClick: () => void popOut(tab),
+        separatorAfter: true,
+      },
+      {
+        label: "Close",
+        icon: <X size={12} />,
+        destructive: true,
+        onClick: () => closeTab(tab.id),
+      },
+      {
+        label: "Close others",
+        icon: <span className="inline-block w-3" />,
+        destructive: true,
+        disabled: others.length === 0,
+        onClick: () => closeTabs(others, tab.id),
+      },
+      {
+        label: "Close to the right",
+        icon: <span className="inline-block w-3" />,
+        destructive: true,
+        disabled: toRight.length === 0,
+        onClick: () => closeTabs(toRight, tab.id),
+      },
+      {
+        label: "Close all",
+        icon: <span className="inline-block w-3" />,
+        destructive: true,
+        onClick: () => {
+          closeTabs(sessionTabs.map((t) => t.id));
+          // An empty dock would just open a fresh shell; hide it instead.
+          useLayout.getState().setTerminalOpen(false);
+        },
+      },
+    ];
+  };
+
+  // Overflow: chevrons only while the tabs are wider than the strip.
+  const [overflow, setOverflow] = useState({ any: false, left: false, right: false });
+  useLayoutEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const measure = () => {
+      const any = el.scrollWidth > el.clientWidth + 1;
+      const next = {
+        any,
+        left: any && el.scrollLeft > 0,
+        right: any && el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+      };
+      setOverflow((cur) =>
+        cur.any === next.any && cur.left === next.left && cur.right === next.right
+          ? cur
+          : next
+      );
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    for (const c of el.children) ro.observe(c);
+    el.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", measure);
+    };
+  }, [stripRef, sessionTabs.length, visible]);
+
+  // Keep the active tab in view; scrolls only when it's clipped.
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!visible || !activeId || !strip) return;
+    const chip = strip.querySelector<HTMLElement>(`[data-term-tab-id="${activeId}"]`);
+    if (!chip) return;
+    // By hand rather than scrollIntoView, which may also scroll the
+    // overflow-hidden panes around the dock.
+    const s = strip.getBoundingClientRect();
+    const c = chip.getBoundingClientRect();
+    if (c.left < s.left) strip.scrollLeft -= s.left - c.left + 4;
+    else if (c.right > s.right) strip.scrollLeft += c.right - s.right + 4;
+  }, [visible, activeId, sessionTabs.length, overflow.any, stripRef]);
+
+  const scrollStrip = (dir: -1 | 1) => {
+    const el = stripRef.current;
+    if (el) el.scrollBy({ left: dir * Math.max(120, el.clientWidth * 0.6), behavior: "smooth" });
+  };
 
   const openSplitMenu = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -195,12 +287,22 @@ export function TerminalDock({
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-bg-subtle px-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        {overflow.any && (
+          <StripChevron dir="left" disabled={!overflow.left} onClick={() => scrollStrip(-1)} />
+        )}
+        <div
+          ref={stripRef}
+          data-term-tab-strip
+          onClickCapture={onClickCapture}
+          className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
           {sessionTabs.map((tab) => (
             <TabChip
               key={tab.id}
               tab={tab}
               active={tab.id === activeId}
+              dragging={tab.id === dragId}
+              onPointerDown={(e) => onPointerDown(e, tab.id)}
               onClick={() => setActive(tab.id)}
               onClose={() => closeTab(tab.id)}
               onRename={(title) => renameTab(tab.id, title)}
@@ -210,16 +312,20 @@ export function TerminalDock({
               }}
             />
           ))}
-          {sessionId && (
-            <button
-              onClick={() => openTab(sessionId)}
-              title="New shell"
-              className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
-            >
-              <Plus size={12} />
-            </button>
-          )}
         </div>
+        {overflow.any && (
+          <StripChevron dir="right" disabled={!overflow.right} onClick={() => scrollStrip(1)} />
+        )}
+        {sessionId && (
+          <button
+            onClick={() => openTab(sessionId)}
+            title="New shell"
+            className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
+          >
+            <Plus size={12} />
+          </button>
+        )}
+        <div className="flex-1" />
         {sessionId && sessionTabs.length > 0 && (
           <button
             onClick={openSplitMenu}
@@ -274,9 +380,33 @@ export function TerminalDock({
   );
 }
 
+function StripChevron({
+  dir,
+  disabled,
+  onClick,
+}: {
+  dir: "left" | "right";
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      data-strip-chevron={dir}
+      aria-label={dir === "left" ? "Scroll tabs left" : "Scroll tabs right"}
+      className="flex h-6 w-5 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-30 disabled:hover:bg-transparent"
+    >
+      {dir === "left" ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
+    </button>
+  );
+}
+
 function TabChip({
   tab,
   active,
+  dragging,
+  onPointerDown,
   onClick,
   onClose,
   onRename,
@@ -284,6 +414,8 @@ function TabChip({
 }: {
   tab: TerminalTab;
   active: boolean;
+  dragging: boolean;
+  onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
   onClick: () => void;
   onClose: () => void;
   onRename: (title: string) => void;
@@ -295,6 +427,7 @@ function TabChip({
   if (editing) {
     return (
       <div
+        data-term-tab-id={tab.id}
         className={cn(
           "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 ring-1 ring-inset",
           active ? "bg-bg-panel ring-accent/40" : "bg-bg-panel ring-border"
@@ -315,6 +448,20 @@ function TabChip({
 
   return (
     <button
+      data-term-tab-id={tab.id}
+      data-active={active || undefined}
+      data-dragging={dragging || undefined}
+      onPointerDown={onPointerDown}
+      // Middle-click closes: stop the autoscroll cursor on press, close on
+      // release.
+      onMouseDown={(e) => {
+        if (e.button === 1) e.preventDefault();
+      }}
+      onMouseUp={(e) => {
+        if (e.button !== 1) return;
+        e.preventDefault();
+        onClose();
+      }}
       onClick={onClick}
       onDoubleClick={() => setEditing(true)}
       onKeyDown={(e) => {
@@ -328,7 +475,8 @@ function TabChip({
         "group/tab flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors",
         active
           ? "bg-bg-panel text-text ring-1 ring-inset ring-accent/30"
-          : "text-text-muted hover:bg-bg-hover hover:text-text"
+          : "text-text-muted hover:bg-bg-hover hover:text-text",
+        dragging && "cursor-grabbing bg-bg-hover opacity-80 shadow-sm ring-1 ring-inset ring-accent/60"
       )}
     >
       <TerminalSquare size={11} className={cn("shrink-0", active && "text-accent")} />
@@ -336,6 +484,7 @@ function TabChip({
       <span
         role="button"
         tabIndex={-1}
+        aria-label={`Close ${tab.title}`}
         onClick={(e) => {
           e.stopPropagation();
           onClose();
