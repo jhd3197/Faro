@@ -53,10 +53,13 @@ function describe(s: AccessStatus): { text: string; ok: boolean; canLogin: boole
 export function AccessSignIn({
   hostname,
   compact,
+  quiet,
   extra,
 }: {
   hostname: string;
   compact?: boolean;
+  /** Offer "Log in again" only once the sign-in has expired or is about to. */
+  quiet?: boolean;
   /** More status after the sign-in text (the editor's tunnel and login). */
   extra?: (signedIn: boolean) => React.ReactNode;
 }) {
@@ -104,6 +107,9 @@ export function AccessSignIn({
     );
   }
   const d = describe(status);
+  const fresh =
+    status.state === "loggedIn" && (!status.expiresAt || status.expiresAt - Date.now() / 1000 > 3600);
+  const canLogin = d.canLogin && !(quiet && fresh);
   return (
     <div className="flex min-w-0 items-center gap-2 text-[11.5px]">
       {d.ok ? (
@@ -116,7 +122,7 @@ export function AccessSignIn({
         {d.text}
         {extra?.(status.state === "loggedIn")}
       </span>
-      {d.canLogin && (
+      {canLogin && (
         <button
           type="button"
           onClick={() => void login()}
