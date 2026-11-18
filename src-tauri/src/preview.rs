@@ -141,6 +141,30 @@ impl PreviewManager {
         Ok(b64(&png))
     }
 
+    /// The on-disk thumbnail folder (Settings › Storage measures it).
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    /// Drop every cached thumbnail: the index rows and the files. A file being
+    /// written right now just regenerates on its next view.
+    pub async fn clear_all(&self, db: &crate::db::Db) -> Result<()> {
+        db.thumb_clear_all()?;
+        let mut dir = match tokio::fs::read_dir(&self.cache_dir).await {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).context("read thumbnail cache"),
+        };
+        while let Some(entry) = dir.next_entry().await? {
+            let p = entry.path();
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if matches!(ext, "png" | "tmp") {
+                let _ = tokio::fs::remove_file(&p).await;
+            }
+        }
+        Ok(())
+    }
+
     /// Drop every cached thumbnail for a session (its connection was removed).
     #[allow(dead_code)]
     pub async fn clear_session(&self, db: &crate::db::Db, session_id: &str) {

@@ -61,6 +61,11 @@ pub struct EditManager {
     sessions: Mutex<HashMap<String, EditState>>,
 }
 
+/// Where edit-in-place keeps its local copies, one folder per edit.
+pub fn edits_root() -> PathBuf {
+    std::env::temp_dir().join("faro-edits")
+}
+
 impl EditManager {
     pub fn new() -> Self {
         Self {
@@ -77,7 +82,7 @@ impl EditManager {
         app: AppHandle,
     ) -> Result<EditStartedEvent> {
         let edit_id = Uuid::new_v4().to_string();
-        let base = std::env::temp_dir().join("faro-edits").join(&edit_id);
+        let base = edits_root().join(&edit_id);
         std::fs::create_dir_all(&base).context("create temp dir for edit")?;
 
         let name = remote_path
@@ -237,6 +242,17 @@ impl EditManager {
             },
         );
         Ok(started)
+    }
+
+    /// Temp folders of edits that are open right now; everything else under
+    /// `faro-edits` is a leftover a crash or quit didn't clean up.
+    pub async fn open_dirs(&self) -> std::collections::HashSet<PathBuf> {
+        self.sessions
+            .lock()
+            .await
+            .values()
+            .map(|s| s.tempdir.clone())
+            .collect()
     }
 
     pub async fn stop(&self, edit_id: &str) -> Result<()> {

@@ -65,6 +65,13 @@ function pathStatus() {
   };
 }
 
+// Settings › Storage demo sizes. Clearing zeroes one until the page reloads.
+const mockCaches: Record<string, { bytes: number; items: number }> = {
+  thumbnails: { bytes: 48_734_208, items: 1_204 },
+  transferResume: { bytes: 734_003_200, items: 2 },
+  editCopies: { bytes: 2_621_440, items: 3 },
+};
+
 // Demo Access forwards. postgres and admin start listening; redis reports a
 // port conflict so the rail can show that state.
 const cfForwardRunning = new Set<string>(["p-cf\0postgres", "p-cf\0admin"]);
@@ -260,6 +267,15 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       // A valid 8×8 RGBA PNG so the mock harness can exercise the remote-preview
       // UI (toggle → thumbnail render → downscale) without a real backend.
       return "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAANElEQVR42n3EQQEAEAAEwY0jhBDe3kIIIYQQQmjFJdjHDKXfZ6jJ0JJhJMNMhpUMOxlOMh/OWKPBK+ZUdQAAAABJRU5ErkJggg==";
+    case "cache_usage":
+      return Object.entries(mockCaches).map(([id, c]) => ({ id, ...c }));
+    case "cache_clear": {
+      const c = mockCaches[String(a.id)];
+      if (!c) throw new Error(`unknown cache ${a.id}`);
+      c.bytes = 0;
+      c.items = 0;
+      return { id: a.id, ...c };
+    }
     case "rename_path":
       return vfs.rename(a.sessionId, a.from, a.to), null;
     case "delete_path":

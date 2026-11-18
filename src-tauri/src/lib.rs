@@ -15,6 +15,7 @@ pub mod faro_file;
 pub mod bridge;
 pub mod commands;
 mod agent_host;
+mod cache;
 mod app_updater;
 mod archive_ops;
 pub mod cli_updater;
@@ -652,6 +653,8 @@ pub fn run() {
             commands::read_file_preview,
             commands::read_file_head,
             preview::preview_thumbnail,
+            cache::cache_usage,
+            cache::cache_clear,
             commands::open_terminal,
             commands::terminal_write,
             commands::terminal_resize,

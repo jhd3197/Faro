@@ -1513,6 +1513,15 @@ export interface TransferQueueState {
 }
 
 /** What an encrypted backup contains (Plan 12 Phase 4). */
+/** A clearable cache in Settings > Storage. */
+export type CacheId = "thumbnails" | "transferResume" | "editCopies";
+
+export interface CacheUsage {
+  id: CacheId;
+  bytes: number;
+  items: number;
+}
+
 export interface BackupSummary {
   profiles: number;
   credentials: number;

@@ -1153,6 +1153,51 @@ impl TransferManager {
         }
     }
 
+    /// Saved resume records and the bytes their partial downloads hold on
+    /// disk (Settings › Storage).
+    pub async fn resume_usage(&self) -> (u64, u64) {
+        let Some(db) = self.db.get() else { return (0, 0) };
+        let rows = db.resume_list().unwrap_or_default();
+        let bytes = rows
+            .iter()
+            .filter_map(|r| r.part_path.as_deref())
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+        (bytes, rows.len() as u64)
+    }
+
+    /// Discard saved progress for every transfer that isn't running or
+    /// queued: paused and failed ones are canceled and their partial files
+    /// removed. Returns how many records were cleared.
+    pub async fn clear_resume(&self, app: &AppHandle) -> usize {
+        let Some(db) = self.db.get().cloned() else { return 0 };
+        let rows = db.resume_list().unwrap_or_default();
+        let mut cleared = 0;
+        for row in rows {
+            let live = self.get(&row.id).await.is_some_and(|t| {
+                matches!(t.status, TransferStatus::Transferring | TransferStatus::Queued)
+            });
+            if live {
+                continue;
+            }
+            if self.get(&row.id).await.is_some() {
+                if self.cancel(&row.id, app).await.is_err() {
+                    continue;
+                }
+            } else {
+                self.forget_resume(&row.id, true).await;
+            }
+            // A record from an earlier run may name a part file the resume
+            // map never loaded.
+            if let Some(p) = row.part_path.as_deref().filter(|p| p.ends_with(partfile::PART_SUFFIX)) {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+            cleared += 1;
+        }
+        cleared
+    }
+
     pub async fn list(&self) -> Vec<Transfer> {
         let mut v: Vec<Transfer> = self.transfers.lock().await.values().cloned().collect();
         v.sort_by_key(|t| t.started_at);

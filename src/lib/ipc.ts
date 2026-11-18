@@ -12,6 +12,8 @@ export const inspectUploadPaths = (paths: string[]) =>
 export const verifyUploadDirectories = (sessionId: string, paths: string[]) =>
   invoke<void>("verify_upload_directories", { sessionId, paths });
 import type {
+  CacheId,
+  CacheUsage,
   HostProbe,
   SysSample,
   SysEndedEvent,
@@ -324,6 +326,11 @@ export const ipc = {
     fileSize: number,
     signal: string
   ) => invoke<string>("preview_thumbnail", { sessionId, path, fileSize, signal }),
+
+  // Settings > Storage: size of each clearable cache, and clearing one
+  // (returns its size afterwards).
+  cacheUsage: () => invoke<CacheUsage[]>("cache_usage"),
+  cacheClear: (id: CacheId) => invoke<CacheUsage>("cache_clear", { id }),
 
   openTerminal: (sessionId: SessionId, cols: number, rows: number) =>
     invoke<string>("open_terminal", { sessionId, cols, rows }),
