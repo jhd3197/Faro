@@ -15,6 +15,7 @@ import type {
 } from "./types";
 import { fileIcon, type FileIconSpec } from "./lib/fileIcons";
 import type { FileBrowserAction } from "./lib/keys";
+import type { ColumnWidths } from "./lib/columns";
 
 // ---------------------------------------------------------------------------
 // The transport contract. This is the whole point of the package: the UI never
@@ -181,6 +182,13 @@ export interface PaneSettings {
    * the same "mod+shift+key" spelling as `comboFromEvent`.
    */
   keyBindings?: Partial<Record<FileBrowserAction, string>>;
+  /**
+   * Optional: details-view column widths (percent of the list per column id,
+   * from dragging the header handles); null = the built-in layout. Supply
+   * `setColumnWidths` to persist them, otherwise they last for the pane.
+   */
+  columnWidths?: ColumnWidths | null;
+  setColumnWidths?(widths: ColumnWidths | null): void;
   setSortField(field: SortField): void;
   setSortDirection(dir: SortDirection): void;
   setPaneViewMode(mode: PaneViewMode): void;

@@ -56,6 +56,14 @@ export {
   NOT_FOUND_DELAY_MS,
 } from "./hooks/useDeferredLoading";
 export { cn } from "./lib/cn";
+export {
+  DEFAULT_COLUMN_WIDTHS,
+  COLUMN_MIN_PX,
+  resizeColumns,
+  columnTemplate,
+  type ColumnId,
+  type ColumnWidths,
+} from "./lib/columns";
 export { fmtSize, fmtMtime, formatMode } from "./lib/format";
 export {
   baseName,

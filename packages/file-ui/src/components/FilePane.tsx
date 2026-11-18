@@ -1,5 +1,12 @@
 import { memo, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import {
+  COLUMN_LABELS,
+  columnTemplate,
+  resizeColumns,
+  type ColumnId,
+  type ColumnWidths,
+} from "../lib/columns";
+import {
   ArrowUp,
   ArrowLeft,
   ArrowRight,
@@ -269,7 +276,19 @@ export function FilePane({
     remoteImagePreviews,
     setRemoteImagePreviews,
     keyBindings,
+    columnWidths: savedColumnWidths,
+    setColumnWidths,
   } = settings;
+  // Column widths: the host's saved value (or this pane's own when the host
+  // doesn't persist them), overridden live while a header handle is dragged.
+  const [localColumnWidths, setLocalColumnWidths] = useState<ColumnWidths | null>(null);
+  const [liveColumnWidths, setLiveColumnWidths] = useState<ColumnWidths | null>(null);
+  const [resizingCol, setResizingCol] = useState<number | null>(null);
+  const columnWidths =
+    liveColumnWidths ?? (setColumnWidths ? savedColumnWidths ?? null : localColumnWidths);
+  const commitColumnWidths = (w: ColumnWidths | null) =>
+    setColumnWidths ? setColumnWidths(w) : setLocalColumnWidths(w);
+  const headerRef = useRef<HTMLDivElement>(null);
 
   // Effective in-pane key combos: host overrides layered over the built-in
   // defaults, indexed combo→action so the keydown handler is a single lookup.
@@ -1421,14 +1440,61 @@ export function FilePane({
   // Modified drops below ~360px, Perms shows only when the pane is wide.
   const showModified = paneTier !== "narrow";
   const showPermsCol = hasPerms && paneTier === "wide";
-  const cols = [
-    "minmax(0,1fr)",
-    showModified ? "7.5rem" : null,
-    "5.5rem",
-    showPermsCol ? "5.5rem" : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const visibleCols = (["name", showModified && "modified", "size", showPermsCol && "perms"] as const)
+    .filter((c): c is ColumnId => !!c);
+  const cols = columnWidths
+    ? columnTemplate(visibleCols, columnWidths)
+    : [
+        "minmax(0,1fr)",
+        showModified ? "7.5rem" : null,
+        "5.5rem",
+        showPermsCol ? "5.5rem" : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+  // Drag the boundary after visible column `index`: only it and its right
+  // neighbour change. Moves under 3px don't count; listeners sit on the
+  // document so the drag survives leaving the header.
+  const startColumnResize = (e: React.PointerEvent, index: number) => {
+    if (e.button !== 0 || !e.isPrimary) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const cells = Array.from(headerRef.current?.children ?? []) as HTMLElement[];
+    const px = cells.map((c) => c.getBoundingClientRect().width);
+    if (px.length !== visibleCols.length) return;
+    const startX = e.clientX;
+    const base = columnWidths;
+    let moved = false;
+    let last: ColumnWidths | null = null;
+    const body = document.body.style;
+    const prev = { cursor: body.cursor, select: body.userSelect };
+    const move = (ev: PointerEvent) => {
+      const delta = ev.clientX - startX;
+      if (!moved && Math.abs(delta) < 3) return;
+      if (!moved) {
+        moved = true;
+        body.cursor = "col-resize";
+        body.userSelect = "none";
+        setResizingCol(index);
+      }
+      last = resizeColumns(visibleCols, px, index, delta, base);
+      setLiveColumnWidths(last);
+    };
+    const end = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+      body.cursor = prev.cursor;
+      body.userSelect = prev.select;
+      if (last) commitColumnWidths(last);
+      setLiveColumnWidths(null);
+      setResizingCol(null);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
+  };
   const selectedBytes = visible
     .filter((e) => selected.has(e.path))
     .reduce((a, e) => a + (e.kind === "file" ? e.size : 0), 0);
@@ -1773,34 +1839,45 @@ export function FilePane({
 
       {sessionId && paneViewMode === "details" && (
         <div
+          ref={headerRef}
           className="grid items-center gap-2 border-b border-border bg-bg-subtle px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
           style={{ gridTemplateColumns: cols }}
         >
-          <SortHeader
-            label="Name"
-            field="name"
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSort={onSort}
-          />
-          {showModified && (
-            <SortHeader
-              label="Modified"
-              field="modified"
-              sortField={sortField}
-              sortDirection={sortDirection}
-              onSort={onSort}
-            />
-          )}
-          <SortHeader
-            label="Size"
-            field="size"
-            align="right"
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSort={onSort}
-          />
-          {showPermsCol && <span className="text-right">Perms</span>}
+          {visibleCols.map((id, i) => (
+            <div key={id} data-col={id} className={cn("relative flex min-w-0", id === "name" || id === "modified" ? "justify-start" : "justify-end")}>
+              {id === "perms" ? (
+                <span className="text-right">Perms</span>
+              ) : (
+                <SortHeader
+                  label={COLUMN_LABELS[id]}
+                  field={id}
+                  align={id === "size" ? "right" : "left"}
+                  sortField={sortField}
+                  sortDirection={sortDirection}
+                  onSort={onSort}
+                />
+              )}
+              {i < visibleCols.length - 1 && (
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label={`Resize ${COLUMN_LABELS[id]} column`}
+                  title="Drag to resize; double-click to reset"
+                  onPointerDown={(e) => startColumnResize(e, i)}
+                  onDoubleClick={() => { setLiveColumnWidths(null); commitColumnWidths(null); }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="group/colh absolute -right-[8px] -top-1 -bottom-1 z-[1] flex w-2 cursor-col-resize touch-none justify-center"
+                >
+                  <span
+                    className={cn(
+                      "w-px group-hover/colh:bg-accent",
+                      resizingCol === i ? "bg-accent" : "bg-border"
+                    )}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
