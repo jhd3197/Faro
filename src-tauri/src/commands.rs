@@ -1585,6 +1585,102 @@ pub async fn duplicate_path(
     }
 }
 
+/// Whether `path` is `ancestor` or anything below it, by whole segments:
+/// `/users-archive` is not inside `/users`. Windows-style paths (drive letter
+/// or UNC) accept either separator and compare without case.
+fn is_same_or_inside(path: &str, ancestor: &str) -> bool {
+    let windows = |p: &str| {
+        p.starts_with("\\\\") || (p.len() >= 2 && p.as_bytes()[1] == b':' && p.as_bytes()[0].is_ascii_alphabetic())
+    };
+    let win = windows(path) || windows(ancestor);
+    let parts = |p: &str| -> Vec<String> {
+        let split: Vec<&str> = if win {
+            p.split(['/', '\\']).collect()
+        } else {
+            p.split('/').collect()
+        };
+        split
+            .into_iter()
+            .filter(|s| !s.is_empty() && *s != ".")
+            .map(|s| if win { s.to_lowercase() } else { s.to_string() })
+            .collect()
+    };
+    let (p, a) = (parts(path), parts(ancestor));
+    // A relative path and an absolute one never nest.
+    if !win && path.starts_with('/') != ancestor.starts_with('/') {
+        return false;
+    }
+    p.len() >= a.len() && p[..a.len()] == a[..]
+}
+
+/// Refuse a copy that would overwrite or nest a folder inside itself.
+fn copy_guard(from: &str, to: &str) -> Result<(), String> {
+    if is_same_or_inside(to, from) {
+        return Err("Can't copy a folder into itself.".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn copy_local(from: &str, to: &str) -> Result<(), String> {
+    copy_guard(from, to)?;
+    let src = Path::new(from);
+    let dst = Path::new(to);
+    let meta = std::fs::symlink_metadata(src).map_err(|e| format!("{from}: {e}"))?;
+    // symlink_metadata: a dangling link still "exists" here, so it's never
+    // replaced.
+    if std::fs::symlink_metadata(dst).is_ok() {
+        return Err(format!("{to} already exists"));
+    }
+    if meta.is_dir() || (meta.file_type().is_symlink() && src.is_dir()) {
+        copy_dir_recursive(src, dst).map_err(err)
+    } else {
+        std::fs::copy(src, dst).map(|_| ()).map_err(err)
+    }
+}
+
+pub(crate) async fn copy_ssh(ssh: &Arc<SshSession>, from: &str, to: &str) -> Result<(), String> {
+    copy_guard(from, to)?;
+    let from = from.trim_end_matches('/');
+    let to = to.trim_end_matches('/');
+    let probe = ssh.exec(&format!("test -e {} || test -L {}", sh_quote(to), sh_quote(to))).await.map_err(err)?;
+    if probe.exit_code == Some(0) {
+        return Err(format!("{to} already exists"));
+    }
+    let out = ssh.exec(&duplicate_remote_command(from, to)).await.map_err(err)?;
+    if out.exit_code != Some(0) {
+        let msg = out.stderr.trim();
+        return Err(if msg.is_empty() { "copy failed".into() } else { format!("copy failed: {msg}") });
+    }
+    Ok(())
+}
+
+/// Copy a file/folder to exactly `to` on the same connection (Paste after
+/// Copy; the pane has already picked a free name). Local disk or `cp -a` over
+/// SSH. Other backends have no cheap server-side copy, so the pane offers a
+/// cross-pane transfer instead.
+#[tauri::command]
+pub async fn copy_path(
+    session_id: String,
+    from: String,
+    to: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if session_id == LOCAL_SESSION {
+        return tokio::task::spawn_blocking(move || copy_local(&from, &to))
+            .await
+            .map_err(err)?;
+    }
+    let session = state
+        .sessions
+        .get(&session_id)
+        .await
+        .ok_or_else(|| format!("session {session_id} not found"))?;
+    match &*session {
+        Session::Ssh(ssh) => copy_ssh(ssh, &from, &to).await,
+        _ => Err("This connection can't copy files in place. Paste them into the other pane to transfer them.".into()),
+    }
+}
+
 // ---------- Server-side archive + download ----------
 
 /// Archive a remote directory on the server (a single `tar`/`zip` command) and
@@ -2774,6 +2870,41 @@ mod upload_inventory_tests {
         let collision = ["a", "other/a"].map(|p| root.join(p).to_string_lossy().into_owned()).to_vec();
         assert!(inspect_upload_paths(collision).await.unwrap_err().contains("conflicting"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_ancestry_is_separator_aware() {
+        use super::is_same_or_inside as inside;
+        assert!(inside("/users", "/users"));
+        assert!(inside("/users/a/b", "/users"));
+        assert!(inside("/users/a/", "/users/"));
+        assert!(!inside("/users-archive", "/users"));
+        assert!(!inside("/users-archive/x", "/users"));
+        assert!(!inside("/", "/users"));
+        assert!(inside("C:\\Data\\Sub", "c:/data"));
+        assert!(!inside("C:\\Database", "C:\\Data"));
+        assert!(inside("\\\\srv\\share\\a", "\\\\SRV\\share"));
+        assert!(!inside("users/a", "/users"), "relative vs absolute");
+    }
+
+    #[test]
+    fn local_copy_refuses_overwrite_and_self_nesting() {
+        let dir = std::env::temp_dir().join(format!("faro-copy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder/inner")).unwrap();
+        std::fs::write(dir.join("folder/inner/a.txt"), b"hi").unwrap();
+        std::fs::write(dir.join("b.txt"), b"b").unwrap();
+        let p = |s: &str| dir.join(s).to_string_lossy().into_owned();
+
+        assert!(super::copy_local(&p("folder"), &p("folder/inner/copy")).is_err());
+        assert!(super::copy_local(&p("b.txt"), &p("folder/inner/a.txt")).is_err(), "never overwrites");
+        assert_eq!(std::fs::read(dir.join("folder/inner/a.txt")).unwrap(), b"hi");
+
+        super::copy_local(&p("folder"), &p("folder (2)")).unwrap();
+        assert_eq!(std::fs::read(dir.join("folder (2)/inner/a.txt")).unwrap(), b"hi");
+        super::copy_local(&p("b.txt"), &p("b (2).txt")).unwrap();
+        assert_eq!(std::fs::read(dir.join("b (2).txt")).unwrap(), b"b");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

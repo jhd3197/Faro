@@ -662,6 +662,7 @@ pub fn run() {
             commands::chmod_path,
             commands::reveal_local_path,
             commands::duplicate_path,
+            commands::copy_path,
             commands::start_archive_download,
             commands::compress_paths,
             commands::extract_archive,

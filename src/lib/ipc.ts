@@ -460,6 +460,11 @@ export const ipc = {
   duplicatePath: (sessionId: SessionId, path: string) =>
     invoke<void>("duplicate_path", { sessionId, path }),
 
+  // Copy a file/folder to exactly `to` on the same connection (Paste after
+  // Copy). Refuses to overwrite or to copy a folder into itself.
+  copyPath: (sessionId: SessionId, from: string, to: string) =>
+    invoke<void>("copy_path", { sessionId, from, to }),
+
   // Build a tar.gz/zip of a remote dir on the server, then download it. Returns
   // the resulting transfer id (the archive shows in the transfers panel).
   startArchiveDownload: (
