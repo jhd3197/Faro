@@ -49,6 +49,7 @@ test("named entry points open a real section, and a focus id when the control is
     pairingRemoteControl: { section: "remoteControl", focus: nav.SETTINGS_FOCUS.showPairingCode },
     themeMenu: { section: "appearance", focus: nav.SETTINGS_FOCUS.themeMode },
     transferPanel: { section: "transfers", focus: nav.SETTINGS_FOCUS.transferConcurrency },
+    vaultLocked: { section: "passwordManagers", focus: nav.SETTINGS_FOCUS.bitwardenPassword },
   };
   assert.deepEqual(nav.SETTINGS_ENTRY_POINTS, expected);
   for (const [id, target] of Object.entries(expected)) {
@@ -75,6 +76,7 @@ test("each entry point is wired in the UI, and generic settings still opens with
     keyboardCustomize: "../src/components/KeyboardShortcutsDialog.tsx",
     themeMenu: "../src/components/TitleBar.tsx",
     transferPanel: "../src/components/TransferQueue.tsx",
+    vaultLocked: "../src/components/ProfileEditor.tsx",
   };
   for (const [id, file] of Object.entries(wired)) {
     const src = read(file);

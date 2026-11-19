@@ -68,6 +68,8 @@ import { CopyTextButton } from "@/components/ui/CopyText";
 import { ShowMore } from "@/components/ui/ShowMore";
 import { toast } from "@/stores/toastStore";
 import { isComposing } from "@faro/file-ui";
+import { VaultPicker } from "./VaultPicker";
+import { isPasswordManager, usePasswordManagers } from "@/stores/passwordManagersStore";
 
 interface Props {
   profile: ConnectionProfile | null;
@@ -210,6 +212,16 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [credentialItem, setCredentialItem] = useState(seed?.credentialRef?.item ?? "");
   const [credentialProviders, setCredentialProviders] = useState<string[]>([]);
   useEffect(() => { void ipc.credentialProviders().then(setCredentialProviders).catch(() => {}); }, []);
+  const [vaultPickerOpen, setVaultPickerOpen] = useState(false);
+  // SSH agent for agent auth: "" = automatic, a known id, or "custom" + a path.
+  const [agentChoice, setAgentChoice] = useState<string>(() => {
+    const v = seed?.identityAgent ?? "";
+    return !v || KNOWN_AGENTS.includes(v) ? v : "custom";
+  });
+  const [agentPath, setAgentPath] = useState(() => {
+    const v = seed?.identityAgent ?? "";
+    return v && !KNOWN_AGENTS.includes(v) ? v : "";
+  });
   const [notes, setNotes] = useState(seed?.notes ?? "");
   const [agentKey, setAgentKey] = useState<string | undefined>(seed?.agentKey);
   const [host, setHost] = useState(seed?.host ?? "");
@@ -607,7 +619,13 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             ? dynamicsAccount || undefined
             : undefined,
       notes: notes.trim() || undefined,
-      credentialRef: useCredentialRef ? { provider: credentialProvider, item: credentialItem } : undefined,
+      credentialRef: useCredentialRef ? { provider: credentialProvider, item: credentialItem.trim() } : undefined,
+      identityAgent:
+        protocol === "sftp" && authKind === "agent"
+          ? agentChoice === "custom"
+            ? agentPath.trim() || undefined
+            : agentChoice || undefined
+          : undefined,
       agentKey: isAgent ? agentKey : undefined,
       agentRelay: isAgent && agentRelayAddress.trim() ? { address: agentRelayAddress.trim(), publicKey: agentRelayKey.trim() } : undefined,
       group: group.trim() || undefined,
@@ -1301,7 +1319,12 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             )}
 
             {authKind === "agent" && (
-              <p className="mb-3 text-xs text-text-dim">Uses keys loaded in your SSH agent.</p>
+              <SshAgentField
+                choice={agentChoice}
+                setChoice={setAgentChoice}
+                path={agentPath}
+                setPath={setAgentPath}
+              />
             )}
 
             {authKind === "password" && (
@@ -1376,16 +1399,38 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </select>
 
         </Field>}
-        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && <div>
-          <Field label="Credential source" help={<>Adapters are configured locally in credential-providers.json. A reference replaces the saved password or key passphrase when a connection opens.</>}>
-            <select className={inputCls} value={credentialProvider} onChange={e => setCredentialProvider(e.target.value)}>
-              <option value="">Saved credential</option>
-              {[...new Set([...credentialProviders, ...(credentialProvider ? [credentialProvider] : [])])].map(provider => <option key={provider} value={provider}>{provider}{!credentialProviders.includes(provider) ? " (not configured here)" : ""}</option>)}
-            </select>
-          </Field>
-          {credentialProvider && <Field label="Credential reference"><input className={inputCls} value={credentialItem} onChange={e => setCredentialItem(e.target.value)} placeholder="Item identifier for your credential adapter" /></Field>}
-
-        </div>}
+        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && (
+          <CredentialSourceFields
+            provider={credentialProvider}
+            setProvider={setCredentialProvider}
+            item={credentialItem}
+            setItem={setCredentialItem}
+            adapters={credentialProviders}
+            onChoose={() => setVaultPickerOpen(true)}
+          />
+        )}
+        {vaultPickerOpen && isPasswordManager(credentialProvider) && (
+          <VaultPicker
+            provider={credentialProvider}
+            onClose={() => setVaultPickerOpen(false)}
+            onPick={({ reference, item }) => {
+              setCredentialItem(reference);
+              // Fill what's still empty from the item, never overwrite.
+              const fromUrl = item.url ? vaultUrl(item.url) : null;
+              if (fromUrl && ["sftp", "ftp", "ftps"].includes(protocol)) {
+                if (!host.trim()) {
+                  setHost(fromUrl.host);
+                  if (fromUrl.port && !portTouched) setPort(fromUrl.port);
+                }
+              } else if (fromUrl && (isWebdav || isHttp) && !endpoint.trim()) {
+                setEndpoint(item.url!);
+              }
+              if (item.username && !username.trim() && ["sftp", "ftp", "ftps", "webdav", "http"].includes(protocol)) {
+                setUsername(item.username);
+              }
+            }}
+          />
+        )}
         {iconUnknown && (
           <Hint tone="warn">
             Unknown icon key — the bubble falls back to the name monogram.
@@ -2102,6 +2147,195 @@ function SettingsJump({
     >
       {children}
     </button>
+  );
+}
+
+const KNOWN_AGENTS = ["system", "1password", "bitwarden"];
+
+/// Host and explicit port from a vault item's URL ("sftp://db.example.com").
+function vaultUrl(u: string): { host: string; port?: number } | null {
+  try {
+    const url = new URL(u.includes("://") ? u : `sftp://${u}`);
+    if (!url.hostname) return null;
+    return { host: url.hostname, port: url.port ? Number(url.port) : undefined };
+  } catch {
+    return null;
+  }
+}
+
+/// "Credential source": the saved login, 1Password, Bitwarden or a custom
+/// adapter (Plan 33). A manager gets Choose… (the vault picker) and Test,
+/// which reads the reference and reports OK or the error, never the value.
+function CredentialSourceFields({
+  provider,
+  setProvider,
+  item,
+  setItem,
+  adapters,
+  onChoose,
+}: {
+  provider: string;
+  setProvider: (v: string) => void;
+  item: string;
+  setItem: (v: string) => void;
+  adapters: string[];
+  onChoose: () => void;
+}) {
+  const custom = adapters.filter((a) => !isPasswordManager(a));
+  const stale = provider && !isPasswordManager(provider) && !custom.includes(provider) ? [provider] : [];
+  const manager = isPasswordManager(provider) ? provider : null;
+  const [test, setTest] = useState<{ state: "busy" | "ok" | "error"; message?: string } | null>(null);
+  // A changed reference needs a new test.
+  useEffect(() => setTest(null), [provider, item]);
+
+  const runTest = async () => {
+    setTest({ state: "busy" });
+    try {
+      await ipc.credentialRefTest({ provider, item: item.trim() });
+      setTest({ state: "ok" });
+    } catch (e) {
+      setTest({ state: "error", message: messageOf(e) });
+    }
+  };
+
+  const placeholder =
+    provider === "1password"
+      ? "op://vault/item/field"
+      : provider === "bitwarden"
+        ? "item id/password"
+        : "Item identifier for your credential adapter";
+
+  return (
+    <div data-credential-source>
+      <Field
+        label="Credential source"
+        help={<>A reference replaces the saved password or key passphrase when a connection opens. Faro reads it then and never stores it. Custom adapters live in credential-providers.json.</>}
+      >
+        <select aria-label="Credential source" className={inputCls} value={provider} onChange={(e) => setProvider(e.target.value)}>
+          <option value="">Saved in Faro</option>
+          <option value="1password">1Password</option>
+          <option value="bitwarden">Bitwarden</option>
+          {[...custom, ...stale].map((p) => (
+            <option key={p} value={p}>
+              {p}
+              {stale.includes(p) ? " (not configured here)" : ""}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {provider && (
+        <Field group label="Credential reference">
+          <div className="flex gap-2">
+            <input
+              aria-label="Credential reference"
+              className={cn(inputCls, "min-w-0 flex-1 font-mono text-[12.5px]")}
+              value={item}
+              onChange={(e) => setItem(e.target.value)}
+              placeholder={placeholder}
+            />
+            {manager && (
+              <button
+                type="button"
+                data-vault-choose
+                onClick={onChoose}
+                className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text"
+              >
+                Choose…
+              </button>
+            )}
+            <button
+              type="button"
+              data-credential-test
+              disabled={!item.trim() || test?.state === "busy"}
+              onClick={() => void runTest()}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-50"
+            >
+              {test?.state === "busy" && <Loader2 size={12} className="animate-spin" />}
+              Test
+            </button>
+          </div>
+          {test && test.state !== "busy" && (
+            <p
+              role="status"
+              data-credential-test-result={test.state}
+              className={cn("mt-1.5 text-xs", test.state === "ok" ? "text-success" : "text-danger")}
+            >
+              {test.state === "ok" ? (
+                <span className="inline-flex items-center gap-1"><Check size={12} />Read OK</span>
+              ) : (
+                <>
+                  {test.message}
+                  {/Settings › Password managers/.test(test.message ?? "") && (
+                    <>
+                      {" "}
+                      <SettingsJump entry="vaultLocked">Open Settings</SettingsJump>
+                    </>
+                  )}
+                </>
+              )}
+            </p>
+          )}
+        </Field>
+      )}
+    </div>
+  );
+}
+
+/// Agent auth: which SSH agent to ask for keys (Plan 33). Each known agent
+/// says whether Faro found it on this machine.
+function SshAgentField({
+  choice,
+  setChoice,
+  path,
+  setPath,
+}: {
+  choice: string;
+  setChoice: (v: string) => void;
+  path: string;
+  setPath: (v: string) => void;
+}) {
+  const agents = usePasswordManagers((s) => s.agents);
+  const refreshAgents = usePasswordManagers((s) => s.refreshAgents);
+  useEffect(() => {
+    void refreshAgents();
+  }, [refreshAgents]);
+  const label = (id: string, name: string) => {
+    const a = agents.find((x) => x.id === id);
+    return a ? `${name} · ${a.available ? "found" : "not running"}` : name;
+  };
+  const picked = agents.find((a) => a.id === choice);
+  return (
+    <div className="mb-3">
+      <Field label="SSH agent">
+        <select aria-label="SSH agent" className={inputCls} value={choice} onChange={(e) => setChoice(e.target.value)}>
+          <option value="">Automatic</option>
+          <option value="system">{label("system", "System agent")}</option>
+          <option value="1password">{label("1password", "1Password")}</option>
+          <option value="bitwarden">{label("bitwarden", "Bitwarden")}</option>
+          <option value="custom">Custom path…</option>
+        </select>
+      </Field>
+      {choice === "custom" && (
+        <Field label="Agent socket or pipe">
+          <input
+            aria-label="Agent path"
+            className={cn(inputCls, "font-mono text-[12.5px]")}
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="/path/to/agent.sock"
+          />
+        </Field>
+      )}
+      <p className="text-xs text-text-dim">
+        {choice === ""
+          ? "Uses keys from the first agent that answers."
+          : picked
+            ? picked.available
+              ? <>Uses keys from <span className="break-all font-mono">{picked.path}</span>.</>
+              : `${picked.label} isn't running on this computer.`
+            : "Uses keys loaded in your SSH agent."}
+      </p>
+    </div>
   );
 }
 
