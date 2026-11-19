@@ -6,6 +6,7 @@ import * as vfs from "./vfs";
 import * as transfers from "./transfers";
 import * as sysmon from "./sysmon";
 import * as docker from "./docker";
+import * as passwords from "./passwords";
 import { emit } from "./event";
 
 type Args = Record<string, any>;
@@ -106,6 +107,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
   if (cmd.startsWith("sysmon_")) return sysmon.handle(cmd, a) ?? null;
   // Docker manager and live logs (Plan 31) too.
   if (cmd.startsWith("docker_") || cmd === "follow_stop") return docker.handle(cmd, a) ?? null;
+  // Password managers and SSH agents (Plan 33).
+  if (passwords.COMMANDS.has(cmd)) return passwords.handle(cmd, a) ?? null;
   switch (cmd) {
     case "app_release_notes_since": {
       // Plan 32: a JSON list in sessionStorage stands in for GitHub; none = offline.
@@ -122,7 +125,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- profiles ----
     case "folder_sync_conflicts": return [];
     case "folder_sync_resolve": return null;
-    case "credential_providers": return [];
+    case "credential_providers": return ["1password", "bitwarden"];
     case "group_gateways": return groupGateways;
     case "set_group_gateway": { if (a.gateway) groupGateways[a.group] = a.gateway; else delete groupGateways[a.group]; return null; }
     case "organize_profiles": {

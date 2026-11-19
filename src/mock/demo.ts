@@ -31,6 +31,12 @@ import { useCfConnect } from "@/components/CloudflareConnectSheet";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
 import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
 import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocker } from "./docker";
+import {
+  calls as passwordCalls,
+  setState as setPasswordManagers,
+  setAgents as setSshAgents,
+  reset as resetPasswordManagers,
+} from "./passwords";
 // window.__primitives: a bench for the shared UI primitives (tests only).
 import "./primitives";
 
@@ -83,4 +89,10 @@ import "./primitives";
   dockerCalls,
   setDockerAccess,
   resetDocker,
+  // Plan 33 test hooks: password-manager commands sent, manager states, SSH
+  // agents found, and a way back to the starting vaults.
+  passwordCalls,
+  setPasswordManagers,
+  setSshAgents,
+  resetPasswordManagers,
 };
