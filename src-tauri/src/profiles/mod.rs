@@ -157,6 +157,11 @@ pub struct ConnectionProfile {
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_ref: Option<crate::credential_refs::CredentialRef>,
+    /// Which SSH agent `AuthMethod::Agent` uses: absent = automatic, else
+    /// `system`, `1password`, `bitwarden` or a socket / pipe path. See
+    /// `ssh_agents`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_relay: Option<faro_agent_proto::relay::RelayConfig>,
     // Rail organisation. `group` is a free-form folder name (absent = ungrouped);

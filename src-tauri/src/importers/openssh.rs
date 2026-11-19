@@ -73,7 +73,10 @@ pub fn parse(text: &str, source_label: String) -> Vec<ProfilePreview> {
                     block.certificate.get_or_insert_with(|| expand_tilde(value));
                 }
                 "identityagent" => {
-                    block.agent.get_or_insert_with(|| !value.eq_ignore_ascii_case("none"));
+                    if block.agent.is_none() {
+                        block.agent = Some(!value.eq_ignore_ascii_case("none"));
+                        block.identity_agent = crate::ssh_agents::from_ssh_config(value);
+                    }
                 }
                 "proxyjump" if block.via.is_none() => {
                     block.via = parse_proxy_jump(value);
@@ -359,6 +362,8 @@ struct HostBlock {
     certificate: Option<String>,
     /// `IdentityAgent`, other than `none`.
     agent: Option<bool>,
+    /// That `IdentityAgent` as a profile's `identity_agent`.
+    identity_agent: Option<String>,
     via: Option<Via>,
 }
 
@@ -372,6 +377,7 @@ impl HostBlock {
             identity: None,
             certificate: None,
             agent: None,
+            identity_agent: None,
             via: None,
         }
     }
@@ -403,6 +409,7 @@ impl HostBlock {
             // A certificate is only used with a key.
             p.certificate_file = self.certificate.filter(|_| p.identity_file.is_some());
             p.agent = p.identity_file.is_none() && self.agent == Some(true);
+            p.identity_agent = self.identity_agent.filter(|_| p.agent);
         }
         p.note = Some(format!("from {source_label}"));
         Some(p)
@@ -415,6 +422,41 @@ mod tests {
 
     fn by_name<'a>(ps: &'a [ProfilePreview], name: &str) -> &'a ProfilePreview {
         ps.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    #[test]
+    fn identity_agent_maps_to_the_profile_agent_choice() {
+        let cfg = "Host one
+  HostName one.example
+  IdentityAgent \"~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock\"
+
+Host bw
+  HostName bw.example
+  IdentityAgent ~/.bitwarden-ssh-agent.sock
+
+Host sys
+  HostName sys.example
+  IdentityAgent SSH_AUTH_SOCK
+
+Host gpg
+  HostName gpg.example
+  IdentityAgent /run/user/1000/gnupg/S.gpg-agent.ssh
+
+Host off
+  HostName off.example
+  IdentityAgent none
+";
+        let ps = parse(cfg, "test".into());
+        let agent = |name: &str| by_name(&ps, name).identity_agent.clone();
+        assert_eq!(agent("one").as_deref(), Some("1password"));
+        assert_eq!(agent("bw").as_deref(), Some("bitwarden"));
+        assert_eq!(agent("sys").as_deref(), Some("system"));
+        assert_eq!(agent("gpg").as_deref(), Some("/run/user/1000/gnupg/S.gpg-agent.ssh"));
+        assert_eq!(agent("off"), None);
+        assert!(!by_name(&ps, "off").agent);
+        let profile = by_name(&ps, "one").clone().into_profile();
+        assert!(matches!(profile.auth, crate::profiles::AuthMethod::Agent));
+        assert_eq!(profile.identity_agent.as_deref(), Some("1password"));
     }
 
     #[test]

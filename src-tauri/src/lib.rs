@@ -54,6 +54,7 @@ pub mod scan;
 pub mod scp;
 pub mod search;
 pub mod session;
+pub mod ssh_agents;
 pub mod ssh_cert;
 pub mod sync;
 mod logfollow;
@@ -455,6 +456,7 @@ pub fn run() {
             commands::organize_profiles,
             commands::group_gateways,
             commands::credential_providers,
+            commands::ssh_agents,
             commands::set_group_gateway,
             commands::delete_profile,
             commands::ssh_key_defaults,

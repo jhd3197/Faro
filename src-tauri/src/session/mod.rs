@@ -1525,76 +1525,19 @@ pub async fn open_session(
 
 // ---- Connect ----
 
-#[cfg(unix)]
-async fn open_agent() -> Result<russh_keys::agent::client::AgentClient<tokio::net::UnixStream>> {
-    russh_keys::agent::client::AgentClient::connect_env()
-        .await
-        .context("connecting to ssh-agent via $SSH_AUTH_SOCK")
-}
-
-#[cfg(windows)]
-async fn open_agent(
-) -> Result<russh_keys::agent::client::AgentClient<tokio::net::windows::named_pipe::NamedPipeClient>>
-{
-    // First try OpenSSH-for-Windows (shipped with Win10/11) which listens
-    // on a fixed pipe when the 'OpenSSH Authentication Agent' service runs.
-    const OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
-    if let Ok(stream) =
-        tokio::net::windows::named_pipe::ClientOptions::new().open(OPENSSH_PIPE)
-    {
-        return Ok(russh_keys::agent::client::AgentClient::connect(stream));
-    }
-
-    // Fall back to PuTTY Pageant 0.78+, which uses pipes like
-    // `\\.\pipe\pageant.<user>.<random>`. The random suffix is per-launch,
-    // so we enumerate `\\.\pipe\` and try each pageant.* entry. Older
-    // Pageant (file-mapping IPC) is not supported.
-    if let Some(pipe) = find_pageant_pipe() {
-        if let Ok(stream) =
-            tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe)
-        {
-            return Ok(russh_keys::agent::client::AgentClient::connect(stream));
-        }
-    }
-
-    Err(anyhow!(
-        "no ssh-agent found on Windows. Tried OpenSSH ({OPENSSH_PIPE}) and Pageant pipes. \
-         Start the 'OpenSSH Authentication Agent' service or launch Pageant (PuTTY 0.78+)."
-    ))
-}
-
-#[cfg(windows)]
-fn find_pageant_pipe() -> Option<std::ffi::OsString> {
-    // Listing `\\.\pipe\` returns the names of every named pipe on the system.
-    // The OS exposes them as a directory since Windows 7 / 10.
-    let entries = std::fs::read_dir(r"\\.\pipe\").ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let s = name.to_string_lossy();
-        if s.starts_with("pageant.") {
-            // The full pipe path is `\\.\pipe\<name>`.
-            let mut p = std::ffi::OsString::from(r"\\.\pipe\");
-            p.push(&name);
-            return Some(p);
-        }
-    }
-    None
-}
-
 async fn authenticate_with_agent(
     session: &mut client::Handle<ClientHandler>,
     username: &str,
+    choice: Option<&str>,
 ) -> Result<bool> {
-    let mut agent = open_agent().await?;
+    let crate::ssh_agents::Opened { mut agent, path } = crate::ssh_agents::open(choice).await?;
 
     let identities = agent
         .request_identities()
         .await
-        .context("listing agent identities")?;
+        .with_context(|| format!("The agent at {path} didn't list its keys"))?;
     if identities.is_empty() {
-        return Err(anyhow!(
-            "ssh-agent has no identities loaded (run `ssh-add`)"
-        ));
+        return Err(anyhow!("The agent at {path} has no keys."));
     }
     for id in identities {
         let (next_agent, authed) = session.authenticate_future(username, id, agent).await;
@@ -1936,7 +1879,7 @@ async fn authenticate(
                 .await
                 .context("publickey auth")?
         }
-        AuthMethod::Agent => authenticate_with_agent(session, username).await?,
+        AuthMethod::Agent => authenticate_with_agent(session, username, profile.identity_agent.as_deref()).await?,
         AuthMethod::CloudflareCert => {
             // Minutes-long certificates: a fresh one every connect, never cached.
             let (bin, hostname) =

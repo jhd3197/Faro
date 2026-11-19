@@ -334,7 +334,10 @@ pub fn to_openssh_config(all: &[ConnectionProfile], ids: &[String]) -> (String, 
                     out.push_str(&format!("  CertificateFile {}\n", quoted(cert)));
                 }
             }
-            AuthMethod::Agent => out.push_str("  IdentityAgent SSH_AUTH_SOCK\n"),
+            AuthMethod::Agent => {
+                let agent = crate::ssh_agents::to_ssh_config(p.identity_agent.as_deref());
+                out.push_str(&format!("  IdentityAgent {}\n", quoted(&agent)));
+            }
             // cloudflared writes the short-lived pair here (see `ssh_cert.rs`).
             AuthMethod::CloudflareCert => {
                 let h = access.as_deref().unwrap_or("%h");
