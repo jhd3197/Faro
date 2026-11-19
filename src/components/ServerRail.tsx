@@ -137,6 +137,14 @@ function profileRoute(p: ConnectionProfile, profiles: ConnectionProfile[]): stri
   return "";
 }
 
+/// "Password from 1Password" when a password manager supplies the login.
+function vaultSource(p: ConnectionProfile): string {
+  const provider = p.credentialRef?.provider;
+  if (provider === "1password") return "Password from 1Password";
+  if (provider === "bitwarden") return "Password from Bitwarden";
+  return "";
+}
+
 // The single connection navigator — a Discord-style vertical rail of round
 // "server" bubbles. Replaces the old ConnectionManager sidebar and the
 // ConnectionTabs strip: one bubble per saved server, status dot, hover name,
@@ -1617,6 +1625,9 @@ function RailBubble({
             <span className="font-semibold text-text">{p.name}</span>
             <span className="font-mono text-[10px] text-text-dim">{addr}</span>
             {route && <span className="text-[10px] text-text-dim">{route}</span>}
+            {vaultSource(p) && (
+              <span data-rail-vault className="text-[10px] text-text-dim">{vaultSource(p)}</span>
+            )}
             <span className="text-[10px] text-text-dim">
               {PROTOCOL_LABEL[p.protocol]}
               {bridged ? " · agent connected" : ""}
