@@ -20,11 +20,17 @@ pub fn config_path() -> Result<PathBuf> {
 pub fn providers() -> Result<BTreeMap<String, Provider>> {
     let path = config_path()?;
     if !path.exists() { return Ok(BTreeMap::new()); }
-    serde_json::from_slice(&std::fs::read(path)?).context("Invalid local credential adapter configuration")
+    let mut providers: BTreeMap<String, Provider> = serde_json::from_slice(&std::fs::read(path)?).context("Invalid local credential adapter configuration")?;
+    // 1Password and Bitwarden are built in; the file can't replace them.
+    providers.retain(|id, _| !crate::password_managers::is_builtin(id));
+    Ok(providers)
 }
 
 pub async fn resolve(reference: &CredentialRef) -> Result<String> {
     anyhow::ensure!(!reference.item.is_empty() && reference.item.len() <= 4096 && !reference.item.starts_with('-') && !reference.item.contains(['\0', '\r', '\n']), "Invalid credential reference");
+    if crate::password_managers::is_builtin(&reference.provider) {
+        return crate::password_managers::resolve(reference).await;
+    }
     let providers = providers()?;
     let provider = providers.get(&reference.provider).context("Credential adapter is not configured on this computer; configure it before connecting")?;
     run(provider, &reference.item).await

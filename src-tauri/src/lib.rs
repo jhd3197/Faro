@@ -43,6 +43,7 @@ pub mod importers;
 pub mod keys;
 mod known_hosts;
 pub mod oauth;
+pub mod password_managers;
 mod path_integration;
 mod preview;
 mod proc;
@@ -457,6 +458,12 @@ pub fn run() {
             commands::group_gateways,
             commands::credential_providers,
             commands::ssh_agents,
+            commands::password_managers_status,
+            commands::password_manager_unlock,
+            commands::password_manager_lock,
+            commands::password_manager_items,
+            commands::password_manager_fields,
+            commands::credential_ref_test,
             commands::set_group_gateway,
             commands::delete_profile,
             commands::ssh_key_defaults,

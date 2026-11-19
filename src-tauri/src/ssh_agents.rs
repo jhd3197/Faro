@@ -131,7 +131,7 @@ pub fn list() -> Vec<AgentInfo> {
 
 #[cfg(unix)]
 fn endpoint(id: &str) -> (String, bool) {
-    let candidates = if id == SYSTEM { env_sock().into_iter().collect() } else { known(id, dirs::home_dir().as_deref()) };
+    let candidates: Vec<PathBuf> = if id == SYSTEM { env_sock().into_iter().collect() } else { known(id, dirs::home_dir().as_deref()) };
     let found = candidates.iter().find(|p| p.exists());
     match found.or(candidates.first()) {
         Some(p) => (p.display().to_string(), found.is_some()),
