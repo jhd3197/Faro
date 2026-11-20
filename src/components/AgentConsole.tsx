@@ -9,7 +9,7 @@ import {
   Search,
   Ban,
   CircleAlert,
-  CheckCircle2,
+  Check,
   Loader2,
   Radio,
   ChevronRight,
@@ -157,12 +157,18 @@ export function AgentConsoleDock() {
 
   return (
     <div className="flex h-full flex-col bg-bg-panel">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-bg-subtle px-2.5">
-        <Radio size={13} className="text-accent" />
-        <span className="text-[12px] font-semibold tracking-tight">Agent console</span>
-        {running > 0 && (
-          <span className="flex items-center gap-1 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-            <Loader2 size={10} className="animate-spin" /> {running} running
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3">
+        <Radio size={12} className="text-text-dim" />
+        <span className="text-[12px] font-semibold text-text">Agent console</span>
+        {entries.length > 0 && (
+          <span className="text-xs tabular-nums text-text-dim">
+            {running > 0 ? (
+              <span className="inline-flex items-center gap-1">
+                <Loader2 size={11} className="animate-spin" /> {running} running
+              </span>
+            ) : (
+              `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`
+            )}
           </span>
         )}
         <div className="flex-1" />
@@ -195,23 +201,20 @@ export function AgentConsoleDock() {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="min-w-0 flex-1 space-y-1.5 overflow-y-auto px-3 py-2.5"
+        className="min-w-0 flex-1 divide-y divide-border-subtle overflow-y-auto"
       >
         {shown.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-xs text-text-dim">
-            <TerminalSquare size={20} className="opacity-50" />
-            <div className="max-w-sm">
-              {entries.length === 0
-                ? "Nothing yet. When the agent runs commands or transfers files through the bridge, they stream here live."
-                : "No activity for this server. Switch the filter to see other sessions."}
-            </div>
+          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-text-dim">
+            {entries.length === 0
+              ? "Agent commands and transfers show up here as they run."
+              : "No activity for this server."}
           </div>
         ) : (
           shown.map((e) => (
             <ConsoleEntry
               key={e.id}
               entry={e}
-              tag={sessionMeta.get(e.sessionId)}
+              tag={feedSessions.length > 1 ? sessionMeta.get(e.sessionId) : undefined}
               open={overrides[e.id] ?? e.status === "running"}
               onToggle={() =>
                 setOverrides((o) => ({
@@ -261,7 +264,7 @@ function SessionFilter({
       <button
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "flex h-6 items-center gap-1 rounded-md border border-border px-1.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text",
+          "flex h-6 items-center gap-1 rounded border border-border px-2 text-xs text-text-muted hover:bg-bg-hover hover:text-text",
           open && "bg-bg-hover text-text"
         )}
       >
@@ -270,7 +273,7 @@ function SessionFilter({
         <ChevronDown size={11} className="text-text-dim" />
       </button>
       {open && (
-        <div className="anim-modal absolute right-0 top-7 z-menu w-52 overflow-hidden rounded-md border border-border bg-bg-panel shadow-elev-3">
+        <div className="anim-modal absolute right-0 top-7 z-menu w-52 overflow-hidden rounded border border-border bg-bg-panel shadow-elev-3">
           <FilterRow active={value === "all"} onClick={() => { onChange("all"); setOpen(false); }}>
             All servers
           </FilterRow>
@@ -305,7 +308,7 @@ function FilterRow({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-bg-hover",
+        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-bg-hover",
         active ? "text-text" : "text-text-muted"
       )}
     >
@@ -318,7 +321,7 @@ function FilterRow({
         <span className="h-2 w-2 shrink-0" />
       )}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {active && <CheckCircle2 size={12} className="shrink-0 text-accent" />}
+      {active && <Check size={12} className="shrink-0 text-text" />}
     </button>
   );
 }
@@ -339,7 +342,8 @@ function ToolButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-40 disabled:hover:bg-transparent"
+      aria-label={title}
+      className="flex h-6 w-6 items-center justify-center rounded text-text-dim hover:bg-bg-hover hover:text-text disabled:opacity-40 disabled:hover:bg-transparent"
     >
       {children}
     </button>
@@ -347,25 +351,24 @@ function ToolButton({
 }
 
 function KindIcon({ entry }: { entry: AgentConsoleEntry }) {
-  if (entry.status === "running")
-    return <Loader2 size={12} className="shrink-0 animate-spin text-accent" />;
-  if (entry.kind === "denied")
-    return <Ban size={12} className="shrink-0 text-text-dim" />;
-  if (entry.kind === "error" || entry.ok === false)
-    return <CircleAlert size={12} className="shrink-0 text-danger" />;
+  const cls = "shrink-0";
+  if (entry.status === "running") return <Loader2 size={12} className={cn(cls, "animate-spin text-text-muted")} />;
+  if (entry.kind === "denied") return <Ban size={12} className={cn(cls, "text-warning")} />;
+  if (entry.kind === "error" || entry.ok === false) return <CircleAlert size={12} className={cn(cls, "text-danger")} />;
+  const muted = cn(cls, "text-text-dim");
   switch (entry.kind) {
     case "exec":
-      return <TerminalSquare size={12} className="shrink-0 text-accent" />;
+      return <TerminalSquare size={12} className={muted} />;
     case "read":
-      return <FileText size={12} className="shrink-0 text-text-muted" />;
+      return <FileText size={12} className={muted} />;
     case "search":
-      return <Search size={12} className="shrink-0 text-text-muted" />;
+      return <Search size={12} className={muted} />;
     case "download":
-      return <Download size={12} className="shrink-0 text-text-muted" />;
+      return <Download size={12} className={muted} />;
     case "upload":
-      return <Upload size={12} className="shrink-0 text-text-muted" />;
+      return <Upload size={12} className={muted} />;
     default:
-      return <CheckCircle2 size={12} className="shrink-0 text-success" />;
+      return <Check size={12} className={muted} />;
   }
 }
 
@@ -380,53 +383,52 @@ function ConsoleEntry({
   open: boolean;
   onToggle: () => void;
 }) {
-  const failed = entry.kind === "error" || entry.ok === false;
+  const denied = entry.kind === "denied";
+  const failed = !denied && (entry.kind === "error" || entry.ok === false);
   const hasOutput = entry.output.length > 0;
   const lineCount = hasOutput ? entry.output.split("\n").length : 0;
 
   return (
-    <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-subtle/40">
+    <div data-console-entry={entry.kind} className={cn(open && hasOutput && "bg-bg-subtle/40")}>
       <button
         onClick={hasOutput ? onToggle : undefined}
+        aria-expanded={hasOutput ? open : undefined}
         className={cn(
-          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left",
-          hasOutput && "hover:bg-bg-hover/60"
+          "flex h-7 w-full items-center gap-2 px-3 text-left",
+          hasOutput ? "hover:bg-bg-hover/60" : "cursor-default"
         )}
       >
-        {hasOutput ? (
-          open ? (
-            <ChevronDown size={12} className="shrink-0 text-text-dim" />
-          ) : (
-            <ChevronRight size={12} className="shrink-0 text-text-dim" />
-          )
-        ) : (
-          <span className="w-3 shrink-0" />
-        )}
+        <span className="flex w-3 shrink-0 justify-center text-text-dim">
+          {hasOutput && (open ? <ChevronDown size={12} /> : <ChevronRight size={12} />)}
+        </span>
         <KindIcon entry={entry} />
         <span
           className={cn(
             "min-w-0 flex-1 truncate font-mono text-[12px]",
-            failed ? "text-danger" : "text-text"
+            failed ? "text-danger" : denied ? "text-text-muted line-through decoration-text-dim" : "text-text"
           )}
+          title={entry.command}
         >
           {entry.command}
         </span>
+        {denied && <span className="shrink-0 text-xs text-warning">Denied</span>}
         {hasOutput && !open && (
-          <span className="shrink-0 text-[10px] text-text-dim">{lineCount} lines</span>
+          <span className="shrink-0 text-xs tabular-nums text-text-dim max-sm:hidden">
+            {lineCount} {lineCount === 1 ? "line" : "lines"}
+          </span>
         )}
         {tag && (
-          <span className="flex shrink-0 items-center gap-1 text-[10px] text-text-dim">
-            <span
-              className="h-1.5 w-1.5 rounded-full"
-              style={{ background: tag.color || "rgb(var(--accent))" }}
-            />
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-text-dim max-sm:hidden">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: tag.color || "rgb(var(--text-dim))" }} />
             <span className="max-w-[8rem] truncate">{tag.name}</span>
           </span>
         )}
-        <span className="shrink-0 text-[10px] text-text-dim">{relTime(entry.at)}</span>
+        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-text-dim" title={new Date(entry.at).toLocaleString()}>
+          {relTime(entry.at)}
+        </span>
       </button>
       {hasOutput && open && (
-        <pre className="selectable max-h-72 max-w-full overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] border-t border-border-subtle bg-bg-panel px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-text-muted">
+        <pre className="selectable mb-2 ml-[2.75rem] mr-3 max-h-72 overflow-auto whitespace-pre-wrap rounded border border-border-subtle bg-bg px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-text-muted [overflow-wrap:anywhere]">
           {entry.output}
         </pre>
       )}
