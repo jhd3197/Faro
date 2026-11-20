@@ -1172,11 +1172,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let app = dir.join("1Password.exe");
         let settings = dir.join("settings.json");
-        assert_eq!(op_app_in(&[app.clone()], &[settings.clone()]), OpApp::NotInstalled);
+        assert_eq!(op_app_in(std::slice::from_ref(&app), std::slice::from_ref(&settings)), OpApp::NotInstalled);
         std::fs::write(&app, b"").unwrap();
-        assert_eq!(op_app_in(&[app.clone()], &[settings.clone()]), OpApp::Installed { integration: None });
+        assert_eq!(op_app_in(std::slice::from_ref(&app), std::slice::from_ref(&settings)), OpApp::Installed { integration: None });
         std::fs::write(&settings, br#"{"developers.cliSharedLockState.enabled": true}"#).unwrap();
-        assert_eq!(op_app_in(&[app.clone()], &[settings.clone()]), OpApp::Installed { integration: Some(true) });
+        assert_eq!(op_app_in(std::slice::from_ref(&app), std::slice::from_ref(&settings)), OpApp::Installed { integration: Some(true) });
         std::fs::write(&settings, br#"{"developers.cliSharedLockState.enabled": false}"#).unwrap();
         assert_eq!(op_app_in(&[app], &[settings]), OpApp::Installed { integration: Some(false) });
         let _ = std::fs::remove_dir_all(&dir);
