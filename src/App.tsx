@@ -11,6 +11,9 @@ import { useCopyJobs } from "./stores/copyStore";
 import { useRules } from "./stores/rulesStore";
 import { useMounts } from "./stores/mountStore";
 import { MountDialog } from "./components/MountDialog";
+import { IndexSearchHost } from "./components/IndexSearch";
+import { TagsDialog } from "./components/TagsDialog";
+import { useIndex } from "./stores/indexStore";
 import { ServerRail } from "./components/ServerRail";
 import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
@@ -145,6 +148,11 @@ export default function App() {
       else cleanup = c;
     });
     void useRules.getState().load();
+    let unIndex: (() => void) | undefined;
+    void useIndex.getState().init().then((u) => {
+      if (cancelled) u();
+      else unIndex = u;
+    });
     let unMounts: (() => void) | undefined;
     void useMounts.getState().init().then((u) => {
       if (cancelled) u();
@@ -154,6 +162,7 @@ export default function App() {
       cancelled = true;
       cleanup?.();
       unMounts?.();
+      unIndex?.();
     };
   }, []);
 
@@ -249,6 +258,7 @@ export default function App() {
       <DirectoryDiffHost />
       <FindDuplicatesHost />
       <FleetSearchHost />
+      <IndexSearchHost />
       <SkillsHost />
       <SnippetsHost />
       <CommandPalette />
@@ -312,6 +322,7 @@ export default function App() {
           <NativeFileDrop />
           <CopyToDialog />
           <MountDialog />
+          <TagsDialog />
           <UploadReports />
           <TransferQueue containerRef={columnRef} />
           {!zen && <TipStrip />}

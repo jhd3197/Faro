@@ -37,6 +37,7 @@ pub mod dedupe;
 pub mod diff;
 pub mod error;
 pub mod fsutil;
+pub mod fileindex;
 mod diskscan;
 mod docker;
 mod editor;
@@ -97,6 +98,8 @@ pub struct AppState {
     pub virtualfs: Arc<virtualfs::VirtualFs>,
     /// Copy to… runs between connections (Plan 34). Ephemeral.
     pub copyjobs: Arc<copyto::CopyJobs>,
+    /// File index runs (Plan 34); the index itself lives in `faro.db`.
+    pub fileindex: Arc<fileindex::IndexManager>,
     /// Running disk-usage scans (Plan 4). Ephemeral — not persisted.
     pub diskscan: Arc<diskscan::ScanManager>,
     /// Long-lived streamed execs (Plan 30) — the Server view's metrics sampler.
@@ -358,6 +361,7 @@ pub fn run() {
                         .expect("failed to initialise virtualfs settings"),
                 ),
                 copyjobs: Arc::new(copyto::CopyJobs::new()),
+                fileindex: Arc::new(fileindex::IndexManager::new()),
                 diskscan: Arc::new(diskscan::ScanManager::new()),
                 streams: Arc::new(stream_exec::StreamManager::new()),
                 diff: Arc::new(diff::DiffManager::new()),
@@ -367,6 +371,8 @@ pub fn run() {
                 preview,
             };
             app.manage(state);
+            // Keep indexed folders fresh (Plan 34 Phase 3).
+            fileindex::spawn_background(app.handle().clone());
 
             // Apply persisted transfer-queue settings (Plan 17, Plan 23). The
             // frontend writes `transferConcurrency`/`transferThrottleKbps`/
@@ -566,6 +572,17 @@ pub fn run() {
             foldersync::foldersync_remove,
             foldersync::foldersync_set_enabled,
             foldersync::foldersync_sync_now,
+            fileindex::index_start,
+            fileindex::index_roots,
+            fileindex::index_refresh,
+            fileindex::index_forget,
+            fileindex::index_search,
+            fileindex::index_facets,
+            fileindex::index_thumbnail,
+            fileindex::index_group,
+            fileindex::tags_apply,
+            fileindex::tags_get,
+            fileindex::connection_of_session,
             copyto::copyto_plan,
             copyto::copyto_start,
             copyto::copyto_jobs,

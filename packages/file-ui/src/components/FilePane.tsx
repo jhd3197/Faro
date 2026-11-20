@@ -10,6 +10,8 @@ import {
   ArrowUp,
   FolderInput,
   HardDrive,
+  Images,
+  Tag,
   ArrowLeft,
   ArrowRight,
   RefreshCw,
@@ -186,6 +188,10 @@ interface Props {
   onCopyTo?: (entries: DirEntry[]) => void;
   /** "Mount as folder…" for a remote folder (host-provided). */
   onMountFolder?: (path: string) => void;
+  /** "Index this folder" for search by date/camera/tag (host-provided). */
+  onIndexFolder?: (path: string) => void;
+  /** "Tags…" for the selected files (host-provided). */
+  onEditTags?: (entries: DirEntry[]) => void;
   toolbarActions?: ReactNode;
   /** Called with the selected entries whenever the selection (or listing)
    *  changes — lets the host drive a preview pane. */
@@ -262,6 +268,8 @@ export function FilePane({
   onSaveSite,
   onCopyTo,
   onMountFolder,
+  onIndexFolder,
+  onEditTags,
   toolbarActions,
   onSelectionChange,
 }: Props) {
@@ -1081,6 +1089,12 @@ export function FilePane({
       if (single.kind === "directory" && isRemote && onMountFolder) {
         items.push({ label: "Mount as folder…", icon: <HardDrive size={12} />, onClick: () => onMountFolder(single.path) });
       }
+      if (single.kind === "directory" && isRemote && onIndexFolder) {
+        items.push({ label: "Index this folder", icon: <Images size={12} />, onClick: () => onIndexFolder(single.path) });
+      }
+      if (single.kind === "file" && isRemote && onEditTags) {
+        items.push({ label: "Tags…", icon: <Tag size={12} />, onClick: () => onEditTags([single]) });
+      }
       // Edit-in-place sits right under the primary action so it's easy to find
       // (it used to be last, below chmod). Remote files only — local files open
       // in their app via the OS, and there's nothing to upload back.
@@ -1224,6 +1238,9 @@ export function FilePane({
         onClick: () => onTransfer?.(selectedItems),
         separatorAfter: !compressItem && !onCopyTo,
       });
+      if (onEditTags && isRemote && selectedItems.every((e) => e.kind === "file")) {
+        items.push({ label: `Tags for ${selectedItems.length} files…`, icon: <Tag size={12} />, onClick: () => onEditTags(selectedItems) });
+      }
       if (onCopyTo) {
         items.push({
           label: `Copy ${selectedItems.length} items to…`,

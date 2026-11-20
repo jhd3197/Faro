@@ -646,8 +646,8 @@ pub struct SourceRef {
     pub is_dir: bool,
 }
 
-/// Session for the destination: an open one for the profile, else connect.
-async fn dest_session(app: &tauri::AppHandle, profile_id: &str) -> Result<(String, Arc<crate::session::Session>)> {
+/// A session for the saved connection `profile_id`: an open one, else connect.
+pub(crate) async fn session_for_profile(app: &tauri::AppHandle, profile_id: &str) -> Result<(String, Arc<crate::session::Session>)> {
     use tauri::Manager;
     let state = app.state::<crate::AppState>();
     if let Some(id) = state.sessions.ids_for_profile(profile_id).await.into_iter().next() {
@@ -727,7 +727,7 @@ pub async fn copyto_plan(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<CopyPlan, String> {
     let src = source_session(&state, &source_session_id).await?;
-    let (_, dst) = dest_session(&app, &dest_profile_id).await.map_err(|e| format!("{e:#}"))?;
+    let (_, dst) = session_for_profile(&app, &dest_profile_id).await.map_err(|e| format!("{e:#}"))?;
     build_plan(&app, src.as_ref(), &sources, &dst, &dest_dir, &options).await.map_err(|e| format!("{e:#}"))
 }
 
@@ -744,7 +744,7 @@ pub async fn copyto_start(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<String, String> {
     let src = source_session(&state, &source_session_id).await?;
-    let (_, dst) = dest_session(&app, &dest_profile_id).await.map_err(|e| format!("{e:#}"))?;
+    let (_, dst) = session_for_profile(&app, &dest_profile_id).await.map_err(|e| format!("{e:#}"))?;
     let plan = build_plan(&app, src.as_ref(), &sources, &dst, &dest_dir, &options)
         .await
         .map_err(|e| format!("{e:#}"))?;

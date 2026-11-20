@@ -464,6 +464,23 @@ impl VirtualFs {
         }
         self.persist().await?;
         self.reconcile_all(app).await;
+        // "Index files": keep the mount's remote folder in the file index.
+        let state = app.state::<AppState>();
+        if let Some(prev) = previous.as_ref().filter(|p| p.index && (!mount.index || p.remote_root != mount.remote_root)) {
+            let _ = state.db.index_root_forget(&prev.profile_id, &prev.remote_root);
+        }
+        if mount.index {
+            let _ = state.db.index_root_add(&mount.profile_id, &mount.remote_root);
+            state
+                .fileindex
+                .start(
+                    app.clone(),
+                    mount.profile_id.clone(),
+                    mount.remote_root.clone(),
+                    crate::fileindex::RunOptions { thumbnails: true },
+                )
+                .await;
+        }
         Ok(mount)
     }
 

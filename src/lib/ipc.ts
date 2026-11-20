@@ -46,6 +46,12 @@ import type {
   RuleSample,
   Mount,
   MountView,
+  IndexRow,
+  IndexQuery,
+  IndexFacets,
+  IndexRootView,
+  IndexEvent,
+  TagsResult,
 } from "./types";
 import type {
   ConnectionProfile,
@@ -793,6 +799,23 @@ export const ipc = {
   /** Forget finished jobs. */
   copyToClear: () => invoke<void>("copyto_clear"),
 
+  // ---- File index + tags (Plan 34) ----
+  /** Index a folder now and keep it indexed. */
+  indexStart: (sessionId: SessionId, path: string) => invoke<void>("index_start", { sessionId, path }),
+  indexRoots: () => invoke<IndexRootView[]>("index_roots"),
+  indexRefresh: (connectionId: string, root: string) => invoke<void>("index_refresh", { connectionId, root }),
+  /** Stop indexing a folder and drop what was learned about it. */
+  indexForget: (connectionId: string, root: string) => invoke<void>("index_forget", { connectionId, root }),
+  indexSearch: (query: IndexQuery) => invoke<IndexRow[]>("index_search", { query }),
+  indexFacets: (connectionId?: string | null) => invoke<IndexFacets>("index_facets", { connectionId: connectionId ?? null }),
+  /** Base64 PNG thumbnail of an indexed image. */
+  indexThumbnail: (connectionId: string, path: string) => invoke<string>("index_thumbnail", { connectionId, path }),
+  tagsApply: (connectionId: string, paths: string[], add: string[], remove: string[]) =>
+    invoke<TagsResult>("tags_apply", { connectionId, paths, add, remove }),
+  tagsGet: (connectionId: string, path: string) => invoke<string[]>("tags_get", { connectionId, path }),
+  /** The saved connection (profile id) behind a live session. */
+  connectionOfSession: (sessionId: SessionId) => invoke<string>("connection_of_session", { sessionId }),
+
   // ---- Settings › Rules (Plan 34) ----
   rulesList: () => invoke<RuleSet[]>("rules_list"),
   /** Add or replace a rule set; returns every set. */
@@ -967,6 +990,10 @@ export const ipc = {
   searchForget: (searchId: string) =>
     invoke<void>("search_forget", { searchId }),
 };
+
+export async function onIndexProgress(cb: (e: IndexEvent) => void): Promise<UnlistenFn> {
+  return listen<IndexEvent>("index://progress", (e) => cb(e.payload));
+}
 
 export async function onVirtualFsChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("virtualfs://changed", () => cb());

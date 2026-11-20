@@ -2008,3 +2008,73 @@ export interface MountView extends Mount {
   /** Files edited or created in the folder that the connection doesn't have. */
   localChanges: string[];
 }
+
+// ---- File index + tags (Plan 34 Phases 3–4; mirrors src-tauri/src/fileindex.rs) ----
+
+export type IndexKind = "image" | "video" | "audio" | "document" | "archive" | "other";
+
+export interface IndexRow {
+  connectionId: string;
+  path: string;
+  root: string;
+  name: string;
+  size: number;
+  changeToken: string;
+  kind: IndexKind;
+  takenMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  camera?: string | null;
+  lens?: string | null;
+  gpsLat?: number | null;
+  gpsLon?: number | null;
+  contentHash?: string | null;
+  mtimeMs?: number | null;
+  tags: string[];
+}
+
+export interface IndexQuery {
+  connectionId?: string | null;
+  under?: string | null;
+  text?: string | null;
+  kinds?: string[];
+  takenFromMs?: number | null;
+  takenToMs?: number | null;
+  camera?: string | null;
+  tag?: string | null;
+  hasGps?: boolean | null;
+  limit?: number;
+}
+
+export interface IndexFacets {
+  cameras: string[];
+  tags: string[];
+  files: number;
+}
+
+export interface IndexRootView {
+  connectionId: string;
+  root: string;
+  files: number;
+  lastRunMs?: number | null;
+  running: boolean;
+  done: number;
+  total: number;
+}
+
+export interface IndexEvent {
+  connectionId: string;
+  root: string;
+  running: boolean;
+  done: number;
+  total: number;
+  error?: string;
+}
+
+export interface TagsResult {
+  updated: number;
+  storedRemote: number;
+  /** The connection can't hold tags; they're kept on this PC only. */
+  localOnly: boolean;
+  errors?: string[];
+}

@@ -134,6 +134,8 @@ percent-encoding = "2"
 # keeps out the codecs that need system libs (avif/dav1d); the enabled set covers
 # the web-common raster formats we gate previews to. `rayon` parallelises the
 # resize across cores.
+# EXIF (date taken, camera, GPS) for the file index (Plan 34 Phase 3).
+kamadak-exif = "0.6"
 image = { version = "0.25", default-features = false, features = [
     "jpeg", "png", "gif", "webp", "bmp", "ico", "tiff",
 ] }

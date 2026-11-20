@@ -142,6 +142,47 @@ const MIGRATIONS: &[&str] = &[
     );",
     // v8 — durable two-way baselines, conflicts and version choices.
     "CREATE TABLE sync_reconcile (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;",
+    // v9 — the file index (Plan 34 Phase 3): per-file facts read from file
+    // headers (date taken, camera, size in pixels, GPS) so a library can be
+    // browsed and searched without downloading it, plus tags and the folders
+    // being indexed. Keyed by connection id (the saved profile), not session.
+    "CREATE TABLE file_index (
+        connection_id TEXT    NOT NULL,
+        path          TEXT    NOT NULL,
+        root          TEXT    NOT NULL,
+        name          TEXT    NOT NULL,
+        size          INTEGER NOT NULL,
+        change_token  TEXT    NOT NULL,
+        kind          TEXT    NOT NULL,
+        taken_ms      INTEGER,
+        width         INTEGER,
+        height        INTEGER,
+        camera        TEXT,
+        lens          TEXT,
+        gps_lat       REAL,
+        gps_lon       REAL,
+        content_hash  TEXT,
+        mtime_ms      INTEGER,
+        indexed_ms    INTEGER NOT NULL,
+        PRIMARY KEY (connection_id, path)
+    ) WITHOUT ROWID;
+    CREATE INDEX file_index_root  ON file_index(connection_id, root);
+    CREATE INDEX file_index_taken ON file_index(taken_ms);
+    CREATE INDEX file_index_kind  ON file_index(kind);
+    CREATE TABLE file_tags (
+        connection_id TEXT NOT NULL,
+        path          TEXT NOT NULL,
+        tag           TEXT NOT NULL,
+        PRIMARY KEY (connection_id, path, tag)
+    ) WITHOUT ROWID;
+    CREATE INDEX file_tags_tag ON file_tags(tag);
+    CREATE TABLE index_roots (
+        connection_id TEXT    NOT NULL,
+        root          TEXT    NOT NULL,
+        last_run_ms   INTEGER,
+        files         INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (connection_id, root)
+    ) WITHOUT ROWID;",
 ];
 
 /// A saved unfinished transfer (Plan 24 Phase 4), as stored in
@@ -213,6 +254,13 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON").ok();
         migrate(&conn).context("running faro.db migrations")?;
         Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    /// Run `f` against the connection under the lock (per-feature modules
+    /// keep their own SQL, e.g. `fileindex.rs`). Never hold across `.await`.
+    pub(crate) fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("faro.db lock poisoned"))?;
+        f(&conn)
     }
 
     /// Open an in-memory database (tests).
