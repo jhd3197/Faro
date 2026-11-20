@@ -254,9 +254,10 @@ pub fn render(template: &str, cx: &TokenCtx<'_>) -> String {
             "camera" => cx.facts.camera.clone().unwrap_or_default(),
             "tag" => cx.facts.tags.first().cloned().unwrap_or_default(),
             "taken" => cx.facts.taken_ms.map(|t| fmt_date(t, if arg.is_empty() { "yyyy-MM-dd" } else { arg })).unwrap_or_default(),
-            "mtime" => (cx.entry.modified != 0)
-                .then(|| fmt_date(as_ms(cx.entry.modified), if arg.is_empty() { "yyyy-MM-dd" } else { arg }))
-                .unwrap_or_default(),
+            "mtime" if cx.entry.modified != 0 => {
+                fmt_date(as_ms(cx.entry.modified), if arg.is_empty() { "yyyy-MM-dd" } else { arg })
+            }
+            "mtime" => String::new(),
             // {date:…}: taken, else the file's modified time.
             "date" => cx
                 .facts

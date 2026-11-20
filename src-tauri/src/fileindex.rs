@@ -277,6 +277,9 @@ pub struct IndexFacets {
     pub files: u64,
 }
 
+/// `(connection id, root, last run ms, files)` from `index_roots`.
+pub type IndexRootRow = (String, String, Option<i64>, u64);
+
 fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<IndexRow> {
     Ok(IndexRow {
         connection_id: r.get(0)?,
@@ -405,7 +408,7 @@ impl Db {
         })
     }
 
-    pub fn index_roots(&self) -> Result<Vec<(String, String, Option<i64>, u64)>> {
+    pub fn index_roots(&self) -> Result<Vec<IndexRootRow>> {
         self.with_conn(|c| {
             let mut st = c.prepare("SELECT connection_id, root, last_run_ms, files FROM index_roots ORDER BY root")?;
             let rows = st

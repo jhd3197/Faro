@@ -833,7 +833,7 @@ mod tests {
         let src = Source { name: "x".into(), tree: tree(&[("f", 1, 1_700_000_100)]), is_dir: true };
         let dest = tree(&[("x/f", 1, 1_700_000_000_000)]);
         let opts = CopyOptions { overwrite: Overwrite::Newer, ..Default::default() };
-        let p = plan(&[src.clone()], "/d", &dest, &opts, &id);
+        let p = plan(std::slice::from_ref(&src), "/d", &dest, &opts, &id);
         assert_eq!(p.items[0].action, ItemAction::Overwrite);
         let dest_newer = tree(&[("x/f", 1, 1_700_000_200_000)]);
         assert_eq!(plan(&[src], "/d", &dest_newer, &opts, &id).items[0].action, ItemAction::Skip);

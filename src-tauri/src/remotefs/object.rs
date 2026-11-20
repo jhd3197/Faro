@@ -84,16 +84,6 @@ impl ObjectFs {
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-mod tag_encoding_tests {
-    #[test]
-    fn tags_round_trip_through_a_header_value() {
-        let tags = vec!["café".to_string(), "50%".to_string(), "client x".to_string()];
-        let raw = super::encode_tags(&tags);
-        assert!(raw.is_ascii(), "{raw}");
-        assert_eq!(super::decode_tags(&raw), vec!["50%", "café", "client x"]);
-    }
-}
 
 /// Tags as one metadata value: comma-separated, percent-encoded so non-ASCII
 /// survives HTTP headers.
@@ -335,5 +325,16 @@ impl RemoteFs for ObjectFs {
             // (not necessarily an MD5 for multipart uploads). See ChangeSignal.
             change_signal: ChangeSignal::Etag,
         }
+    }
+}
+
+#[cfg(test)]
+mod tag_encoding_tests {
+    #[test]
+    fn tags_round_trip_through_a_header_value() {
+        let tags = vec!["café".to_string(), "50%".to_string(), "client x".to_string()];
+        let raw = super::encode_tags(&tags);
+        assert!(raw.is_ascii(), "{raw}");
+        assert_eq!(super::decode_tags(&raw), vec!["50%", "café", "client x"]);
     }
 }

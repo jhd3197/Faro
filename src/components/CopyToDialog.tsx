@@ -44,8 +44,12 @@ export function CopyToDialog() {
     [request]
   );
 
-  // A changed choice makes the preview stale.
-  useEffect(() => setPlan(null), [destProfileId, destDir, overwrite, ruleSet]);
+  // A changed choice, or opening the dialog for new items, makes the
+  // preview stale. The destination choices are kept for the next copy.
+  useEffect(() => {
+    setPlan(null);
+    setError(null);
+  }, [request, destProfileId, destDir, overwrite, ruleSet]);
 
   if (!request) return null;
 

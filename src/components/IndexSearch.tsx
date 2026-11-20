@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Image as ImageIcon, Images, Loader2, MapPin, RefreshCw, Tag, Trash2, X } from "lucide-react";
+import { Copy, File as FileIcon, Image as ImageIcon, Images, Loader2, MapPin, RefreshCw, Tag, Trash2, X } from "lucide-react";
 import { ipc } from "@/lib/ipc";
 import { fmtSize } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -391,8 +391,10 @@ function ResultCard({
       <div className="flex h-24 items-center justify-center bg-bg-subtle">
         {thumb ? (
           <img src={`data:image/png;base64,${thumb}`} alt="" className="max-h-24 max-w-full object-contain" />
-        ) : (
+        ) : row.kind === "image" ? (
           <ImageIcon size={20} className="text-text-dim" />
+        ) : (
+          <FileIcon size={20} className="text-text-dim" />
         )}
       </div>
       <div className="flex flex-col gap-0.5 p-1.5">

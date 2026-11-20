@@ -50,7 +50,7 @@ const CHUNK: usize = 64 * 1024;
 /// Stable provider identity shared by every Faro on-demand root — Win32
 /// registration keys a sync root by its *path*, so one provider id covers all
 /// pairs and each folder is its own registration.
-const FARO_PROVIDER_ID: GUID = GUID::from_u128(0xFA504F61_726F_4661_726F_0DE0_0DE00001u128);
+const FARO_PROVIDER_ID: GUID = GUID::from_u128(0xFA50_4F61_726F_4661_726F_0DE0_0DE0_0001_u128);
 
 /// On-demand virtual folders are available when the Cloud Filter API is present
 /// (Windows 10 1709+). `is_supported()` is the OS-level probe.
@@ -410,8 +410,9 @@ fn collect_local_changes(root: &Path, dir: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// Remove every untouched placeholder under `root` (and folders left empty by
-/// that), keeping anything that holds local data. Called when a root is torn
+/// Remove every placeholder under `root` that matches the connection — never
+/// downloaded, or downloaded and unchanged — plus folders left empty by that.
+/// Files edited or created here (not in sync) stay, so nothing unsent is lost. Called when a root is torn
 /// down, so the folder doesn't keep icons that can never open. Returns the
 /// number of files removed.
 pub fn clear_placeholders(root: &Path) -> u32 {
@@ -428,7 +429,7 @@ pub fn clear_placeholders(root: &Path) -> u32 {
                 if never_listed || std::fs::read_dir(&path).map(|mut d| d.next().is_none()).unwrap_or(false) {
                     let _ = std::fs::remove_dir(&path);
                 }
-            } else if ft.is_file() && untouched_placeholder(&path, false) && std::fs::remove_file(&path).is_ok() {
+            } else if ft.is_file() && placeholder_in_sync(&path) == Some(true) && std::fs::remove_file(&path).is_ok() {
                 n += 1;
             }
         }
@@ -695,11 +696,7 @@ fn dehydrate_tree(dir: &Path) -> u32 {
         let path = entry.path();
         match entry.file_type() {
             Ok(ft) if ft.is_dir() => n += dehydrate_tree(&path),
-            Ok(ft) if ft.is_file() => {
-                if dehydrate_file(&path).is_ok() {
-                    n += 1;
-                }
-            }
+            Ok(ft) if ft.is_file() && dehydrate_file(&path).is_ok() => n += 1,
             _ => {}
         }
     }
