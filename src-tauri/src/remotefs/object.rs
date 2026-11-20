@@ -18,6 +18,24 @@ impl ObjectFs {
     pub fn new(session: Arc<ObjectSession>) -> Self {
         Self { session }
     }
+
+    /// Copy one object to another key in the same bucket/container, server
+    /// side — no bytes pass through Faro (Copy to… within one connection).
+    pub async fn server_copy(&self, from: &str, to: &str) -> Result<()> {
+        let src = normalize_prefix(from);
+        let dst = normalize_prefix(to);
+        if src.is_empty() || dst.is_empty() {
+            anyhow::bail!("cannot copy the bucket root");
+        }
+        if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
+            return self.session.namespace()?.copy(&src, &dst).await;
+        }
+        self.session
+            .store
+            .copy(&ObjPath::parse(&src)?, &ObjPath::parse(&dst)?)
+            .await
+            .with_context(|| format!("object copy {src} -> {dst}"))
+    }
 }
 
 #[cfg(test)]

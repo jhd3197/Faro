@@ -21,6 +21,7 @@ pub mod bridge;
 pub mod commands;
 mod agent_host;
 mod cache;
+pub mod copyto;
 mod app_updater;
 mod archive_ops;
 pub mod cli_updater;
@@ -54,6 +55,7 @@ pub mod profiles;
 pub mod proxy;
 pub mod proxy_command;
 pub mod remotefs;
+pub mod rules;
 pub mod scan;
 pub mod scp;
 pub mod search;
@@ -93,6 +95,8 @@ pub struct AppState {
     /// the OS sync-root registrations; inert on non-Windows / non-`virtualfs`
     /// builds.
     pub virtualfs: Arc<virtualfs::VirtualFs>,
+    /// Copy to… runs between connections (Plan 34). Ephemeral.
+    pub copyjobs: Arc<copyto::CopyJobs>,
     /// Running disk-usage scans (Plan 4). Ephemeral — not persisted.
     pub diskscan: Arc<diskscan::ScanManager>,
     /// Long-lived streamed execs (Plan 30) — the Server view's metrics sampler.
@@ -353,6 +357,7 @@ pub fn run() {
                     virtualfs::VirtualFs::load(&handle)
                         .expect("failed to initialise virtualfs settings"),
                 ),
+                copyjobs: Arc::new(copyto::CopyJobs::new()),
                 diskscan: Arc::new(diskscan::ScanManager::new()),
                 streams: Arc::new(stream_exec::StreamManager::new()),
                 diff: Arc::new(diff::DiffManager::new()),
@@ -561,6 +566,11 @@ pub fn run() {
             foldersync::foldersync_remove,
             foldersync::foldersync_set_enabled,
             foldersync::foldersync_sync_now,
+            copyto::copyto_plan,
+            copyto::copyto_start,
+            copyto::copyto_jobs,
+            copyto::copyto_cancel,
+            copyto::copyto_clear,
             virtualfs::virtualfs_supported,
             virtualfs::virtualfs_status,
             virtualfs::virtualfs_free_up_space,

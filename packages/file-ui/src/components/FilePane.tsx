@@ -8,6 +8,7 @@ import {
 } from "../lib/columns";
 import {
   ArrowUp,
+  FolderInput,
   ArrowLeft,
   ArrowRight,
   RefreshCw,
@@ -180,6 +181,8 @@ interface Props {
   reloadToken?: number;
   /** Host-provided shortcuts for a remote folder; absent in generic/local panes. */
   onSaveSite?: (path: string) => void;
+  /** "Copy to…" another connection (host-provided; absent hides the item). */
+  onCopyTo?: (entries: DirEntry[]) => void;
   toolbarActions?: ReactNode;
   /** Called with the selected entries whenever the selection (or listing)
    *  changes — lets the host drive a preview pane. */
@@ -254,6 +257,7 @@ export function FilePane({
   transferLabel = "Transfer",
   reloadToken,
   onSaveSite,
+  onCopyTo,
   toolbarActions,
   onSelectionChange,
 }: Props) {
@@ -1117,6 +1121,9 @@ export function FilePane({
           ],
         });
       }
+      if (onCopyTo) {
+        items.push({ label: "Copy to…", icon: <FolderInput size={12} />, onClick: () => onCopyTo([single]) });
+      }
       if (extractItem) items.push(extractItem);
       if (compressItem) items.push(compressItem);
       // Open an SSH terminal already cd'd into this folder.
@@ -1208,8 +1215,16 @@ export function FilePane({
         label: `${transferLabel} ${selectedItems.length} items`,
         icon: sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onTransfer?.(selectedItems),
-        separatorAfter: !compressItem,
+        separatorAfter: !compressItem && !onCopyTo,
       });
+      if (onCopyTo) {
+        items.push({
+          label: `Copy ${selectedItems.length} items to…`,
+          icon: <FolderInput size={12} />,
+          onClick: () => onCopyTo(selectedItems),
+          separatorAfter: !compressItem,
+        });
+      }
       if (compressItem) items.push({ ...compressItem, separatorAfter: true });
     }
     // Cut / Copy the selection; Paste into a folder row once something is on

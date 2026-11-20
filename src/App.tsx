@@ -5,6 +5,10 @@ import { TipStrip } from "./components/TipStrip";
 import { useDiscovery } from "./stores/discoveryStore";
 import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
+import { CopyToDialog } from "./components/CopyToDialog";
+import { CopyJobsPill } from "./components/CopyJobsPill";
+import { useCopyJobs } from "./stores/copyStore";
+import { useRules } from "./stores/rulesStore";
 import { ServerRail } from "./components/ServerRail";
 import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
@@ -128,6 +132,22 @@ export default function App() {
   useShortcuts();
 
   useEffect(() => { void useDiscovery.getState().init(); }, []);
+
+  // Copy to… runs (Plan 34): live progress for the status-bar pill. Rule sets
+  // feed the dialog's Rules choice.
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    let cancelled = false;
+    void useCopyJobs.getState().init().then((c) => {
+      if (cancelled) c();
+      else cleanup = c;
+    });
+    void useRules.getState().load();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
+  }, []);
 
   // Pick up where the last run left off (focused server, split, Settings
   // section). Saving the session snapshot starts only after this finishes.
@@ -282,6 +302,7 @@ export default function App() {
             </ErrorBoundary>
           </ResizablePanel>
           <NativeFileDrop />
+          <CopyToDialog />
           <UploadReports />
           <TransferQueue containerRef={columnRef} />
           {!zen && <TipStrip />}
@@ -577,6 +598,7 @@ function StatusBar({
           </StatusPopover>
         )}
       </div>
+      <CopyJobsPill />
       <PillButton
         onClick={() => openSettings(SETTINGS_ENTRY_POINTS.statusBarSync)}
         data-settings-link="statusBarSync"

@@ -3,6 +3,7 @@ import { FilePane } from "@faro/file-ui";
 import { SyncDialog } from "./SyncDialog";
 import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
+import { useCopyJobs } from "@/stores/copyStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
@@ -153,6 +154,7 @@ export function DualPaneBrowser() {
           onTransfer={uploadAll}
           onDrop={downloadAll}
           transferLabel="Upload"
+          onCopyTo={(entries) => useCopyJobs.getState().openCopyTo(LOCAL_SESSION, entries)}
           toolbarActions={sync.toolbar}
         />
         </div>
@@ -214,6 +216,7 @@ export function DualPaneBrowser() {
           onDrop={uploadAll}
           transferLabel="Download"
           onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
+          onCopyTo={activeSessionId ? (entries) => useCopyJobs.getState().openCopyTo(activeSessionId, entries) : undefined}
           toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
         />}
         </div>

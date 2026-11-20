@@ -38,6 +38,12 @@ import type {
   DockerDiskUse,
   DockerResourceKind,
   DockerPruneKind,
+  CopyOptions,
+  CopySourceRef,
+  CopyPlan,
+  CopyJob,
+  RuleSet,
+  RuleSample,
 } from "./types";
 import type {
   ConnectionProfile,
@@ -773,6 +779,27 @@ export const ipc = {
   folderSyncSyncNow: (id: string) =>
     invoke<PairView[]>("foldersync_sync_now", { id }),
 
+  // ---- Copy to… between connections (Plan 34) ----
+  /** Scan and plan without copying. `sourceSessionId` may be the local pane. */
+  copyToPlan: (sourceSessionId: SessionId, sources: CopySourceRef[], destProfileId: string, destDir: string, options: CopyOptions) =>
+    invoke<CopyPlan>("copyto_plan", { sourceSessionId, sources, destProfileId, destDir, options }),
+  /** Re-plan and run in the background; returns the job id. */
+  copyToStart: (sourceSessionId: SessionId, sources: CopySourceRef[], destProfileId: string, destDir: string, options: CopyOptions) =>
+    invoke<string>("copyto_start", { sourceSessionId, sources, destProfileId, destDir, options }),
+  copyToJobs: () => invoke<CopyJob[]>("copyto_jobs"),
+  copyToCancel: (id: string) => invoke<void>("copyto_cancel", { id }),
+  /** Forget finished jobs. */
+  copyToClear: () => invoke<void>("copyto_clear"),
+
+  // ---- Settings › Rules (Plan 34) ----
+  rulesList: () => invoke<RuleSet[]>("rules_list"),
+  /** Add or replace a rule set; returns every set. */
+  rulesSave: (set: RuleSet) => invoke<RuleSet[]>("rules_save", { set }),
+  rulesDelete: (id: string) => invoke<RuleSet[]>("rules_delete", { id }),
+  /** Run `set` (unsaved edits included) over sample files from a folder. */
+  rulesTest: (set: RuleSet, sessionId: SessionId, path: string) =>
+    invoke<RuleSample[]>("rules_test", { set, sessionId, path }),
+
   // ---- On-demand virtual folders (Plan 9) ----
   /** Whether on-demand placeholders are available (Windows + `virtualfs` build). */
   virtualFsSupported: () => invoke<boolean>("virtualfs_supported"),
@@ -930,6 +957,10 @@ export const ipc = {
   searchForget: (searchId: string) =>
     invoke<void>("search_forget", { searchId }),
 };
+
+export async function onCopyToProgress(cb: (job: CopyJob) => void): Promise<UnlistenFn> {
+  return listen<CopyJob>("copyto://progress", (e) => cb(e.payload));
+}
 
 export async function onEditSaved(
   cb: (event: EditSavedEvent) => void
