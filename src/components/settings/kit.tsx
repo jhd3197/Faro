@@ -397,14 +397,15 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-4 w-7 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        // Slim 22×12 track, 8px knob: reads as a control, not a pill button.
+        "relative h-3 w-[22px] shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         checked ? "bg-accent" : "bg-text-dim/40 hover:bg-text-dim/60"
       )}
     >
       <span
         className={cn(
-          "absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white transition-transform",
-          checked ? "translate-x-3" : "translate-x-0"
+          "absolute left-0.5 top-0.5 h-2 w-2 rounded-full bg-white transition-transform",
+          checked ? "translate-x-2.5" : "translate-x-0"
         )}
       />
     </button>
