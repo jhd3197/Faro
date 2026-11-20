@@ -552,6 +552,10 @@ fn certificate_login_needs_the_access_route_and_a_person() {
         hostname: None,
         service_token_id: None,
         service_token_secret: None,
+        target: None,
+        cli_account: None,
+        region: None,
+        project: None,
     };
     let err = proxy_command::access_cert_target(Some(&cfg), "h", 22, "u").unwrap_err();
     assert!(err.to_string().contains("needs the Cloudflare Access route"), "{err:#}");

@@ -258,6 +258,8 @@ mod tests {
             proxy_command: None,
             oauth_client_id: None,
             cf_forwards: Vec::new(),
+            cli_auth: None,
+            cli_source: None,
         };
         let session = Arc::new(box_connect(&profile).await.expect("connect"));
 

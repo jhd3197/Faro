@@ -495,6 +495,8 @@ pub async fn dropbox_authorize(
         proxy_command: None,
         oauth_client_id: client_id,
         cf_forwards: Vec::new(),
+        cli_auth: None,
+        cli_source: None,
     };
     let account_label = match crate::session::dropbox_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -559,6 +561,8 @@ pub async fn onedrive_authorize(
         proxy_command: None,
         oauth_client_id: client_id,
         cf_forwards: Vec::new(),
+        cli_auth: None,
+        cli_source: None,
     };
     let account_label = match crate::session::onedrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -628,6 +632,8 @@ pub async fn dynamics_authorize(
         proxy_command: None,
         oauth_client_id: None,
         cf_forwards: Vec::new(),
+        cli_auth: None,
+        cli_source: None,
     };
     let account_label = match crate::session::dynamics_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -687,6 +693,8 @@ pub async fn gdrive_authorize(
         proxy_command: None,
         oauth_client_id: client_id,
         cf_forwards: Vec::new(),
+        cli_auth: None,
+        cli_source: None,
     };
     let account_label = match crate::session::gdrive_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),
@@ -746,6 +754,8 @@ pub async fn box_authorize(
         proxy_command: None,
         oauth_client_id: client_id,
         cf_forwards: Vec::new(),
+        cli_auth: None,
+        cli_source: None,
     };
     let account_label = match crate::session::box_connect(&probe).await {
         Ok(session) => session.account_label().await.unwrap_or_default(),

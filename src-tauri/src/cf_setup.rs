@@ -624,6 +624,10 @@ mod tests {
             hostname: None,
             service_token_id: None,
             service_token_secret: None,
+            target: None,
+            cli_account: None,
+            region: None,
+            project: None,
         });
         let api = cf.api();
         let plan = invite(&api, ACCOUNT, &p, "Jane.Doe@Example.com", true).await.unwrap();

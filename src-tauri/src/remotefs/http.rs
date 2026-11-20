@@ -449,6 +449,8 @@ mod tests {
             proxy_command: None,
             oauth_client_id: None,
             cf_forwards: Vec::new(),
+            cli_auth: None,
+            cli_source: None,
         };
         let sess = Arc::new(http_connect(&profile).await.expect("connect"));
         let fs = HttpFs::new(sess.clone());

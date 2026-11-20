@@ -215,6 +215,8 @@ static TEST_TOOL: ToolSpec = ToolSpec {
     program: "faro-test-tool",
     config_file: "test-tool.json",
     feed: Feed::GitHub { api: "http://127.0.0.1:1/unused", tag_prefix: "cli-", pick: bw_asset },
+    roles: &[crate::managed_tools::Role::Secrets],
+    version_args: &["--version"],
     parse_version: plain_version,
     find_installed: || None,
     check_custom: |_| Ok(()),

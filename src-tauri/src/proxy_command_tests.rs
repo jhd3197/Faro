@@ -334,6 +334,10 @@ pub(crate) fn profile(host: &str, command: String) -> ConnectionProfile {
         hostname: None,
         service_token_id: None,
         service_token_secret: None,
+        target: None,
+        cli_account: None,
+        region: None,
+        project: None,
     });
     p
 }
@@ -586,6 +590,10 @@ async fn cloudflare_service_token_reaches_cloudflared_through_env() {
         hostname: Some("ssh.example.com".into()),
         service_token_id: Some("tok.access".into()),
         service_token_secret: Some("s3cr3t-value".into()),
+        target: None,
+        cli_account: None,
+        region: None,
+        project: None,
     };
     // The real Cloudflare argv and env, run by the fake cloudflared.
     let run = |cfg: &ProxyCommandConfig, expect: &str| {

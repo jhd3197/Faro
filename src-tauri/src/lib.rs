@@ -24,6 +24,7 @@ mod cache;
 pub mod copyto;
 mod app_updater;
 mod archive_ops;
+pub mod cli_integrations;
 pub mod cli_updater;
 pub mod cloudflared;
 pub mod cloudflare_api;
@@ -89,6 +90,8 @@ pub struct AppState {
     pub cloudflared: Arc<cloudflared::Manager>,
     /// Faro-managed copies of cloudflared and the password-manager CLIs.
     pub tools: Arc<managed_tools::Tools>,
+    /// Cloud and platform CLIs: account checks, discovery, sign-in (Plan 35).
+    pub clis: Arc<cli_integrations::Integrations>,
     /// Access TCP forwards (`cloudflared access tcp`) started with a session.
     pub cf_forwards: Arc<cf_forward::Manager>,
     pub foldersync: Arc<foldersync::FolderSync>,
@@ -349,6 +352,7 @@ pub fn run() {
                     tools.get(cloudflared::SPEC.id).expect("cloudflared is a managed tool"),
                 )),
                 tools,
+                clis: Arc::new(cli_integrations::Integrations::load(&handle).expect("failed to initialise CLI integrations")),
                 cf_forwards: Arc::new(cf_forward::Manager::new(
                     handle.path().app_data_dir().expect("resolving app_data_dir for Access forwards"),
                 )),
@@ -450,6 +454,11 @@ pub fn run() {
                 tools.check_on_launch(tools_handle).await;
             });
 
+            // CLIs some connection uses: check their logins now and then, so
+            // an expired one shows before a connect fails (Plan 35).
+            let clis_handle = app.handle().clone();
+            tauri::async_runtime::spawn(cli_integrations::background_checks(clis_handle));
+
             // Show transfers, agent requests and folder sync in Vela.
             vela::start(app.handle());
 
@@ -534,6 +543,12 @@ pub fn run() {
             managed_tools::tool_check,
             managed_tools::tool_install,
             managed_tools::tool_set_custom_path,
+            cli_integrations::cli_statuses,
+            cli_integrations::cli_check,
+            cli_integrations::cli_sign_in,
+            cli_integrations::cli_set_allowed,
+            cli_integrations::cli_discover,
+            cli_integrations::cli_auth_test,
             cloudflared::cloudflared_check,
             cloudflared::cloudflared_install,
             cloudflared::cloudflared_set_custom_path,

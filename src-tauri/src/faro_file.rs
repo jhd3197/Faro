@@ -428,6 +428,10 @@ mod tests {
             hostname: None,
             service_token_id: Some("id.access".into()),
             service_token_secret: Some("tokSECRET".into()),
+            target: None,
+            cli_account: None,
+            region: None,
+            project: None,
         });
         let keyed = profile(
             "k",
