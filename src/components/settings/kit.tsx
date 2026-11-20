@@ -203,7 +203,6 @@ export function CheckRow({
   disabledReason,
   focus,
   keywords,
-  indent,
   group,
 }: {
   label: string;
@@ -218,7 +217,6 @@ export function CheckRow({
   disabledReason?: string;
   focus?: string;
   keywords?: string;
-  indent?: boolean;
 }) {
   const m = useRowMatch(label, keywords, typeof help === "string" ? help : undefined);
   if (!m.show) return null;
@@ -232,9 +230,9 @@ export function CheckRow({
       <div className="flex min-h-7 items-center text-sm text-text-muted">
         {group && <span className="truncate">{group}</span>}
       </div>
-      {/* An indented child lines its box up under the parent's label text:
-          box (w-3.5) + gap (gap-2) = 1.375rem. */}
-      <div className={cn("flex min-w-0 flex-col gap-0.5", indent && "pl-[1.375rem]")}>
+      {/* Checkboxes stack flush, one under the other. A dependent one is
+          disabled while its parent is off, never indented. */}
+      <div className="flex min-w-0 flex-col gap-0.5">
         <div className="flex min-h-7 items-center gap-1.5" title={disabled ? disabledReason : undefined}>
           <Checkbox checked={checked} onChange={onChange} disabled={disabled} label={label}>
             <Highlight text={label} />

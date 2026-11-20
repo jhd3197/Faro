@@ -712,7 +712,6 @@ export function Settings({ onClose }: Props) {
             />
             <div data-settings-dependent={policy.allowAll ? "off" : "on"} aria-disabled={policy.allowAll}>
               <CheckRow
-                indent
                 label="Auto-approve reads"
                 keywords="read-only list search"
                 help="Listing, reading and searching run without asking. Downloads and uploads still ask."
@@ -722,7 +721,6 @@ export function Settings({ onClose }: Props) {
                 onChange={(v) => setPolicy({ ...policy, autoRead: v })}
               />
               <CheckRow
-                indent
                 label="Auto-approve safe commands"
                 keywords="shell ls cat grep"
                 help="Read-only commands like ls, cat, df and grep run without asking. Best effort."

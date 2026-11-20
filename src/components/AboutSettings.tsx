@@ -162,7 +162,6 @@ function NotificationsGroup() {
       {/* Only matters while notifications are on: indented under it. */}
       <div data-settings-dependent={notifications.enabled ? "on" : "off"}>
         <CheckRow
-          indent
           label="Only when Faro isn't focused"
           help="Skip OS toasts while the window is in front. In-app toasts already cover it."
           checked={notifications.unfocusedOnly}
