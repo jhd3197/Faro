@@ -2078,3 +2078,8 @@ export interface TagsResult {
   localOnly: boolean;
   errors?: string[];
 }
+
+export interface RenameOp {
+  from: string;
+  to: string;
+}

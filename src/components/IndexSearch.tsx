@@ -6,6 +6,7 @@ import { fmtSize } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { useConnections } from "@/stores/connectionsStore";
 import { useIndex } from "@/stores/indexStore";
+import { useRules } from "@/stores/rulesStore";
 import { toast } from "@/stores/toastStore";
 import { Dropdown } from "@/components/ui/Dropdown";
 import type { IndexFacets, IndexQuery, IndexRow } from "@/lib/types";
@@ -51,6 +52,22 @@ function IndexSearch() {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [revision, setRevision] = useState(0);
+  // View rules: a rule set's view folders over the index.
+  const ruleSets = useRules((s) => s.sets);
+  const [viewSet, setViewSet] = useState("");
+  const [views, setViews] = useState<Record<string, IndexRow[]>>({});
+  const [activeView, setActiveView] = useState<string | null>(null);
+  useEffect(() => {
+    setActiveView(null);
+    if (!viewSet) {
+      setViews({});
+      return;
+    }
+    void ipc
+      .rulesViews(viewSet, connectionId || null)
+      .then(setViews)
+      .catch((e) => toast.error("Couldn't build view folders", String(e)));
+  }, [viewSet, connectionId, revision]);
 
   const query: IndexQuery = useMemo(
     () => ({
@@ -104,7 +121,8 @@ function IndexSearch() {
 
   const nameOf = (cid: string) => profiles.find((p) => p.id === cid)?.name ?? "removed connection";
   const key = (r: IndexRow) => `${r.connectionId}\u0001${r.path}`;
-  const picked = rows.filter((r) => selected.has(key(r)));
+  const shown = activeView ? views[activeView] ?? [] : rows;
+  const picked = shown.filter((r) => selected.has(key(r)));
 
   const toggle = (r: IndexRow, additive: boolean) =>
     setSelected((s) => {
@@ -140,7 +158,7 @@ function IndexSearch() {
           className="min-w-0 flex-1 rounded border border-border bg-bg px-2 py-1 text-[12px]"
         />
         <span className="shrink-0 text-[11px] text-text-dim">
-          {loading ? <Loader2 size={12} className="animate-spin" /> : `${rows.length}${rows.length >= 1000 ? "+" : ""} of ${facets.files}`}
+          {loading ? <Loader2 size={12} className="animate-spin" /> : activeView ? `${shown.length} in ${activeView}` : `${rows.length}${rows.length >= 1000 ? "+" : ""} of ${facets.files}`}
         </span>
         <button onClick={close} aria-label="Close" className="rounded p-1 text-text-muted hover:bg-bg-hover hover:text-text">
           <X size={14} />
@@ -207,6 +225,36 @@ function IndexSearch() {
             Has a location
           </label>
 
+          {ruleSets.some((r) => r.rules.some((x) => x.kind === "view")) && (
+            <div className="flex flex-col gap-1 border-t border-border pt-2" data-index-views="">
+              <span className="text-text-dim">View folders</span>
+              <Dropdown
+                aria-label="Rule set views"
+                value={viewSet}
+                options={[
+                  { value: "", label: "None" },
+                  ...ruleSets.filter((r) => r.rules.some((x) => x.kind === "view")).map((r) => ({ value: r.id, label: r.name })),
+                ]}
+                onChange={setViewSet}
+              />
+              {Object.entries(views).map(([name, list]) => (
+                <button
+                  key={name}
+                  data-view={name}
+                  onClick={() => setActiveView(activeView === name ? null : name)}
+                  className={cn(
+                    "flex items-center justify-between rounded px-1.5 py-0.5 text-left",
+                    activeView === name ? "bg-bg-hover text-text" : "text-text-muted hover:text-text"
+                  )}
+                >
+                  <span className="truncate">{name}</span>
+                  <span className="text-[10px] text-text-dim">{list.length}</span>
+                </button>
+              ))}
+              {viewSet && Object.keys(views).length === 0 && <span className="text-text-dim">No indexed files match its view rules.</span>}
+            </div>
+          )}
+
           <div className="mt-2 flex flex-col gap-1 border-t border-border pt-2">
             <span className="text-text-dim">Indexed folders</span>
             {roots.length === 0 && (
@@ -270,7 +318,7 @@ function IndexSearch() {
             </div>
           )}
           <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2 overflow-y-auto p-3">
-            {rows.map((r) => (
+            {shown.map((r) => (
               <ResultCard
                 key={key(r)}
                 row={r}
@@ -279,7 +327,7 @@ function IndexSearch() {
                 onClick={(e) => toggle(r, e.ctrlKey || e.metaKey || e.shiftKey)}
               />
             ))}
-            {!loading && rows.length === 0 && (
+            {!loading && shown.length === 0 && (
               <div className="col-span-full py-12 text-center text-[12px] text-text-dim">
                 {facets.files === 0 ? "Nothing indexed yet." : "No indexed files match."}
               </div>

@@ -33,6 +33,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
 import { RemoteControlSettings } from "./RemoteControlSettings";
 import { SyncSettings } from "./SyncSettings";
+import { RulesSettings } from "./RulesSettings";
 import { CliUpdaterSettings } from "./CliUpdaterSettings";
 import { CloudflareSettings } from "./CloudflareSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
@@ -700,6 +701,9 @@ export function Settings({ onClose }: Props) {
       case "sync":
         return <SyncSettings />;
 
+      case "rules":
+        return <RulesSettings />;
+
       case "bridge":
         return (
           <Group
@@ -920,7 +924,8 @@ const SECTION_HELP: Partial<Record<SettingsSectionId, string>> = {
   cloudflare: "Reach servers behind Cloudflare Access. Faro runs cloudflared for you.",
   remoteControl: "Let another Faro on your network browse, transfer and (if you allow it) run commands on this computer.",
   bridge: "What connected AI agents may do without asking.",
-  sync: "Folders kept in step with a remote folder while Faro runs.",
+  sync: "Folders kept in step with a remote folder while Faro runs, and connections mounted as folders.",
+  rules: "Rename, sort and view rules for Copy to…, mounts and folders. Every change is previewed first.",
   cli: "faro-cli drives Faro from a terminal or script.",
   backup: "One password-protected file with your profiles, saved secrets, settings and sync pairs.",
   storage: "Space Faro uses for things it can rebuild. Clearing never touches your files or settings.",

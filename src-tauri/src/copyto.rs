@@ -135,6 +135,10 @@ fn parent_rel(rel: &str) -> &str {
 }
 
 /// `name.ext` → `name-N.ext` (suffix before the last extension).
+pub(crate) fn with_suffix_pub(rel: &str, n: u32) -> String {
+    with_suffix(rel, n)
+}
+
 fn with_suffix(rel: &str, n: u32) -> String {
     let (dir, file) = match rel.rfind('/') {
         Some(i) => (&rel[..=i], &rel[i + 1..]),
@@ -702,7 +706,12 @@ async fn build_plan(
         }
     }
     let dest_tree = crate::scan::destination_tree(dst_fs.as_ref(), dest_dir).await?;
-    let namer = crate::rules::namer_for(app, opts.rule_set.as_deref()).await?;
+    use tauri::Manager;
+    let facts = match source_session {
+        Some(s) => crate::rules::facts_from_index(app.state::<crate::AppState>().db.clone(), s.profile().id.clone()),
+        None => crate::rules::facts_local(),
+    };
+    let namer = crate::rules::namer_for(app, opts.rule_set.as_deref(), facts).await?;
     Ok(plan(&built, dest_dir, &dest_tree, opts, namer.as_ref()))
 }
 
@@ -820,13 +829,13 @@ mod tests {
 
     #[test]
     fn newer_policy_compares_mixed_units() {
-        // Source in seconds, destination in ms: 100 s vs 50_000 ms → newer.
-        let src = Source { name: "x".into(), tree: tree(&[("f", 1, 100)]), is_dir: true };
-        let dest = tree(&[("x/f", 1, 50_000)]);
+        // Source in seconds (SFTP), destination in ms: 100 s newer → replace.
+        let src = Source { name: "x".into(), tree: tree(&[("f", 1, 1_700_000_100)]), is_dir: true };
+        let dest = tree(&[("x/f", 1, 1_700_000_000_000)]);
         let opts = CopyOptions { overwrite: Overwrite::Newer, ..Default::default() };
         let p = plan(&[src.clone()], "/d", &dest, &opts, &id);
         assert_eq!(p.items[0].action, ItemAction::Overwrite);
-        let dest_newer = tree(&[("x/f", 1, 200_000)]);
+        let dest_newer = tree(&[("x/f", 1, 1_700_000_200_000)]);
         assert_eq!(plan(&[src], "/d", &dest_newer, &opts, &id).items[0].action, ItemAction::Skip);
     }
 

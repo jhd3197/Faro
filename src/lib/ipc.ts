@@ -44,6 +44,7 @@ import type {
   CopyJob,
   RuleSet,
   RuleSample,
+  RenameOp,
   Mount,
   MountView,
   IndexRow,
@@ -824,6 +825,14 @@ export const ipc = {
   /** Run `set` (unsaved edits included) over sample files from a folder. */
   rulesTest: (set: RuleSet, sessionId: SessionId, path: string) =>
     invoke<RuleSample[]>("rules_test", { set, sessionId, path }),
+  /** Renames that would bring a folder in line with a rule set. */
+  rulesPlanInPlace: (setId: string, sessionId: SessionId, path: string) =>
+    invoke<RenameOp[]>("rules_plan_in_place", { setId, sessionId, path }),
+  rulesApplyInPlace: (setId: string, sessionId: SessionId, path: string) =>
+    invoke<{ renamed: number; errors?: string[] }>("rules_apply_in_place", { setId, sessionId, path }),
+  /** Indexed files grouped into a rule set's view folders. */
+  rulesViews: (setId: string, connectionId?: string | null) =>
+    invoke<Record<string, IndexRow[]>>("rules_views", { setId, connectionId: connectionId ?? null }),
 
   // ---- On-demand virtual folders (Plan 9) ----
   /** Whether on-demand placeholders are available (Windows + `virtualfs` build). */

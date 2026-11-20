@@ -1467,7 +1467,12 @@ async fn cmd_cp_between(
         rule_set: flags.rules.clone(),
     };
     let dest_tree = faro_lib::scan::destination_tree(dst_fs.as_ref(), &dest_dir).await?;
-    let namer = faro_lib::rules::load_namer(&default_data_dir()?, opts.rule_set.as_deref())?;
+    // Rules that use the date taken / camera / tags read the app's file index.
+    let facts = match faro_lib::db::Db::open(&default_data_dir()?.join("faro.db")) {
+        Ok(db) => faro_lib::rules::facts_from_index(std::sync::Arc::new(db), src_profile.id.clone()),
+        Err(_) => faro_lib::rules::facts_none(),
+    };
+    let namer = faro_lib::rules::load_namer(&default_data_dir()?, opts.rule_set.as_deref(), facts)?;
     let plan = copyto::plan(&[Source { name, tree, is_dir }], &dest_dir, &dest_tree, &opts, namer.as_ref());
 
     if flags.dry_run {
