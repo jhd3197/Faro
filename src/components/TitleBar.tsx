@@ -29,6 +29,8 @@ import {
   Focus,
   LogOut,
   Bug,
+  Lightbulb,
+  MessageCircle,
   Palette,
 } from "lucide-react";
 import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
@@ -40,9 +42,9 @@ import { useResolvedCommands } from "@/lib/keybindings";
 import { formatCombo } from "@/lib/shortcuts";
 import { cn } from "@/lib/cn";
 import { openExternal } from "@/lib/openExternal";
+import { DISCORD_URL, REPO_URL, issueUrl } from "@/lib/feedback";
 
 const APP_VERSION = "v1.4";
-const REPO_URL = "https://github.com/jhd3197/faro";
 
 /// Single custom title bar — replaces the OS chrome + the old app header.
 /// Draggable region via `data-tauri-drag-region` (Tauri picks it up); the
@@ -235,9 +237,21 @@ export function TitleBar() {
           rightIcon: <ExternalLink size={9} />,
         },
         {
-          label: "Report an issue",
+          label: "Report a bug",
           icon: <Bug size={11} />,
-          onClick: () => openExternal(`${REPO_URL}/issues/new`),
+          onClick: () => void issueUrl("bug").then(openExternal),
+          rightIcon: <ExternalLink size={9} />,
+        },
+        {
+          label: "Suggest a feature",
+          icon: <Lightbulb size={11} />,
+          onClick: () => void issueUrl("idea").then(openExternal),
+          rightIcon: <ExternalLink size={9} />,
+        },
+        {
+          label: "Join the Discord",
+          icon: <MessageCircle size={11} />,
+          onClick: () => openExternal(DISCORD_URL),
           rightIcon: <ExternalLink size={9} />,
         },
       ],

@@ -1,4 +1,5 @@
 import { useId, useRef } from "react";
+import { REPO_URL } from "@/lib/feedback";
 import { Github, ExternalLink, X } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { openExternal } from "@/lib/openExternal";
@@ -8,7 +9,6 @@ interface Props {
 }
 
 const VERSION = "1.3.0";
-const REPO_URL = "https://github.com/jhd3197/faro";
 
 export function AboutDialog({ onClose }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);

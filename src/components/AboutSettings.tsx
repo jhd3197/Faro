@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { openExternal } from "@/lib/openExternal";
+import { DISCORD_URL, issueUrl, systemInfo } from "@/lib/feedback";
 import { useSettings } from "@/stores/settingsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useUpdater } from "@/stores/updaterStore";
@@ -42,6 +43,8 @@ export function AboutSettings() {
       <Group title="Help">
         <TipsRows />
       </Group>
+
+      <FeedbackGroup />
 
       <NotificationsGroup />
 
@@ -194,5 +197,41 @@ function TipsRows() {
         <Btn size="sm" variant="ghost" onClick={() => useTips.getState().reset()}>Reset tips</Btn>
       </Row>
     </>
+  );
+}
+
+/** Feedback goes to GitHub or Discord in the browser. Faro sends nothing on
+ *  its own: the issue opens prefilled and the user reviews it there. */
+function FeedbackGroup() {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(await systemInfo());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <Group
+      title="Feedback"
+      help="Opens GitHub with a short template and your Faro version, OS and WebView filled in. You review it before anything is sent. No hosts, paths or passwords are included."
+    >
+      <Row label="Something broke" keywords="report bug issue problem crash feedback">
+        <Btn size="sm" data-feedback="bug" onClick={() => void issueUrl("bug").then(openExternal)}>
+          Report a bug
+        </Btn>
+        <Btn size="sm" variant="ghost" data-feedback="copy-info" onClick={() => void copy()}>
+          {copied ? "Copied" : "Copy system info"}
+        </Btn>
+      </Row>
+      <Row label="An idea" keywords="feature request suggestion enhancement feedback">
+        <Btn size="sm" data-feedback="idea" onClick={() => void issueUrl("idea").then(openExternal)}>
+          Suggest a feature
+        </Btn>
+      </Row>
+      <Row label="Community" keywords="discord chat help support">
+        <Btn size="sm" data-feedback="discord" onClick={() => openExternal(DISCORD_URL)}>
+          Discord
+        </Btn>
+      </Row>
+    </Group>
   );
 }
