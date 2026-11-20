@@ -6,108 +6,69 @@
 //! (`cloudflared.json`), the managed copy in `<app data>/bin/`, status pushed
 //! as `"cloudflared://status"`. The binary choice reaches `proxy_command`
 //! through `configure`, which faro-cli calls too.
+//!
+//! The binary choice, install and update are the shared `managed_tools`
+//! machinery; this module holds cloudflared's spec and the thin names
+//! faro-cli and the tests use.
 
+use crate::managed_tools::{self, Feed, ToolManager, ToolSpec};
 use crate::proc::NoConsoleWindow;
 use crate::proxy_command;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::Read;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager as _, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 
 use crate::AppState;
 
+pub use crate::managed_tools::{expected_sha256, is_newer, swap_in, Asset, Config, Source as BinarySource, ToolStatus as BinaryStatus};
+
 /// GitHub API for the official releases.
 pub const RELEASE_API: &str = "https://api.github.com/repos/cloudflare/cloudflared/releases/latest";
 /// How long a browser sign-in may take.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
-/// `cloudflared access token`, `--version`: local, should be quick.
+/// `cloudflared access token`: local, should be quick.
 const QUICK_TIMEOUT: Duration = Duration::from_secs(20);
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Config {
-    /// The user's own binary, instead of PATH or the managed copy.
-    pub custom_path: Option<String>,
-}
+pub static SPEC: ToolSpec = ToolSpec {
+    id: "cloudflared",
+    name: "cloudflared",
+    program: "cloudflared",
+    config_file: "cloudflared.json",
+    feed: Feed::GitHub { api: RELEASE_API, tag_prefix: "", pick: pick_asset },
+    parse_version,
+    find_installed: || proxy_command::find_program("cloudflared", true),
+    check_custom: |_| Ok(()),
+    on_select: proxy_command::set_cloudflared_path,
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BinarySource {
-    Custom,
-    Managed,
-    Path,
-    Missing,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BinaryStatus {
-    pub source: BinarySource,
-    pub path: Option<String>,
-    pub version: Option<String>,
-    pub custom_path: Option<String>,
-    /// Where Faro installs its own copy.
-    pub managed_path: String,
-    /// Latest official release, once checked.
-    pub latest: Option<String>,
-    /// The copy Faro runs is older than `latest`.
-    pub update_available: bool,
-    /// One line about the last action, for the UI.
-    pub message: Option<String>,
-}
-
-fn exe_name() -> &'static str {
-    if cfg!(windows) {
-        "cloudflared.exe"
-    } else {
-        "cloudflared"
-    }
+#[cfg(test)]
+fn exe_name() -> String {
+    managed_tools::exe_name("cloudflared")
 }
 
 pub fn managed_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("bin").join(exe_name())
-}
-
-fn config_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("cloudflared.json")
+    managed_tools::managed_path(&SPEC, data_dir)
 }
 
 pub fn read_config(data_dir: &Path) -> Config {
-    std::fs::read(config_path(data_dir))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    managed_tools::read_config(&SPEC, data_dir)
 }
 
 /// Which binary this data dir selects, and why: custom → managed → PATH.
 pub fn locate(data_dir: &Path, cfg: &Config) -> (BinarySource, Option<PathBuf>) {
-    if let Some(custom) = cfg.custom_path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-        return (BinarySource::Custom, Some(PathBuf::from(custom)));
-    }
-    let managed = managed_path(data_dir);
-    if managed.is_file() {
-        return (BinarySource::Managed, Some(managed));
-    }
-    match proxy_command::find_program("cloudflared", true) {
-        Some(p) => (BinarySource::Path, Some(p)),
-        None => (BinarySource::Missing, None),
-    }
+    managed_tools::locate(&SPEC, data_dir, cfg)
 }
 
 /// Point proxy commands at the binary this data dir selects. Without a
 /// custom or managed copy, they search PATH as before.
 pub fn configure(data_dir: &Path) {
-    let (source, path) = locate(data_dir, &read_config(data_dir));
-    proxy_command::set_cloudflared_path(match source {
-        BinarySource::Custom | BinarySource::Managed => path,
-        BinarySource::Path | BinarySource::Missing => None,
-    });
+    managed_tools::configure(&SPEC, data_dir);
 }
 
 /// `cloudflared version 2026.10.4 (built ...)` → `2026.10.4`.
@@ -119,57 +80,7 @@ pub fn parse_version(out: &str) -> Option<String> {
 }
 
 pub async fn version(path: &Path) -> Option<String> {
-    // A binary written moments ago (an install) can still be open for writing
-    // in a child some other thread forked meanwhile, and Unix then refuses to
-    // run it ("text file busy"). That clears as soon as the child execs, so
-    // try again shortly instead of calling the download broken.
-    for attempt in 1..=5 {
-        let run = tokio::time::timeout(
-            QUICK_TIMEOUT,
-            tokio::process::Command::new(path).arg("--version").no_console_window().output(),
-        )
-        .await
-        .ok()?;
-        match run {
-            Ok(out) => {
-                return parse_version(&String::from_utf8_lossy(&out.stdout))
-                    .or_else(|| parse_version(&String::from_utf8_lossy(&out.stderr)))
-            }
-            Err(e) if text_file_busy(&e) && attempt < 5 => tokio::time::sleep(Duration::from_millis(100)).await,
-            Err(_) => return None,
-        }
-    }
-    None
-}
-
-/// ETXTBSY: the executable is still open for writing somewhere.
-fn text_file_busy(e: &std::io::Error) -> bool {
-    cfg!(unix) && e.raw_os_error() == Some(26)
-}
-
-/// `2026.10.4` < `2026.11.0`; non-numeric parts compare as 0.
-pub fn is_newer(latest: &str, current: &str) -> bool {
-    let parts = |v: &str| -> Vec<u64> { v.split(['.', '-']).map(|p| p.parse().unwrap_or(0)).collect() };
-    parts(latest) > parts(current)
-}
-
-// ---- Install / update ------------------------------------------------------
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Release {
-    pub tag_name: String,
-    #[serde(default)]
-    pub body: Option<String>,
-    pub assets: Vec<Asset>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Asset {
-    pub name: String,
-    pub browser_download_url: String,
-    /// GitHub's `sha256:<hex>` of the uploaded file, when published.
-    #[serde(default)]
-    pub digest: Option<String>,
+    managed_tools::version(&SPEC, path).await
 }
 
 /// The official release asset for an OS/arch (`std::env::consts` names).
@@ -188,48 +99,17 @@ pub fn asset_name(os: &str, arch: &str) -> Result<&'static str> {
     })
 }
 
-/// The sha256 the asset must have: GitHub's digest of the uploaded file,
-/// else the release notes' `name: <hex>` checksum table.
-pub fn expected_sha256(asset: &Asset, body: &str) -> Result<String> {
-    if let Some(hex) = asset.digest.as_deref().and_then(|d| d.strip_prefix("sha256:")) {
-        return Ok(hex.to_ascii_lowercase());
-    }
-    let prefix = format!("{}:", asset.name);
-    body.lines()
-        .find_map(|l| l.trim().strip_prefix(&prefix).map(|h| h.trim().to_ascii_lowercase()))
-        .filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
-        .ok_or_else(|| anyhow!("the release publishes no checksum for {}, so it can't be verified", asset.name))
+fn pick_asset(os: &str, arch: &str, _names: &[&str]) -> Result<String> {
+    asset_name(os, arch).map(str::to_string)
 }
 
 /// The `cloudflared` file inside a release `.tgz`.
-fn extract_from_tgz(bytes: &[u8]) -> Result<Vec<u8>> {
-    let mut tar = Vec::new();
-    flate2::read::GzDecoder::new(bytes).read_to_end(&mut tar).context("unpack the .tgz")?;
-    let mut at = 0;
-    while at + 512 <= tar.len() {
-        let header = &tar[at..at + 512];
-        if header.iter().all(|b| *b == 0) {
-            break;
-        }
-        let name = String::from_utf8_lossy(&header[..100]).trim_end_matches('\0').to_string();
-        let size_field = String::from_utf8_lossy(&header[124..136]);
-        let size = usize::from_str_radix(size_field.trim_matches(|c: char| c == '\0' || c.is_whitespace()), 8)
-            .context("bad size in the .tgz")?;
-        let data = at + 512;
-        if name.rsplit('/').next() == Some("cloudflared") && header[156] != b'5' {
-            return tar.get(data..data + size).map(<[u8]>::to_vec).ok_or_else(|| anyhow!("truncated .tgz"));
-        }
-        at = data + size.div_ceil(512) * 512;
-    }
-    bail!("the .tgz has no cloudflared in it")
+pub fn extract_from_tgz(bytes: &[u8]) -> Result<Vec<u8>> {
+    managed_tools::extract_from_tgz(bytes, "cloudflared")
 }
 
-/// Downloads official releases. The API URL is a field so tests can serve
-/// their own.
-pub struct Installer {
-    pub api_url: String,
-    client: reqwest::Client,
-}
+/// Downloads official releases. The API URL can point elsewhere for tests.
+pub struct Installer(managed_tools::Installer);
 
 impl Default for Installer {
     fn default() -> Self {
@@ -239,88 +119,14 @@ impl Default for Installer {
 
 impl Installer {
     pub fn new(api_url: &str) -> Self {
-        Self {
-            api_url: api_url.to_string(),
-            client: reqwest::Client::builder()
-                .user_agent(concat!("Faro/", env!("CARGO_PKG_VERSION")))
-                .connect_timeout(Duration::from_secs(20))
-                .build()
-                .expect("reqwest client"),
-        }
-    }
-
-    pub async fn latest(&self) -> Result<Release> {
-        self.client
-            .get(&self.api_url)
-            .send()
-            .await
-            .and_then(|r| r.error_for_status())
-            .context("couldn't reach GitHub for the latest cloudflared release")?
-            .json()
-            .await
-            .context("unexpected answer from GitHub for the latest cloudflared release")
+        Self(managed_tools::Installer::with_urls(&SPEC, api_url, "", None))
     }
 
     /// Download, verify and swap in the latest release at `dest`. Returns
     /// the installed version.
     pub async fn install(&self, dest: &Path) -> Result<String> {
-        let release = self.latest().await?;
-        let name = asset_name(std::env::consts::OS, std::env::consts::ARCH)?;
-        let asset = release
-            .assets
-            .iter()
-            .find(|a| a.name == name)
-            .ok_or_else(|| anyhow!("cloudflared {} has no {name} download", release.tag_name))?;
-        let want = expected_sha256(asset, release.body.as_deref().unwrap_or(""))?;
-        let bytes = self
-            .client
-            .get(&asset.browser_download_url)
-            .send()
-            .await
-            .and_then(|r| r.error_for_status())
-            .with_context(|| format!("download {name}"))?
-            .bytes()
-            .await
-            .with_context(|| format!("download {name}"))?;
-        let got = format!("{:x}", Sha256::digest(&bytes));
-        if got != want {
-            bail!("the downloaded {name} failed its checksum (expected {want}, got {got}); nothing was installed");
-        }
-        let binary = if name.ends_with(".tgz") { extract_from_tgz(&bytes)? } else { bytes.to_vec() };
-
-        let dir = dest.parent().ok_or_else(|| anyhow!("bad install path"))?;
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let staged = dest.with_extension("download");
-        std::fs::write(&staged, &binary).with_context(|| format!("write {}", staged.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
-        }
-        let Some(installed) = version(&staged).await else {
-            let _ = std::fs::remove_file(&staged);
-            bail!("the downloaded cloudflared doesn't run on this machine; nothing was installed");
-        };
-        swap_in(&staged, dest)?;
-        Ok(installed)
+        self.0.install(dest).await
     }
-}
-
-/// Replace `dest` with `staged`. A running copy can't be overwritten on
-/// Windows but can be renamed, so the old one moves aside first.
-fn swap_in(staged: &Path, dest: &Path) -> Result<()> {
-    let old = dest.with_extension("old");
-    let _ = std::fs::remove_file(&old);
-    if dest.exists() {
-        std::fs::rename(dest, &old).with_context(|| format!("move the old {} aside", dest.display()))?;
-    }
-    if let Err(e) = std::fs::rename(staged, dest) {
-        let _ = std::fs::rename(&old, dest);
-        return Err(anyhow::Error::from(e).context(format!("install {}", dest.display())));
-    }
-    // Still in use until its sessions end; removed on the next update.
-    let _ = std::fs::remove_file(&old);
-    Ok(())
 }
 
 // ---- Access sign-in --------------------------------------------------------
@@ -576,112 +382,34 @@ async fn ssh_gen_in(
 
 // ---- App subsystem ----------------------------------------------------------
 
-pub struct Manager {
-    data_dir: PathBuf,
-    config: Mutex<Config>,
-    /// One install at a time.
-    installing: Mutex<()>,
-    latest: Mutex<Option<String>>,
-}
+/// cloudflared's entry in `managed_tools::Tools`.
+pub struct Manager(Arc<ToolManager>);
 
 impl Manager {
-    pub fn load(app: &AppHandle) -> Result<Self> {
-        let dir = app.path().app_data_dir().context("resolving app_data_dir")?;
-        Ok(Self::from_dir(dir))
+    pub fn new(inner: Arc<ToolManager>) -> Self {
+        Self(inner)
     }
 
     pub fn from_dir(data_dir: PathBuf) -> Self {
-        configure(&data_dir);
-        Self {
-            config: Mutex::new(read_config(&data_dir)),
-            data_dir,
-            installing: Mutex::new(()),
-            latest: Mutex::new(None),
-        }
+        Self(Arc::new(ToolManager::from_dir(&SPEC, data_dir)))
     }
 
     pub async fn status(&self) -> BinaryStatus {
-        let cfg = self.config.lock().await.clone();
-        let (source, path) = locate(&self.data_dir, &cfg);
-        let version = match &path {
-            Some(p) if p.is_file() => version(p).await,
-            _ => None,
-        };
-        let latest = self.latest.lock().await.clone();
-        BinaryStatus {
-            update_available: matches!((&latest, &version), (Some(l), Some(v)) if is_newer(l, v)),
-            source,
-            path: path.map(|p| p.display().to_string()),
-            version,
-            custom_path: cfg.custom_path,
-            managed_path: managed_path(&self.data_dir).display().to_string(),
-            latest,
-            message: None,
-        }
+        self.0.status().await
     }
 
     /// Ask GitHub for the latest release, then report.
     pub async fn check(&self, installer: &Installer) -> BinaryStatus {
-        match installer.latest().await {
-            Ok(r) => {
-                *self.latest.lock().await = Some(r.tag_name.trim_start_matches('v').to_string());
-                self.status().await
-            }
-            Err(e) => {
-                let mut s = self.status().await;
-                s.message = Some(format!("{e:#}"));
-                s
-            }
-        }
+        self.0.check(&installer.0).await
     }
 
     /// Install or update Faro's own copy and start using it.
     pub async fn install(&self, installer: &Installer) -> Result<BinaryStatus> {
-        let _one = self.installing.lock().await;
-        let dest = managed_path(&self.data_dir);
-        let installed = installer.install(&dest).await?;
-        *self.latest.lock().await = Some(installed.clone());
-        // A custom path would keep winning; installing means "use this one".
-        self.config.lock().await.custom_path = None;
-        self.persist().await?;
-        let mut s = self.status().await;
-        s.message = Some(format!("Installed cloudflared {installed}"));
-        Ok(s)
+        self.0.install(&installer.0).await
     }
 
     pub async fn set_custom_path(&self, path: Option<String>) -> Result<BinaryStatus> {
-        let path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
-        if let Some(p) = &path {
-            if !Path::new(p).is_file() {
-                bail!("{p} doesn't exist");
-            }
-            if version(Path::new(p)).await.is_none() {
-                bail!("{p} doesn't look like cloudflared (it didn't report a version)");
-            }
-        }
-        self.config.lock().await.custom_path = path;
-        self.persist().await?;
-        Ok(self.status().await)
-    }
-
-    async fn persist(&self) -> Result<()> {
-        let cfg = self.config.lock().await.clone();
-        std::fs::create_dir_all(&self.data_dir).ok();
-        crate::fsutil::write_atomic(&config_path(&self.data_dir), &serde_json::to_vec_pretty(&cfg)?)?;
-        configure(&self.data_dir);
-        Ok(())
-    }
-
-    /// On launch: with a managed copy, look for an update in the background
-    /// and tell the UI if there is one.
-    pub async fn check_on_launch(&self, app: AppHandle) {
-        if !managed_path(&self.data_dir).is_file() {
-            return;
-        }
-        let status = self.check(&Installer::default()).await;
-        if status.update_available {
-            let _ = app.emit("cloudflared://status", &status);
-        }
+        self.0.set_custom_path(path).await
     }
 }
 
@@ -730,4 +458,4 @@ pub async fn cf_access_login(hostname: String) -> Result<AccessStatus, String> {
 
 #[cfg(test)]
 #[path = "cloudflared_tests.rs"]
-mod tests;
+pub(crate) mod tests;
