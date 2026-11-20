@@ -621,6 +621,9 @@ impl Installer {
 
 // ---- One tool in the app ------------------------------------------------------------
 
+/// A `--version` answer: the path, its file time, and what it said.
+type VersionSeen = (PathBuf, Option<std::time::SystemTime>, Option<String>);
+
 pub struct ToolManager {
     pub spec: &'static ToolSpec,
     data_dir: PathBuf,
@@ -630,7 +633,7 @@ pub struct ToolManager {
     latest: Mutex<Option<String>>,
     /// The last `--version` answer, by path and file time: some CLIs (az,
     /// gcloud) take seconds to say it, and the CLIs page lists them all.
-    version_cache: std::sync::Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Option<String>)>>,
+    version_cache: std::sync::Mutex<Option<VersionSeen>>,
 }
 
 impl ToolManager {

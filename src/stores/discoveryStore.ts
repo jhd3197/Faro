@@ -8,7 +8,14 @@ import { SESSION_SNAPSHOT_KEY, startupSettled } from "./sessionStore";
 
 export interface ReleaseNotes { version: string; notes: string | null }
 /** Connections another client on this machine already has, not yet in Faro. */
-export interface FoundSource { kind: Exclude<ImporterKind, "faro">; label: string; path: string | null; count: number }
+export interface FoundSource {
+  kind: Exclude<ImporterKind, "faro">;
+  label: string;
+  path: string | null;
+  count: number;
+  /** Replaces "N connections" (the CLIs row counts CLIs, not connections). */
+  countLabel?: string;
+}
 
 const SEEN_KEY = "discoverySeenVersion";
 export const NOTES_KEY = "discoveryReleaseNotes";
@@ -153,11 +160,24 @@ export const useDiscovery = create<{
       const read = async (kind: FoundSource["kind"], label: string, path: string | null, load: () => Promise<ProfilePreview[]>) => {
         try { return { kind, label, path, count: fresh(await load()) }; } catch { return { kind, label, path, count: 0 }; }
       };
-      const found = await Promise.all([
+      const found: (FoundSource | null)[] = await Promise.all([
         paths?.opensshExists ? read("openssh", "OpenSSH config", paths.openssh, () => ipc.importOpenssh()) : null,
         paths?.filezillaExists ? read("filezilla", "FileZilla", paths.filezilla, () => ipc.importFilezilla()) : null,
         paths?.putty ? read("putty", "PuTTY", null, () => ipc.importPutty()) : null,
       ]);
+      // CLIs that can list servers (Plan 35). Listing runs only when the
+      // person opens the tab: it talks to their cloud accounts.
+      const clis = await ipc.cliStatuses().catch(() => []);
+      const listers = clis.filter(c => c.installed && c.roles.includes("discover"));
+      if (listers.length > 0) {
+        found.push({
+          kind: "cli",
+          label: "Your CLIs",
+          path: listers.map(c => c.name).join(", "),
+          count: listers.length,
+          countLabel: `${listers.length} ${listers.length === 1 ? "CLI" : "CLIs"}`,
+        });
+      }
       const result = found.filter((f): f is FoundSource => !!f && f.count > 0);
       set({ found: result });
       return result;

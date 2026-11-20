@@ -31,6 +31,7 @@ import { useCfConnect } from "@/components/CloudflareConnectSheet";
 import { seed as seedTransfers, calls as transferCalls } from "./transfers";
 import { calls as sysmonCalls, setProbe as setSysmonProbe } from "./sysmon";
 import { calls as dockerCalls, setAccess as setDockerAccess, reset as resetDocker } from "./docker";
+import { calls as cliCalls, expireCli, restoreCli, resetClis } from "./clis";
 import {
   calls as passwordCalls,
   setState as setPasswordManagers,
@@ -95,4 +96,10 @@ import "./primitives";
   setPasswordManagers,
   setSshAgents,
   resetPasswordManagers,
+  // Plan 35 test hooks: CLI commands sent, and expiring / restoring a login
+  // (expireCli("aws", "client-a")) to drive the pill and connect prompt.
+  cliCalls,
+  expireCli,
+  restoreCli,
+  resetClis,
 };

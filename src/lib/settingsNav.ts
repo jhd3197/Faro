@@ -11,6 +11,7 @@ export const SETTINGS_SECTIONS = [
   { id: "connections", group: "connections", label: "Connections", keywords: "port password keychain" },
   { id: "passwordManagers", group: "connections", label: "Password managers", keywords: "1password bitwarden vault op bw ssh agent master password unlock" },
   { id: "cloudflare", group: "connections", label: "Cloudflare", keywords: "cloudflare cloudflared access tunnel account" },
+  { id: "clis", group: "connections", label: "CLIs", keywords: "cli command line tools aws gcloud az azure gh github doctl hcloud tailscale render hubspot hs shopify cloudflared op bw installed signed in sign in login import discover" },
   { id: "remoteControl", group: "connections", label: "Remote control", keywords: "remote control agent host pairing faro agent" },
   { id: "bridge", group: "connections", label: "Agent Bridge", keywords: "agent bridge approval policy" },
   { id: "sync", group: "system", label: "Folder sync", keywords: "folder sync mirror watch pair mount mounts on demand" },

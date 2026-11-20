@@ -159,6 +159,14 @@ export function useCommands(): Command[] {
       run: () => openDialog("agentBridge"),
     },
     {
+      id: "clis",
+      title: "CLIs…",
+      group: "General",
+      icon: <TerminalSquare size={14} />,
+      keywords: "cli command line tools aws gcloud azure az gh github tailscale doctl digitalocean hcloud hetzner render hubspot hs shopify cloudflared 1password bitwarden sign in login import",
+      run: () => openDialog("clis"),
+    },
+    {
       id: "fleet-skills",
       title: "Fleet Skills…",
       group: "General",

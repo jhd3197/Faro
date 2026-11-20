@@ -36,6 +36,7 @@ import { SyncSettings } from "./SyncSettings";
 import { RulesSettings } from "./RulesSettings";
 import { CliUpdaterSettings } from "./CliUpdaterSettings";
 import { CloudflareSettings } from "./CloudflareSettings";
+import { CliHub } from "./CliHub";
 import { KeyboardSettings } from "./KeyboardSettings";
 import { Dropdown } from "./ui/Dropdown";
 import { AboutSettings } from "./AboutSettings";
@@ -698,6 +699,9 @@ export function Settings({ onClose }: Props) {
       case "cloudflare":
         return <CloudflareSettings />;
 
+      case "clis":
+        return <CliHub embedded />;
+
       case "sync":
         return <SyncSettings />;
 
@@ -922,6 +926,7 @@ const SECTION_HELP: Partial<Record<SettingsSectionId, string>> = {
   connections: "Defaults for new connection profiles and how their secrets are kept.",
   passwordManagers: "Fill connection passwords and keys from 1Password or Bitwarden instead of saving them in Faro.",
   cloudflare: "Reach servers behind Cloudflare Access. Faro runs cloudflared for you.",
+  clis: "The command-line tools your connections tunnel, sign in and import through: who is signed in, and which connections use each.",
   remoteControl: "Let another Faro on your network browse, transfer and (if you allow it) run commands on this computer.",
   bridge: "What connected AI agents may do without asking.",
   sync: "Folders kept in step with a remote folder while Faro runs, and connections mounted as folders.",

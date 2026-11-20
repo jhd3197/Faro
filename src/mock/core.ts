@@ -7,6 +7,7 @@ import * as transfers from "./transfers";
 import * as sysmon from "./sysmon";
 import * as docker from "./docker";
 import * as passwords from "./passwords";
+import * as clis from "./clis";
 import { emit } from "./event";
 
 type Args = Record<string, any>;
@@ -107,6 +108,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
   if (cmd.startsWith("sysmon_")) return sysmon.handle(cmd, a) ?? null;
   // Docker manager and live logs (Plan 31) too.
   if (cmd.startsWith("docker_") || cmd === "follow_stop") return docker.handle(cmd, a) ?? null;
+  // The CLIs page (Plan 35), and tool_* for the CLIs it adds.
+  if (clis.COMMANDS.has(cmd) || (cmd.startsWith("tool_") && clis.ownsTool(a.id))) return clis.handle(cmd, a) ?? null;
   // Password managers and SSH agents (Plan 33).
   if (passwords.COMMANDS.has(cmd)) return passwords.handle(cmd, a) ?? null;
   switch (cmd) {
@@ -405,8 +408,24 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return hosts[cmd].map((name, i) => ({ previewId: `${cmd}-${i}`, name, protocol: cmd === "import_filezilla" ? "ftp" : "sftp",
         host: `${name}.example.net`, port: cmd === "import_filezilla" ? 21 : 22, username: "deploy" }));
     }
-    case "save_imported_profiles":
-      return 0;
+    case "save_imported_profiles": {
+      // Previews that carry a whole connection (`.faro`, CLI discovery) are
+      // stored, so the rail and the CLIs page show them; a Replace updates
+      // the connection it points at. Others stay a no-op as before.
+      let n = 0;
+      let next = [...data.profiles];
+      for (const p of (a.previews ?? []) as any[]) {
+        if (!p.profile) continue;
+        if (p.conflict && p.resolution === "skip") continue;
+        const replace = p.conflict && p.resolution === "replace";
+        const id = replace ? p.conflict.id : `p-imp-${Date.now()}-${n}`;
+        const profile = { ...p.profile, id, name: p.name };
+        next = replace ? next.map((x) => (x.id === id ? { ...x, host: profile.host, cliSource: profile.cliSource } : x)) : [...next, profile];
+        n++;
+      }
+      data.setProfiles(next);
+      return n;
+    }
     case "cf_account_status":
       return { connected: false, choices: [], permissions: [] };
     case "cf_forwards_status":

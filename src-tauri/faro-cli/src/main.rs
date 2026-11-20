@@ -740,10 +740,7 @@ async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Cmd::Tools { action, json } => {
-            let only = match action {
-                Some(ToolsCmd::Check { id }) => Some(id),
-                None => None,
-            };
+            let only = action.map(|ToolsCmd::Check { id }| id);
             cmd_tools(&store, only.as_deref(), json).await
         }
         Cmd::Ls { target, bytes } => cmd_ls(&store, &target, bytes).await,

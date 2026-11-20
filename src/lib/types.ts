@@ -186,6 +186,10 @@ export interface ConnectionProfile {
   oauthClientId?: string;
   /** Named Cloudflare Access TCP forwards for this connection. */
   cfForwards?: CfForward[];
+  /** Sign in with a CLI's login (Plan 35). Exclusive with credentialRef. */
+  cliAuth?: CliAuth;
+  /** The CLI this connection was imported from (Plan 35). */
+  cliSource?: CliSource;
 }
 
 /** An Access-protected service exposed on a local port (`cloudflared access tcp`). */
@@ -222,7 +226,7 @@ export interface ProxyConfig {
   password?: string;
 }
 
-export type ProxyCommandKind = "command" | "cloudflare";
+export type ProxyCommandKind = "command" | "cloudflare" | "awsSsm" | "gcpIap";
 
 export interface ProxyCommandConfig {
   kind: ProxyCommandKind;
@@ -233,6 +237,29 @@ export interface ProxyCommandConfig {
   serviceTokenId?: string;
   /** Kept in the keychain when keychain mode is on. */
   serviceTokenSecret?: string;
+  /** awsSsm: the EC2 instance id; gcpIap: the VM name. Absent = the host. */
+  target?: string;
+  /** The AWS profile or gcloud account the tunnel runs as. */
+  cliAccount?: string;
+  /** AWS region, or the VM's Google Cloud zone. */
+  region?: string;
+  /** Google Cloud project. */
+  project?: string;
+}
+
+/** Sign in with a CLI's own login (Plan 35): `aws` for S3, `az` for Azure
+ *  Blob, `gcloud` for Cloud Storage. Short-lived, in memory only. */
+export interface CliAuth {
+  tool: "aws" | "az" | "gcloud";
+  /** AWS profile, Azure subscription id or gcloud account; "" = default. */
+  account: string;
+}
+
+/** Where an imported connection came from (Plan 35). */
+export interface CliSource {
+  tool: string;
+  account: string;
+  remoteId: string;
 }
 
 export const PROTOCOL_DEFAULT_PORT: Record<Protocol, number> = {
@@ -350,12 +377,66 @@ export type CliUpdateMode = "ask" | "auto" | "off";
 /** A Faro-managed command-line tool (managed_tools::ToolStatus): which copy
  *  runs, its version, and the latest official release once checked. */
 export interface ToolStatus extends CloudflaredStatus {
-  /** `cloudflared`, `op`, `bw`. */
+  /** `cloudflared`, `op`, `bw`, `aws`, … */
   id: ManagedToolId;
   name: string;
+  roles?: CliRole[];
+  /** Faro can install and update its own copy. */
+  installable?: boolean;
+  /** Where to get a tool Faro doesn't install. */
+  installUrl?: string;
 }
 
-export type ManagedToolId = "cloudflared" | "op" | "bw";
+export type ManagedToolId =
+  | "cloudflared"
+  | "op"
+  | "bw"
+  | "aws"
+  | "gcloud"
+  | "az"
+  | "gh"
+  | "tailscale"
+  | "doctl"
+  | "hcloud"
+  | "render"
+  | "hs"
+  | "shopify";
+
+/** What a CLI does for Faro (managed_tools::Role). */
+export type CliRole = "tunnel" | "secrets" | "signIn" | "discover";
+
+/** cli_integrations::CliState. */
+export type CliState = "missing" | "signedOut" | "ready" | "expired" | "error" | "unknown";
+
+export interface CliAccount {
+  id: string;
+  label: string;
+  state: CliState;
+  detail?: string;
+  active?: boolean;
+  /** Faro may use this account's login for connections. */
+  allowed?: boolean;
+}
+
+/** One CLI on the CLIs page (cli_integrations::CliStatus). */
+export interface CliToolStatus {
+  id: ManagedToolId;
+  name: string;
+  roles: CliRole[];
+  installed: boolean;
+  path?: string;
+  version?: string;
+  state: CliState;
+  accounts: CliAccount[];
+  detail?: string;
+  /** Unix seconds; 0 = never checked. */
+  checkedAt: number;
+  /** The login command Sign in runs: "aws sso login --profile x". */
+  signIn?: string;
+  installUrl?: string;
+  hasAccount: boolean;
+  docsUrl: string;
+}
 
 export interface CloudflaredStatus {
   source: "custom" | "managed" | "path" | "missing";
@@ -510,7 +591,7 @@ export interface ProfilePreview {
   resolution?: ImportResolution;
 }
 
-export type ImportNeed = "key" | "password" | "sign-in" | "token secret";
+export type ImportNeed = "key" | "password" | "sign-in" | "token secret" | "token" | "offline";
 
 export interface ImportConflict {
   id: string;
@@ -688,7 +769,7 @@ export interface ExportSummary {
   skipped: string[];
 }
 
-export type ImporterKind = "faro" | "openssh" | "filezilla" | "putty";
+export type ImporterKind = "faro" | "openssh" | "filezilla" | "putty" | "cli";
 
 export interface ImporterPaths {
   openssh: string | null;

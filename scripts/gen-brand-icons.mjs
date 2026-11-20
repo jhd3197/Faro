@@ -32,6 +32,17 @@ const SETS = {
 // Every brand/protocol icon Faro renders, keyed by its Iconify `prefix:name`.
 // protocolIcon() in src/lib/brandIcons.ts maps a Protocol onto one of these.
 const CURATED = [
+  // The CLIs page (Plan 35): one monochrome mark per CLI, tinted like the UI.
+  "simple-icons:amazonwebservices",
+  "simple-icons:googlecloud",
+  "simple-icons:microsoftazure",
+  "simple-icons:github",
+  "simple-icons:tailscale",
+  "simple-icons:digitalocean",
+  "simple-icons:render",
+  "simple-icons:cloudflare",
+  "simple-icons:1password",
+  "simple-icons:bitwarden",
   // Protocol glyphs
   "mdi:ssh", // sftp / ssh (icon picker)
   "mdi:console", // sftp / ssh protocol mark: reads at chip size, unlike the SSH lettering
