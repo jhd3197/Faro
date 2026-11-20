@@ -81,6 +81,8 @@ interface Row {
   used: { profile: ConnectionProfile; uses: ToolUse[] }[];
   /** A problem some connection runs into. */
   blocking: boolean;
+  /** What the row says: the blocking account's state, else the CLI's. */
+  shown: CliState;
 }
 
 function rowsFor(order: ManagedToolId[], statuses: Record<string, CliToolStatus>, profiles: ConnectionProfile[]): Row[] {
@@ -90,8 +92,12 @@ function rowsFor(order: ManagedToolId[], statuses: Record<string, CliToolStatus>
     .filter(Boolean)
     .map((status) => {
       const used = usage.get(status.id) ?? [];
-      const blocking = used.some(({ uses }) => uses.some((u) => isProblem(stateForUse(status, u))));
-      return { status, used, blocking };
+      let worst: CliState | undefined;
+      for (const { uses } of used) for (const u of uses) {
+        const st = stateForUse(status, u);
+        if (isProblem(st)) worst ??= st;
+      }
+      return { status, used, blocking: !!worst, shown: worst ?? status.state };
     });
 }
 
@@ -238,7 +244,7 @@ function CliRow({ row, active, onSelect, busy }: { row: Row; active: boolean; on
           {row.used.length > 0 ? `Used by ${row.used.length} connection${row.used.length === 1 ? "" : "s"}` : s.roles.map((r) => ROLE_LABEL[r]).join(" · ") || "Detected"}
         </span>
       </span>
-      {busy ? <Status tone="busy">Checking</Status> : <Status tone={row.blocking ? "warn" : stateTone(s.state)}>{STATE_LABEL[s.state]}</Status>}
+      {busy ? <Status tone="busy">Checking</Status> : <Status tone={row.blocking ? stateTone(row.shown) : stateTone(s.state)}>{STATE_LABEL[row.shown]}</Status>}
     </button>
   );
 }
@@ -291,7 +297,7 @@ function CliDetail({ row }: { row: Row }) {
             )}
           </div>
         </div>
-        {busy ? <Status tone="busy">Checking</Status> : <Status tone={row.blocking ? "warn" : stateTone(s.state)}>{STATE_LABEL[s.state]}</Status>}
+        {busy ? <Status tone="busy">Checking</Status> : <Status tone={row.blocking ? stateTone(row.shown) : stateTone(s.state)}>{STATE_LABEL[row.shown]}</Status>}
       </div>
 
       {s.detail && (

@@ -4694,7 +4694,12 @@ function CloudTunnelFields({
 /// "Uses": the CLIs this connection depends on, each opening the CLIs page.
 function CliUsesLine({ profile, profiles, onOpen }: { profile: ConnectionProfile; profiles: ConnectionProfile[]; onOpen: (tool: ManagedToolId) => void }) {
   const statuses = useClis((s) => s.statuses);
-  const uses = profileTools(profile, profiles);
+  // One chip per CLI: the use that matters most (a problem, else the first).
+  const byTool = new Map<string, ReturnType<typeof profileTools>>();
+  for (const u of profileTools(profile, profiles)) byTool.set(u.tool, [...(byTool.get(u.tool) ?? []), u]);
+  const uses = [...byTool.values()].map(
+    (list) => list.find((u) => isProblem(stateForUse(statuses[u.tool], u))) ?? list.find((u) => u.how !== "imported") ?? list[0]
+  );
   if (uses.length === 0) return null;
   return (
     <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11.5px] text-text-muted" data-testid="cli-uses">
