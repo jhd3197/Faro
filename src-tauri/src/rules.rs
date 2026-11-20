@@ -190,10 +190,7 @@ pub fn matches(cond: &Condition, rel: &str, entry: &ScanEntry, facts: &FileFacts
             return false;
         }
     }
-    if cond.min_size.is_some_and(|m| entry.size < m) || cond.max_size.is_some_and(|m| entry.size > m) {
-        return false;
-    }
-    true
+    !(cond.min_size.is_some_and(|m| entry.size < m) || cond.max_size.is_some_and(|m| entry.size > m))
 }
 
 /// `yyyy-MM-dd HH:mm:ss`-style format → chrono's. Unknown letters pass through.
