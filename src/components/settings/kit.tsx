@@ -204,10 +204,14 @@ export function CheckRow({
   focus,
   keywords,
   indent,
+  group,
 }: {
   label: string;
   help?: ReactNode;
   note?: ReactNode;
+  /** Text for the left column ("Tips", "Desktop"), so a lone checkbox
+   *  doesn't float under an empty label. */
+  group?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
@@ -225,7 +229,9 @@ export function CheckRow({
       data-settings-focus={focus}
       className={cn(ROW_GRID, "py-0.5")}
     >
-      <div />
+      <div className="flex min-h-7 items-center text-sm text-text-muted">
+        {group && <span className="truncate">{group}</span>}
+      </div>
       <div className={cn("flex min-w-0 flex-col gap-0.5", indent && "pl-5")}>
         <div className="flex min-h-7 items-center gap-1.5" title={disabled ? disabledReason : undefined}>
           <Checkbox checked={checked} onChange={onChange} disabled={disabled} label={label}>

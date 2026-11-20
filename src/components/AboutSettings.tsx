@@ -1,21 +1,17 @@
 import { useEffect, useState } from "react";
-import { ipc } from "@/lib/ipc";
 import { openExternal } from "@/lib/openExternal";
-import { toast } from "@/stores/toastStore";
 import { useSettings } from "@/stores/settingsStore";
 import { useLayout } from "@/stores/layoutStore";
-import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useUpdater } from "@/stores/updaterStore";
 import { ReleaseNotesText } from "./DiscoveryDialog";
 import { releaseChanges } from "@/lib/releaseNotes";
 import { useTips } from "@/stores/tipsStore";
 import { UpdateProgress } from "./UpdateProgress";
-import type { PathStatus } from "@/lib/types";
 import { getVersion } from "@tauri-apps/api/app";
 import { Advanced, Btn, CheckRow, Group, Note, Row, Status, type Tone } from "./settings/kit";
 
 /// Settings → About. The app's version and updates, desktop notifications,
-/// tips, and the one-click "Add faro-cli to PATH" row (Plan 16).
+/// and tips (Plan 16). faro-cli's PATH row lives under Command line.
 export function AboutSettings() {
   const [version, setVersion] = useState<string | null>(null);
 
@@ -49,7 +45,6 @@ export function AboutSettings() {
 
       <NotificationsGroup />
 
-      <PathGroup />
     </>
   );
 }
@@ -97,32 +92,32 @@ function UpdaterRows() {
   return (
     <>
       <Row label="Updates" help={help} note={note} keywords="update upgrade check release">
-        <span role="status" aria-live="polite" className="min-w-0">
+        <span role="status" aria-live="polite" className="min-w-0 flex-1">
           <Status tone={tone}>{title}</Status>
         </span>
+        {!busy && (
+          <>
+            <Btn size="sm" variant={primary ? "primary" : "default"} onClick={() => void action()}>
+              {label}
+            </Btn>
+            {status !== "manual" && (
+              <Btn size="sm" variant="ghost" onClick={() => openExternal(releaseUrl)}>
+                {status === "error" ? "Open Downloads" : "Release notes"}
+              </Btn>
+            )}
+            {status === "manual" && (
+              <Btn size="sm" variant="ghost" onClick={() => void check(false)}>
+                Check again
+              </Btn>
+            )}
+          </>
+        )}
       </Row>
       {status === "downloading" && (
         <Row label="">
           <div className="w-full">
             <UpdateProgress downloaded={downloaded} total={total} />
           </div>
-        </Row>
-      )}
-      {!busy && (
-        <Row label="">
-          <Btn variant={primary ? "primary" : "default"} onClick={() => void action()}>
-            {label}
-          </Btn>
-          {status !== "manual" && (
-            <Btn variant="ghost" onClick={() => openExternal(releaseUrl)}>
-              {status === "error" ? "Open Downloads" : "Release notes"}
-            </Btn>
-          )}
-          {status === "manual" && (
-            <Btn variant="ghost" onClick={() => void check(false)}>
-              Check again
-            </Btn>
-          )}
         </Row>
       )}
       {showNotes && (
@@ -157,8 +152,9 @@ function NotificationsGroup() {
   return (
     <Group title="Notifications">
       <CheckRow
-        label="Desktop notifications"
-        keywords="notifications toasts os"
+        group="Desktop"
+        label="Show notifications"
+        keywords="desktop notifications toasts os"
         help="OS toasts for finished transfers, folder-sync errors and failed edit-in-place saves, so you see them while Faro is in the background."
         checked={notifications.enabled}
         onChange={(v) => setNotifications({ ...notifications, enabled: v })}
@@ -186,117 +182,18 @@ function TipsRows() {
   return (
     <>
       <CheckRow
+        group="Tips"
         label="Show tips"
+        help="One-time pointers in the app. Reset brings back the ones you dismissed."
         keywords="tips hints onboarding"
         checked={enabled}
         onChange={(v) => useTips.getState().setEnabled(v)}
       />
-      <Row label="" keywords="welcome tips what's new">
-        <Btn variant="ghost" className="-ml-3" onClick={() => useLayout.getState().openDialog("welcome")}>Show welcome</Btn>
-        <Btn variant="ghost" onClick={() => useLayout.getState().openDialog("whatsNew")}>What's new</Btn>
-        <Btn variant="ghost" onClick={() => useTips.getState().reset()}>Reset tips</Btn>
+      <Row label="Guides" keywords="welcome tips what's new reset">
+        <Btn size="sm" onClick={() => useLayout.getState().openDialog("welcome")}>Welcome</Btn>
+        <Btn size="sm" onClick={() => useLayout.getState().openDialog("whatsNew")}>What's new</Btn>
+        <Btn size="sm" variant="ghost" onClick={() => useTips.getState().reset()}>Reset tips</Btn>
       </Row>
     </>
-  );
-}
-
-/// One-click "Add faro-cli to PATH" (Plan 16 Phase 4). Per-user only, so it never
-/// needs admin. `faro-cli` ships as a separate binary from the app; once it's on
-/// PATH it works in any terminal. On Windows this writes the per-user
-/// `HKCU\Environment\Path` (new terminals pick it up immediately); on macOS/Linux
-/// it symlinks into `~/.local/bin` and, if needed, adds one guarded line to the
-/// shell profile.
-function PathGroup() {
-  const openSettings = useLayout((s) => s.openSettings);
-  const [status, setStatus] = useState<PathStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = async () => {
-    try {
-      setStatus(await ipc.pathStatus());
-    } catch (e) {
-      toast.error(`Couldn't read PATH status: ${e}`);
-    }
-  };
-
-  useEffect(() => {
-    void load();
-  }, []);
-
-  const add = async () => {
-    setBusy(true);
-    try {
-      const next = await ipc.pathAdd();
-      setStatus(next);
-      toast.success(next.detail ?? "Added faro-cli to your PATH.");
-    } catch (e) {
-      toast.error(`Add to PATH failed: ${e}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    setBusy(true);
-    try {
-      const next = await ipc.pathRemove();
-      setStatus(next);
-      toast.success(next.detail ?? "Removed faro-cli from your PATH.");
-    } catch (e) {
-      toast.error(`Remove from PATH failed: ${e}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Prefer the managed flag for the primary action: right after an add, our
-  // registry/symlink entry is present even though this already-running process's
-  // own PATH won't reflect it until a new terminal (or app restart).
-  const managed = status?.managed ?? false;
-  const onPath = status?.onPath ?? false;
-  const canInstallFirst = status ? !status.binHasCli && !onPath && !managed : false;
-
-  const [tone, text, where]: [Tone, string, string | null | undefined] = !status
-    ? ["busy", "Checking…", null]
-    : managed
-      ? ["ok", "faro-cli is on your PATH (managed by Faro).", status.binDir]
-      : onPath
-        ? ["ok", "faro-cli is already on your PATH.", status.cliLocation]
-        : canInstallFirst
-          ? ["off", "faro-cli isn't installed yet.", null]
-          : ["off", "faro-cli isn't on your PATH.", status.binDir];
-
-  return (
-    <Group
-      title="faro-cli on PATH"
-      help="Puts the faro-cli command on your PATH so it works in any terminal. Per-user only, no admin needed."
-    >
-      <Row label="Status" keywords="faro-cli path terminal command line">
-        <span className="min-w-0" title={where ?? undefined}>
-          <Status tone={tone}>{text}</Status>
-        </span>
-      </Row>
-      <Row label="">
-        {canInstallFirst ? (
-          <Btn
-            data-settings-link="aboutCliInstall"
-            onClick={() => openSettings(SETTINGS_ENTRY_POINTS.aboutCliInstall)}
-          >
-            Install faro-cli…
-          </Btn>
-        ) : managed ? (
-          <Btn onClick={() => void remove()} busy={busy}>
-            Remove from PATH
-          </Btn>
-        ) : (
-          <Btn onClick={() => void add()} busy={busy} disabled={onPath || !status}>
-            Add to PATH
-          </Btn>
-        )}
-        <Btn variant="ghost" onClick={() => void load()} disabled={busy}>
-          Refresh
-        </Btn>
-      </Row>
-    </Group>
   );
 }
