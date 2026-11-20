@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Cloud, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard, HardDrive, RotateCcw, KeyRound } from "lucide-react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { X, Check, RotateCcw, Search } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { ACCENTS } from "@/lib/accent";
 import type { UiLanguage } from "@/lib/i18n";
@@ -44,31 +43,28 @@ import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
 import {
   SETTINGS_FOCUS,
+  SETTINGS_GROUPS,
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/lib/settingsNav";
+import {
+  Btn,
+  CheckRow,
+  Group,
+  Highlight,
+  InfoTip,
+  List,
+  ListRow,
+  Row,
+  Segmented,
+  SettingsSearchScope,
+  TextInput,
+  inputClass,
+} from "./settings/kit";
 
 interface Props {
   onClose: () => void;
 }
-
-const SECTION_ICONS: Record<SettingsSectionId, React.ReactNode> = {
-  appearance: <Palette size={14} />,
-  transfers: <ArrowDownUp size={14} />,
-  panes: <FolderTree size={14} />,
-  terminal: <TerminalSquare size={14} />,
-  keyboard: <Keyboard size={14} />,
-  connections: <Plug size={14} />,
-  passwordManagers: <KeyRound size={14} />,
-  remoteControl: <MonitorSmartphone size={14} />,
-  sync: <FolderSync size={14} />,
-  bridge: <Radio size={14} />,
-  cli: <TerminalSquare size={14} />,
-  cloudflare: <Cloud size={14} />,
-  backup: <ShieldAlert size={14} />,
-  storage: <HardDrive size={14} />,
-  about: <Info size={14} />,
-};
 
 // Which saved settings each section shows, for the "changed" dot in the nav.
 // Sections that keep their config elsewhere are checked separately below.
@@ -133,8 +129,7 @@ function useChangedSections(): Set<SettingsSectionId> {
   return out;
 }
 
-const SECTIONS: { id: SettingsSectionId; label: string; icon: React.ReactNode }[] =
-  SETTINGS_SECTIONS.map((sec) => ({ ...sec, icon: SECTION_ICONS[sec.id] }));
+const SECTIONS = SETTINGS_SECTIONS;
 
 /** The section shown last time Settings was open (Appearance on first use). */
 function lastSection(): SettingsSectionId {
@@ -199,11 +194,12 @@ export function Settings({ onClose }: Props) {
           const focusable = el.matches("input, select, textarea, button, a[href]")
             ? el
             : el.querySelector<HTMLElement>("input, select, textarea, button, a[href]");
-          (focusable ?? nav)?.focus();
+          if (focusable) focusable.focus();
+          else nav?.focus({ focusVisible: false } as FocusOptions);
           return true;
         }
       }
-      nav?.focus();
+      nav?.focus({ focusVisible: false } as FocusOptions);
       // The named control can show up after a status round-trip.
       return !target.focus;
     };
@@ -225,17 +221,100 @@ export function Settings({ onClose }: Props) {
     };
   }, [target, active]);
 
-  const renderContent = () => {
-    switch (active) {
+  // --- Search: filters every section at once; the nav keeps only sections
+  // with a hit (read back from the rendered rows).
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const searching = q.length > 0;
+  const searchRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [hits, setHits] = useState<Set<SettingsSectionId>>(new Set());
+
+  useLayoutEffect(() => {
+    const root = contentRef.current;
+    if (!searching || !root) {
+      setHits(new Set());
+      return;
+    }
+    const read = () => {
+      const next = new Set<SettingsSectionId>();
+      root.querySelectorAll<HTMLElement>("[data-search-section]").forEach((el) => {
+        if (el.hasAttribute("data-section-match") || el.querySelector("[data-row-match]")) {
+          next.add(el.dataset.searchSection as SettingsSectionId);
+        }
+      });
+      setHits((prev) =>
+        prev.size === next.size && [...next].every((id) => prev.has(id)) ? prev : next
+      );
+    };
+    read();
+    // Sections that load their status show rows a moment later.
+    const observer = new MutationObserver(read);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [searching, q]);
+
+  // Esc in a non-empty search clears it instead of closing Settings. The
+  // dialog listens natively, so stop it before it bubbles there.
+  useEffect(() => {
+    const el = searchRef.current;
+    if (!el) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && el.value) {
+        e.stopPropagation();
+        e.preventDefault();
+        setQuery("");
+      }
+    };
+    el.addEventListener("keydown", onKey);
+    return () => el.removeEventListener("keydown", onKey);
+  }, []);
+
+  const pickSection = (id: SettingsSectionId) => {
+    if (searching) {
+      contentRef.current
+        ?.querySelector(`[data-search-section="${id}"]`)
+        ?.scrollIntoView({ block: "start" });
+      return;
+    }
+    setActive(id);
+    contentRef.current?.scrollTo({ top: 0 });
+  };
+
+  // Ctrl/⌘+F or "/" jumps to search.
+  const onPanelKeyDown = (e: React.KeyboardEvent) => {
+    const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+    if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") || (e.key === "/" && !typing)) {
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    }
+  };
+
+  // Up/Down/Home/End walk the section list.
+  const onNavKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const buttons = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("[data-settings-section]")];
+    if (!buttons.length) return;
+    e.preventDefault();
+    const i = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      e.key === "Home" ? 0
+      : e.key === "End" ? buttons.length - 1
+      : e.key === "ArrowDown" ? Math.min(buttons.length - 1, i + 1)
+      : Math.max(0, i - 1);
+    buttons[next].focus();
+    buttons[next].click();
+  };
+
+  const renderSection = (id: SettingsSectionId) => {
+    switch (id) {
       case "appearance":
         return (
           <>
-            <Field
-              label="Mode"
-              focus={SETTINGS_FOCUS.themeMode}
-              help="Light, Dark, or System to follow your OS setting as it changes. Light and Dark each keep their own theme."
-            >
+            <Row label="Mode" focus={SETTINGS_FOCUS.themeMode} keywords="light dark system" help="System follows your OS as it changes. Light and Dark each keep their own theme.">
               <Segmented<ThemeMode>
+                label="Mode"
                 value={s.themeMode}
                 onChange={s.setThemeMode}
                 options={[
@@ -244,12 +323,9 @@ export function Settings({ onClose }: Props) {
                   { value: "system", label: "System" },
                 ]}
               />
-            </Field>
+            </Row>
             {s.themeMode !== "dark" && (
-              <Field
-                label="Light theme"
-                help={s.themeMode === "system" ? "Used while your OS is in light mode." : undefined}
-              >
+              <Row label="Light theme" keywords="theme" help={s.themeMode === "system" ? "Used while your OS is in light mode." : undefined}>
                 <PreviewCards<AppTheme>
                   label="Light theme"
                   items={LIGHT_THEMES}
@@ -257,13 +333,10 @@ export function Settings({ onClose }: Props) {
                   onChange={s.setLightTheme}
                   preview={(v) => <ThemePreview theme={v} />}
                 />
-              </Field>
+              </Row>
             )}
             {s.themeMode !== "light" && (
-              <Field
-                label="Dark theme"
-                help={s.themeMode === "system" ? "Used while your OS is in dark mode." : undefined}
-              >
+              <Row label="Dark theme" keywords="theme" help={s.themeMode === "system" ? "Used while your OS is in dark mode." : undefined}>
                 <PreviewCards<AppTheme>
                   label="Dark theme"
                   items={DARK_THEMES}
@@ -271,18 +344,12 @@ export function Settings({ onClose }: Props) {
                   onChange={s.setDarkTheme}
                   preview={(v) => <ThemePreview theme={v} />}
                 />
-              </Field>
+              </Row>
             )}
-            <Field
-              label="Accent color"
-              help="The highlight color for buttons, links, focus rings, the active rail pill and selection. Layers on top of the theme."
-            >
+            <Row label="Accent color" keywords="highlight color" help="Buttons, links, focus rings and selection. Layers on top of the theme.">
               <AccentGrid value={s.accentColor} onChange={s.setAccentColor} />
-            </Field>
-            <Field
-              label="UI zoom"
-              help="Scales the whole interface — text, icons and layout. Also View → Zoom in / Zoom out, or Ctrl/⌘ + = / − / 0."
-            >
+            </Row>
+            <Row label="UI zoom" keywords="scale size" help={<>Scales text, icons and layout. Also <kbd className="font-mono">Ctrl</kbd> + <kbd className="font-mono">=</kbd> / <kbd className="font-mono">−</kbd> / <kbd className="font-mono">0</kbd>.</>}>
               <Select<number>
                 label="UI zoom"
                 value={s.uiZoom}
@@ -296,23 +363,12 @@ export function Settings({ onClose }: Props) {
                 }))}
               />
               {s.uiZoom !== 100 && (
-                <button
-                  type="button"
-                  onClick={() => s.setUiZoom(100)}
-                  title="Reset to 100%"
-                  aria-label="Reset zoom to 100%"
-                  data-zoom-reset
-                  className="rounded-md p-1.5 text-text-muted hover:bg-bg-hover hover:text-text"
-                >
-                  <RotateCcw size={13} />
-                </button>
+                <ResetButton data-zoom-reset label="Reset zoom to 100%" onClick={() => s.setUiZoom(100)} />
               )}
-            </Field>
-            <Field
-              label="Window frame"
-              help="Where the window controls sit in Faro's title bar. Looks only — the window behaves the same."
-            >
+            </Row>
+            <Row label="Window frame" keywords="title bar controls" help="Where the window buttons sit. Looks only.">
               <Segmented<FrameStyle>
+                label="Window frame"
                 value={s.frameStyle}
                 onChange={s.setFrameStyle}
                 options={[
@@ -321,12 +377,10 @@ export function Settings({ onClose }: Props) {
                   { value: "linux", label: "Linux" },
                 ]}
               />
-            </Field>
-            <Field
-              label="Language"
-              help="System follows your OS language."
-            >
+            </Row>
+            <Row label="Language" keywords="locale translation" help="System follows your OS language.">
               <Segmented<UiLanguage>
+                label="Language"
                 value={s.uiLanguage}
                 onChange={s.setUiLanguage}
                 options={[
@@ -335,70 +389,66 @@ export function Settings({ onClose }: Props) {
                   { value: "zh-CN", label: "中文" },
                 ]}
               />
-            </Field>
+            </Row>
           </>
         );
 
       case "transfers":
         return (
           <>
-            <Field label="When the destination already exists">
-              <Segmented<OverwritePolicy>
-                value={s.overwritePolicy}
-                onChange={s.setOverwritePolicy}
-                options={[
-                  { value: "overwrite", label: "Overwrite" },
-                  { value: "skip", label: "Skip" },
-                  { value: "rename", label: "Rename" },
-                ]}
+            <Group title="Conflicts">
+              <Row
+                label="If the file exists"
+                keywords="overwrite skip rename destination"
+                help={
+                  <>
+                    Used after “apply to all”, or for every transfer when the prompt is off.{" "}
+                    {s.overwritePolicy === "overwrite" && "Overwrite replaces the file in place."}
+                    {s.overwritePolicy === "skip" && "Skip leaves the file alone."}
+                    {s.overwritePolicy === "rename" && "Rename adds _1, _2, … until a name is free."}
+                  </>
+                }
+              >
+                <Segmented<OverwritePolicy>
+                  label="If the file exists"
+                  value={s.overwritePolicy}
+                  onChange={s.setOverwritePolicy}
+                  options={[
+                    { value: "overwrite", label: "Overwrite" },
+                    { value: "skip", label: "Skip" },
+                    { value: "rename", label: "Rename" },
+                  ]}
+                />
+              </Row>
+              <CheckRow
+                label="Ask before overwriting"
+                help="Prompt with overwrite / keep both / skip. Off applies the choice above silently."
+                checked={s.promptOnOverwrite}
+                onChange={s.setPromptOnOverwrite}
               />
-              <Help>
-                The default action — applied for the rest of a batch after you
-                choose “apply to all”, or to every transfer when the prompt below
-                is off.{" "}
-                {s.overwritePolicy === "overwrite" &&
-                  "Overwrite replaces the existing file in place."}
-                {s.overwritePolicy === "skip" &&
-                  "Skip leaves the existing file alone and marks the transfer skipped."}
-                {s.overwritePolicy === "rename" &&
-                  "Rename appends _1, _2, … until a free name is found."}
-              </Help>
-            </Field>
-            <ToggleField
-              label="Ask before overwriting"
-              help="Prompt before a transfer overwrites an existing file (overwrite / keep both / skip). Turn off to apply the default action above silently."
-              checked={s.promptOnOverwrite}
-              onChange={s.setPromptOnOverwrite}
-            />
-            <ToggleField
-              label="Open the transfer panel automatically"
-              help="When a new transfer starts, slide the bottom panel into view."
-              checked={s.autoOpenTransferPanel}
-              onChange={s.setAutoOpenTransferPanel}
-            />
-            <Field
-              label="Concurrent transfers"
-              focus={SETTINGS_FOCUS.transferConcurrency}
-              help="How many transfers run at once. Extra transfers wait in a first-in, first-out queue."
-            >
-              <NumberInput
+            </Group>
+            <Group title="Speed">
+              <Row
                 label="Concurrent transfers"
-                min={1}
-                max={32}
-                value={s.transferConcurrency}
-                onChange={s.setTransferConcurrency}
-              />
-            </Field>
-            <BandwidthLimit
-              kbps={s.transferThrottleKbps}
-              onChange={s.setTransferThrottleKbps}
-            />
-            <Field
-              label="Connections per file"
-              help="Large downloads and object-store uploads are split across parallel connections. Auto starts with one and adds more while it helps; 1 turns splitting off."
-            >
-              <div className="flex items-center gap-2">
+                focus={SETTINGS_FOCUS.transferConcurrency}
+                keywords="parallel queue"
+                help="How many run at once. The rest wait in line."
+              >
+                <NumberInput
+                  label="Concurrent transfers"
+                  min={1}
+                  max={32}
+                  value={s.transferConcurrency}
+                  onChange={s.setTransferConcurrency}
+                />
+              </Row>
+              <Row
+                label="Connections per file"
+                keywords="segments split parallel"
+                help="Large downloads and object-store uploads split across connections. Auto adds more while it helps."
+              >
                 <Segmented<"auto" | "manual">
+                  label="Connections per file"
                   value={s.transferSegments === "auto" ? "auto" : "manual"}
                   onChange={(v) => s.setTransferSegments(v === "auto" ? "auto" : 4)}
                   options={[
@@ -415,69 +465,93 @@ export function Settings({ onClose }: Props) {
                     onChange={(n) => s.setTransferSegments(n)}
                   />
                 )}
-              </div>
-            </Field>
-            <ToggleField
-              label="Verify transfers with a checksum"
-              help="After a transfer, compare a checksum with the server where it can provide one (S3-style ETags, sha256sum over SSH). Slower; a mismatch keeps the temporary file and marks the transfer failed."
-              checked={s.transferVerify}
-              onChange={s.setTransferVerify}
-            />
-            <ToggleField
-              label="Delta sync (send only changed blocks)"
-              help="Re-transferring a changed file sends just the differing blocks instead of the whole file. Only for Faro Agent connections, files ≥ 8 MB."
-              checked={s.deltaSync}
-              onChange={s.setDeltaSync}
-            />
-            <Field
-              label="Download folder"
-              help="Where downloads land. Leave blank to use your system Downloads folder."
-            >
-              <div className="flex w-full items-center gap-1.5">
+              </Row>
+              <BandwidthLimit kbps={s.transferThrottleKbps} onChange={s.setTransferThrottleKbps} />
+            </Group>
+            <Group title="Integrity">
+              <CheckRow
+                label="Verify with a checksum"
+                keywords="hash sha256 etag"
+                help="Compares a checksum with the server when it can provide one. Slower. A mismatch fails the transfer."
+                checked={s.transferVerify}
+                onChange={s.setTransferVerify}
+              />
+              <CheckRow
+                label="Delta sync"
+                keywords="changed blocks rsync"
+                help="Sends only the changed blocks of a file. Faro Agent connections, files of 8 MB or more."
+                checked={s.deltaSync}
+                onChange={s.setDeltaSync}
+              />
+            </Group>
+            <Group title="Behavior">
+              <CheckRow
+                label="Open the transfer panel automatically"
+                help="Slides the bottom panel up when a transfer starts."
+                checked={s.autoOpenTransferPanel}
+                onChange={s.setAutoOpenTransferPanel}
+              />
+              <Row label="Download folder" keywords="downloads location path" help="Blank uses your system Downloads folder.">
                 <DebouncedText
                   data-settings-focus={SETTINGS_FOCUS.downloadFolder}
                   value={s.defaultDownloadFolder}
                   onCommit={s.setDefaultDownloadFolder}
                   placeholder="System Downloads"
                   aria-label="Download folder"
+                  mono
                 />
-                <button
+                <Btn
                   onClick={async () => {
-                    const picked = await open({
-                      directory: true,
-                      title: "Choose a download folder",
-                    });
-                    if (typeof picked === "string")
-                      s.setDefaultDownloadFolder(picked);
+                    const picked = await open({ directory: true, title: "Choose a download folder" });
+                    if (typeof picked === "string") s.setDefaultDownloadFolder(picked);
                   }}
-                  className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm text-text-muted hover:bg-bg-hover hover:text-text"
                 >
                   Browse…
-                </button>
+                </Btn>
                 {s.defaultDownloadFolder && (
-                  <button
-                    onClick={() => s.setDefaultDownloadFolder("")}
-                    className="shrink-0 rounded-md border border-border px-2 py-1.5 text-xs text-text-dim hover:text-text"
-                    title="Reset to system Downloads"
-                  >
-                    Reset
-                  </button>
+                  <ResetButton label="Reset to system Downloads" onClick={() => s.setDefaultDownloadFolder("")} />
                 )}
-              </div>
-            </Field>
+              </Row>
+            </Group>
           </>
         );
 
       case "panes":
         return (
           <>
-            <ToggleField
-              label="Show hidden files"
-              help="Files and directories whose name starts with a dot."
-              checked={s.showHiddenFiles}
-              onChange={s.setShowHiddenFiles}
-            />
-            <Field label="Default sort">
+            <Row label="View" keywords="details list grid density compact" help="Also on the file toolbar.">
+              <Segmented<PaneViewMode>
+                label="View"
+                value={s.paneViewMode}
+                onChange={s.setPaneViewMode}
+                options={[
+                  { value: "details", label: "Details" },
+                  { value: "list", label: "List" },
+                  { value: "grid", label: "Grid" },
+                ]}
+              />
+              <Segmented<PaneDensity>
+                label="Density"
+                value={s.paneDensity}
+                onChange={s.setPaneDensity}
+                options={[
+                  { value: "comfortable", label: "Comfortable" },
+                  { value: "compact", label: "Compact" },
+                ]}
+              />
+            </Row>
+            <Row label="Layout" keywords="browser single split dual" help="Single is one server pane with an Upload button. Split shows local and remote side by side.">
+              <Segmented<BrowserLayout>
+                label="Browser layout"
+                value={s.browserLayout}
+                onChange={s.setBrowserLayout}
+                options={[
+                  { value: "single", label: "Single" },
+                  { value: "dual", label: "Split" },
+                ]}
+              />
+            </Row>
+            <Row label="Default sort" keywords="order name size modified">
               <Select<SortField>
                 label="Sort by"
                 value={s.sortField}
@@ -489,6 +563,7 @@ export function Settings({ onClose }: Props) {
                 ]}
               />
               <Segmented<SortDirection>
+                label="Sort direction"
                 value={s.sortDirection}
                 onChange={s.setSortDirection}
                 options={[
@@ -496,119 +571,57 @@ export function Settings({ onClose }: Props) {
                   { value: "desc", label: "Desc" },
                 ]}
               />
-            </Field>
-            <Field label="View" help="Switchable from the toolbar too.">
-              <Segmented<PaneViewMode>
-                value={s.paneViewMode}
-                onChange={s.setPaneViewMode}
-                options={[
-                  { value: "details", label: "Details" },
-                  { value: "list", label: "List" },
-                  { value: "grid", label: "Grid" },
-                ]}
+            </Row>
+            <Row label="Default editor" keywords="edit in place code vscode" help="Command for edit-in-place, e.g. code. Blank opens the OS default app.">
+              <DebouncedText
+                value={s.defaultEditor}
+                onCommit={s.setDefaultEditor}
+                placeholder="OS default app"
+                aria-label="Default editor"
+                mono
               />
-              <Segmented<PaneDensity>
-                value={s.paneDensity}
-                onChange={s.setPaneDensity}
-                options={[
-                  { value: "comfortable", label: "Comfortable" },
-                  { value: "compact", label: "Compact" },
-                ]}
-              />
-            </Field>
-            <Field
-              label="Browser layout"
-              help="Single = one server-focused pane (Upload button). Split = local and remote side by side."
-            >
-              <Segmented<BrowserLayout>
-                value={s.browserLayout}
-                onChange={s.setBrowserLayout}
-                options={[
-                  { value: "single", label: "Single" },
-                  { value: "dual", label: "Split" },
-                ]}
-              />
-            </Field>
-            <ToggleField
+              <Btn onClick={() => s.setDefaultEditor("code")} title="Use the `code` command">
+                VS Code
+              </Btn>
+              {s.defaultEditor && <ResetButton label="Reset to OS default" onClick={() => s.setDefaultEditor("")} />}
+            </Row>
+            <CheckRow
+              label="Show hidden files"
+              keywords="dotfiles"
+              help="Names that start with a dot."
+              checked={s.showHiddenFiles}
+              onChange={s.setShowHiddenFiles}
+            />
+            <CheckRow
               label="Remote image previews"
-              help="Show thumbnails for images on remote connections (SFTP, S3, FTP, …). Off by default — previews are fetched over the network, but only for the rows you scroll to, capped and cached. Local images always preview. Toggle per connection from the file toolbar."
+              keywords="thumbnails"
+              help="Thumbnails for images on SFTP, S3, FTP and the rest, fetched only for rows you scroll to. Local images always preview. Per connection from the file toolbar."
               checked={s.remoteImagePreviews === "on"}
               onChange={(v) => s.setRemoteImagePreviews(v ? "on" : "off")}
             />
-            <Field
-              label="Default editor"
-              help="Command used to open files for edit-in-place (e.g. code). Blank = your OS default app."
-            >
-              <div className="flex w-full items-center gap-1.5">
-                <DebouncedText
-                  value={s.defaultEditor}
-                  onCommit={s.setDefaultEditor}
-                  placeholder="OS default app"
-                  aria-label="Default editor"
-                />
-                <button
-                  onClick={() => s.setDefaultEditor("code")}
-                  className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm text-text-muted hover:bg-bg-hover hover:text-text"
-                  title="Use VS Code (the `code` command)"
-                >
-                  VS Code
-                </button>
-                {s.defaultEditor && (
-                  <button
-                    onClick={() => s.setDefaultEditor("")}
-                    className="shrink-0 rounded-md border border-border px-2 py-1.5 text-xs text-text-dim hover:text-text"
-                    title="Reset to OS default"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
-            </Field>
           </>
         );
 
       case "terminal":
         return (
           <>
-            <Field label="Font size">
-              <NumberInput
-                label="Font size"
-                min={8}
-                max={32}
-                value={s.terminalFontSize}
-                onChange={s.setTerminalFontSize}
-                suffix="px"
-              />
-            </Field>
-            <Field label="Font family">
+            <Row label="Font" keywords="family size">
               <Select<string>
                 searchable
                 label="Terminal font"
                 value={s.terminalFontFamily}
                 onChange={s.setTerminalFontFamily}
                 options={[
-                  {
-                    value:
-                      '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
-                    label: "JetBrains Mono",
-                  },
-                  {
-                    value: '"Fira Code", Consolas, monospace',
-                    label: "Fira Code",
-                  },
-                  {
-                    value: '"Cascadia Code", Consolas, monospace',
-                    label: "Cascadia Code",
-                  },
-                  {
-                    value: "Menlo, Consolas, monospace",
-                    label: "Menlo / Consolas",
-                  },
+                  { value: '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace', label: "JetBrains Mono" },
+                  { value: '"Fira Code", Consolas, monospace', label: "Fira Code" },
+                  { value: '"Cascadia Code", Consolas, monospace', label: "Cascadia Code" },
+                  { value: "Menlo, Consolas, monospace", label: "Menlo / Consolas" },
                   { value: "monospace", label: "System default" },
                 ]}
               />
-            </Field>
-            <Field label="Theme" help="Applies live to open terminals.">
+              <NumberInput label="Font size" min={8} max={32} value={s.terminalFontSize} onChange={s.setTerminalFontSize} suffix="px" />
+            </Row>
+            <Row label="Theme" keywords="colors" help="Applies live to open terminals.">
               <PreviewCards<TerminalTheme>
                 label="Terminal theme"
                 items={TERMINAL_THEME_OPTIONS}
@@ -616,8 +629,8 @@ export function Settings({ onClose }: Props) {
                 onChange={s.setTerminalTheme}
                 preview={(v) => <TerminalPreview theme={v} />}
               />
-            </Field>
-            <Field label="Scrollback">
+            </Row>
+            <Row label="Scrollback" keywords="history lines buffer" note="Applies to new terminals.">
               <Select<number>
                 label="Scrollback"
                 value={s.terminalScrollback}
@@ -629,17 +642,18 @@ export function Settings({ onClose }: Props) {
                   { value: 50000, label: "50,000 lines" },
                 ]}
               />
-              <Help>Takes effect on the next opened terminal.</Help>
-            </Field>
-            <ToggleField
+            </Row>
+            <CheckRow
               label="Copy on select"
-              help="Copy the selected text to the clipboard the moment you select it in the terminal (PuTTY-style). Paste as usual with Ctrl/⌘+V or a right-click."
+              keywords="clipboard"
+              help="Selecting text copies it. Paste with Ctrl+V or a right-click."
               checked={s.terminalCopyOnSelect}
               onChange={s.setTerminalCopyOnSelect}
             />
-            <ToggleField
+            <CheckRow
               label="Inline suggestions"
-              help="As you type a command, show the most recent matching command from this server's history as dim ghost text — press → to accept it. History is kept locally per profile."
+              keywords="autocomplete history ghost"
+              help="Shows the last matching command from this server's history as ghost text. Press → to accept. Kept locally per profile."
               checked={s.terminalSuggestions}
               onChange={s.setTerminalSuggestions}
             />
@@ -649,28 +663,22 @@ export function Settings({ onClose }: Props) {
       case "connections":
         return (
           <>
-            <Field label="Default port for new profiles">
-              <NumberInput
-                label="Default port"
-                min={1}
-                max={65535}
-                value={s.defaultPort}
-                onChange={s.setDefaultPort}
-              />
-            </Field>
-            <ToggleField
-              label="Store passwords and key passphrases in the OS keychain"
-              help="Keep saved connection passwords and SSH key passphrases in macOS Keychain / Windows Credential Manager instead of plaintext in profiles.json. Turning it on or off moves them straight away."
+            <Row label="Default port" keywords="ssh sftp 22 new profiles" help="Used for new connection profiles.">
+              <NumberInput label="Default port" min={1} max={65535} value={s.defaultPort} onChange={s.setDefaultPort} />
+            </Row>
+            <CheckRow
+              label="Save passwords in the OS keychain"
+              keywords="credential manager passphrase secrets"
+              help="Keeps passwords and key passphrases in Windows Credential Manager or macOS Keychain instead of profiles.json. Changing this moves them right away."
               checked={s.storePasswordsInKeychain}
               onChange={(v) =>
-                s.setStorePasswordsInKeychain(v).catch((e) =>
-                  toastError(e, "Couldn't change where passwords are stored"),
-                )
+                s.setStorePasswordsInKeychain(v).catch((e) => toastError(e, "Couldn't change where passwords are stored"))
               }
             />
-            <ToggleField
+            <CheckRow
               label="Restore last session"
-              help="When Faro starts, reconnect the server you were using if it was still connected when you quit."
+              keywords="reconnect startup"
+              help="Reconnects the server you were on when you quit."
               checked={s.restoreLastSession}
               onChange={s.setRestoreLastSession}
             />
@@ -695,34 +703,35 @@ export function Settings({ onClose }: Props) {
       case "bridge":
         return (
           <>
-            <ToggleField
-              label="Allow all — no prompts"
-              help="Let connected AI agents run every request (commands, reads, transfers) on enabled sessions without asking. Most permissive."
+            <CheckRow
+              label="Allow all"
+              keywords="no prompts approve everything"
+              help="Agents run every request on enabled sessions without asking: commands, reads and transfers."
               checked={policy.allowAll}
               onChange={(v) => setPolicy({ ...policy, allowAll: v })}
             />
-            {/* Only meaningful while prompts are on: Allow all already
-                approves everything. */}
-            <Dependent enabled={!policy.allowAll} reason="Allow all already approves these.">
-              <ToggleField
-                label="Auto-approve read-only operations"
-                help="List directories, read files and search run without asking. Downloads & uploads write to disk, so they still prompt unless Allow all is on."
+            <div data-settings-dependent={policy.allowAll ? "off" : "on"} aria-disabled={policy.allowAll}>
+              <CheckRow
+                indent
+                label="Auto-approve reads"
+                keywords="read-only list search"
+                help="Listing, reading and searching run without asking. Downloads and uploads still ask."
                 checked={policy.allowAll || policy.autoRead}
                 disabled={policy.allowAll}
+                disabledReason="Allow all already approves these."
                 onChange={(v) => setPolicy({ ...policy, autoRead: v })}
               />
-              <ToggleField
-                label="Auto-approve safe shell commands"
-                help="Read-only commands (ls, cat, df, grep…) run without asking; anything that could change the server still prompts. Best-effort heuristic."
+              <CheckRow
+                indent
+                label="Auto-approve safe commands"
+                keywords="shell ls cat grep"
+                help="Read-only commands like ls, cat, df and grep run without asking. Best effort."
                 checked={policy.allowAll || policy.autoSafeExec}
                 disabled={policy.allowAll}
+                disabledReason="Allow all already approves these."
                 onChange={(v) => setPolicy({ ...policy, autoSafeExec: v })}
               />
-            </Dependent>
-            <Help>
-              Same setting as the Agent Bridge panel — applies to every
-              agent-enabled session and persists across restarts.
-            </Help>
+            </div>
           </>
         );
 
@@ -740,11 +749,11 @@ export function Settings({ onClose }: Props) {
     }
   };
 
-  const activeLabel = SECTIONS.find((sec) => sec.id === active)?.label;
+  const activeSection = SECTIONS.find((sec) => sec.id === active)!;
 
   return (
     <div
-      className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-modal flex items-center justify-center bg-black/50"
       onClick={onClose}
     >
       <div
@@ -753,80 +762,137 @@ export function Settings({ onClose }: Props) {
         aria-modal="true"
         aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
-        className="anim-modal flex h-[34rem] max-h-[88vh] w-[52rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
+        onKeyDown={onPanelKeyDown}
+        data-settings-dialog
+        className="anim-modal flex h-[min(46rem,90vh)] w-[min(66rem,94vw)] flex-col overflow-hidden rounded-md border border-border bg-bg-panel shadow-elev-3"
       >
-        {/* Left navigation — macOS / FileZilla-style section list. */}
-        <nav className="flex w-48 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-bg-subtle/50 p-2">
-          <div
-            id={titleId}
-            className="px-2 pb-2 pt-1 text-[15px] font-semibold tracking-tight"
-          >
+        {/* Top bar: title, search across everything, Done. */}
+        <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-3">
+          <div id={titleId} className="w-[10.25rem] shrink-0 pl-1 text-sm font-semibold">
             Settings
           </div>
-          {SECTIONS.map((sec) => {
-            const on = active === sec.id;
-            const isChanged = changed.has(sec.id);
-            return (
+          <div className="relative min-w-0 max-w-xl flex-1">
+            <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-dim" />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search settings…"
+              aria-label="Search settings"
+              data-settings-search
+              spellCheck={false}
+              className={cn(inputClass, "w-full pl-8 pr-14")}
+            />
+            {query ? (
               <button
-                key={sec.id}
                 type="button"
-                data-settings-section={sec.id}
-                onClick={() => setActive(sec.id)}
-                aria-current={on ? "page" : undefined}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors",
-                  on
-                    ? "bg-accent-soft text-accent"
-                    : "text-text-muted hover:bg-bg-hover hover:text-text"
-                )}
+                onClick={() => {
+                  setQuery("");
+                  searchRef.current?.focus();
+                }}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-text-dim hover:text-text"
               >
-                <span className={on ? "text-accent" : "text-text-dim"}>
-                  {sec.icon}
-                </span>
-                <span className="truncate">{sec.label}</span>
-                {isChanged && (
-                  <span
-                    data-settings-changed
-                    title="Changed from the default"
-                    className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-                  >
-                    <span className="sr-only">(changed)</span>
-                  </span>
-                )}
+                <X size={12} />
               </button>
-            );
-          })}
-        </nav>
-
-        {/* Content pane for the active section. */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center border-b border-border px-6 py-3.5">
-            <span className="text-sm font-semibold" data-settings-heading={active}>
-              {activeLabel}
-            </span>
-            <div className="flex-1" />
-            <button
-              onClick={onClose}
-              className="rounded-md p-1.5 text-text-muted hover:bg-bg-hover hover:text-text"
-            >
-              <X size={14} />
-            </button>
+            ) : (
+              <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border px-1 font-mono text-xs leading-4 text-text-dim">
+                Ctrl F
+              </kbd>
+            )}
           </div>
+          <div className="flex-1" />
+          <Btn variant="primary" onClick={onClose}>
+            Done
+          </Btn>
+        </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
-            {renderContent()}
-          </div>
+        <div className="flex min-h-0 flex-1">
+          {/* Section list: text only, grouped, rows touch. */}
+          <nav
+            aria-label="Settings sections"
+            onKeyDown={onNavKeyDown}
+            className="flex w-44 shrink-0 flex-col overflow-y-auto border-r border-border py-2"
+          >
+            {SETTINGS_GROUPS.map((g) => {
+              const items = SECTIONS.filter((sec) => sec.group === g.id && (!searching || hits.has(sec.id)));
+              if (!items.length) return null;
+              return (
+                <div key={g.id} className="mb-2">
+                  <div className="px-4 pb-1 pt-1.5 text-xs text-text-dim">{g.label}</div>
+                  {items.map((sec) => {
+                    const on = !searching && active === sec.id;
+                    const isChanged = changed.has(sec.id);
+                    return (
+                      <button
+                        key={sec.id}
+                        type="button"
+                        data-settings-section={sec.id}
+                        onClick={() => pickSection(sec.id)}
+                        aria-current={on ? "page" : undefined}
+                        title={SECTION_HELP[sec.id]}
+                        className={cn(
+                          "mx-2 flex h-7 w-[calc(100%-1rem)] items-center gap-2 rounded-[3px] px-2 text-left text-sm transition-colors",
+                          on ? "bg-bg-hover text-text" : "text-text-muted hover:bg-bg-hover/50 hover:text-text"
+                        )}
+                      >
+                        <span className="truncate">{sec.label}</span>
+                        {isChanged && (
+                          <span
+                            data-settings-changed
+                            title="Changed from the default"
+                            className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim"
+                          >
+                            <span className="sr-only">(changed)</span>
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {searching && hits.size === 0 && (
+              <div className="px-4 py-1 text-xs text-text-dim">No matches</div>
+            )}
+          </nav>
 
-          <div className="flex items-center justify-between border-t border-border px-6 py-3">
-            <span className="text-xs text-text-dim">
-              Changes save automatically.
-            </span>
-            <button
-              onClick={onClose}
-              className="btn-accent rounded-md px-3.5 py-1.5 text-sm font-medium text-white"
-            >
-              Done
-            </button>
+          {/* Content. */}
+          <div ref={contentRef} className="min-w-0 flex-1 overflow-y-auto">
+            {searching ? (
+              <div data-search-results className="max-w-[48rem] space-y-6 px-7 py-5">
+                {SECTIONS.map((sec) => {
+                  const matched = sectionMatches(sec, q);
+                  return (
+                    <section
+                      key={sec.id}
+                      data-search-section={sec.id}
+                      data-section-match={matched || undefined}
+                    >
+                      <h2 className="mb-2 text-xs font-semibold text-text-dim">
+                        <Highlight text={sec.label} />
+                      </h2>
+                      <SettingsSearchScope query={q} sectionMatched={matched}>
+                        <div data-search-body className="space-y-3">
+                          {renderSection(sec.id)}
+                        </div>
+                      </SettingsSearchScope>
+                    </section>
+                  );
+                })}
+                {hits.size === 0 && (
+                  <p className="pt-2 text-sm text-text-muted">No settings match “{query.trim()}”.</p>
+                )}
+              </div>
+            ) : (
+              <div className="max-w-[48rem] px-7 pb-8 pt-4">
+                {/* The nav already names the page; the heading is for screen readers. */}
+                <h2 className="sr-only" data-settings-heading={active}>
+                  {activeSection.label}
+                </h2>
+                <div className="space-y-3">{renderSection(active)}</div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -834,77 +900,40 @@ export function Settings({ onClose }: Props) {
   );
 }
 
-// An (i) that reveals its help on hover/focus — replaces the always-on subtitle
-// so titles stay clean. Portals to <body> so it's never clipped by the dialog's
-// scroll area and sits above the modal.
-function InfoTip({ text }: { text: string }) {
-  const [coords, setCoords] = useState<{ left: number; top: number } | null>(
-    null
-  );
-  const ref = useRef<HTMLButtonElement>(null);
-  const show = () => {
-    const r = ref.current?.getBoundingClientRect();
-    if (r) setCoords({ left: r.left + r.width / 2, top: r.top - 6 });
-  };
-  const hide = () => setCoords(null);
-  return (
-    <>
-      <button
-        ref={ref}
-        type="button"
-        onMouseEnter={show}
-        onMouseLeave={hide}
-        onFocus={show}
-        onBlur={hide}
-        aria-label="More info"
-        className="inline-flex text-text-dim transition-colors hover:text-text"
-      >
-        <Info size={13} />
-      </button>
-      {coords &&
-        createPortal(
-          <span
-            role="tooltip"
-            style={{
-              left: coords.left,
-              top: coords.top,
-              transform: "translate(-50%, -100%)",
-            }}
-            className="anim-fade pointer-events-none fixed z-tooltip w-64 max-w-[80vw] rounded-md border border-border bg-bg-panel px-2.5 py-1.5 text-[11px] leading-snug text-text-muted shadow-elev-2"
-          >
-            {text}
-          </span>,
-          document.body
-        )}
-    </>
-  );
+/** Section-level explanations, behind the (i) next to the page title. */
+const SECTION_HELP: Partial<Record<SettingsSectionId, string>> = {
+  appearance: "How Faro looks. Changes apply right away.",
+  transfers: "Defaults for uploads and downloads. The transfer panel can change some of these on the fly.",
+  panes: "Defaults for the file browser. Most are also on the file toolbar.",
+  connections: "Defaults for new connection profiles and how their secrets are kept.",
+  passwordManagers: "Fill connection passwords and keys from 1Password or Bitwarden instead of saving them in Faro.",
+  cloudflare: "Reach servers behind Cloudflare Access. Faro runs cloudflared for you.",
+  remoteControl: "Let another Faro on your network browse, transfer and (if you allow it) run commands on this computer.",
+  bridge: "What connected AI agents may do without asking. Same setting as the Agent Bridge panel; applies to every agent-enabled session.",
+  sync: "Folders kept in step with a remote folder while Faro runs.",
+  cli: "faro-cli drives Faro from a terminal or script.",
+  backup: "One password-protected file with your profiles, saved secrets, settings and sync pairs.",
+  storage: "Space Faro uses for things it can rebuild. Clearing never touches your files or settings.",
+};
+
+function sectionMatches(sec: { label: string; keywords: string }, q: string): boolean {
+  return sec.label.toLowerCase().includes(q) || sec.keywords.toLowerCase().includes(q);
 }
 
-function Field({
-  label,
-  help,
-  focus,
-  children,
-}: {
-  label: string;
-  help?: string;
-  /** `data-settings-focus` id so a deep link can land on this field. */
-  focus?: string;
-  children: React.ReactNode;
-}) {
+/** A small icon button that puts a setting back to its default. */
+function ResetButton({ label, onClick, ...rest }: { label: string; onClick: () => void } & Record<`data-${string}`, boolean | string | undefined>) {
   return (
-    <div data-settings-focus={focus}>
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="text-sm">{label}</span>
-        {help && <InfoTip text={help} />}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">{children}</div>
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      {...rest}
+      className="flex h-7 w-7 items-center justify-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+    >
+      <RotateCcw size={13} />
+    </button>
   );
-}
-
-function Help({ children }: { children: React.ReactNode }) {
-  return <div className="mt-1 w-full text-xs text-text-dim">{children}</div>;
 }
 
 // Encrypted backup / restore (Plan 12 Phase 4). Export writes a single
@@ -920,12 +949,6 @@ function BackupSettings() {
   const [pending, setPending] = useState<BackupSummary | null>(null);
   const [importing, setImporting] = useState(false);
 
-  const btn =
-    "rounded-md border border-border px-3 py-1.5 text-sm text-text transition-colors hover:bg-bg-hover disabled:opacity-50";
-  const input =
-    "w-full rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent";
-  const danger =
-    "rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-500/20 disabled:opacity-50";
 
   const doExport = async () => {
     if (exportPw.length < 8) {
@@ -1007,71 +1030,51 @@ function BackupSettings() {
   };
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Export */}
-      <div>
-        <div className="mb-1 text-sm font-medium">Create an encrypted backup</div>
-        <Help>
-          One password-protected file with your connection profiles, their saved
-          secrets (SSH passwords, cloud tokens, the AI API key), app settings, and
-          sync pairs. Argon2id + AES-256-GCM — useless without the password, so
-          store it somewhere safe.
-        </Help>
-        <div className="mt-2 flex flex-col gap-2">
-          <input
+    <>
+      <Group title="Export" help="Profiles, their saved secrets (SSH passwords, cloud tokens, the AI API key), app settings and sync pairs in one encrypted file. Useless without the password, so keep it somewhere safe.">
+        <Row label="Password" keywords="backup export encrypt">
+          <TextInput
             type="password"
             value={exportPw}
             onChange={(e) => setExportPw(e.target.value)}
-            placeholder="Backup password"
-            className={input}
+            placeholder="At least 8 characters"
+            aria-label="Backup password"
+            className="w-56"
             autoComplete="new-password"
           />
-          <input
+        </Row>
+        <Row label="Confirm password">
+          <TextInput
             type="password"
             value={exportPw2}
             onChange={(e) => setExportPw2(e.target.value)}
-            placeholder="Confirm password"
-            className={input}
+            placeholder="Again"
+            aria-label="Confirm password"
+            className="w-56"
             autoComplete="new-password"
           />
-          <div>
-            <button type="button" className={btn} onClick={doExport} disabled={exporting}>
-              {exporting ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Loader2 size={13} className="animate-spin" /> Exporting…
-                </span>
-              ) : (
-                "Export backup…"
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
+        </Row>
+        <Row label="" keywords="export backup">
+          <Btn onClick={doExport} busy={exporting} disabled={!exportPw || !exportPw2}>
+            {exporting ? "Exporting…" : "Export backup…"}
+          </Btn>
+        </Row>
+      </Group>
 
-      <div className="h-px bg-border" />
-
-      {/* Restore */}
-      <div>
-        <div className="mb-1 flex items-center gap-1.5 text-sm font-medium text-red-400">
-          <ShieldAlert size={14} /> Restore from a backup
-        </div>
-        <Help>
-          Replaces this machine's profiles, settings, and saved secrets with the
-          backup's. Takes effect after you restart Faro.
-        </Help>
-        <div className="mt-2 flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <button type="button" className={btn} onClick={chooseFile} disabled={importing}>
-              Choose backup file…
-            </button>
-            {importPath && (
-              <span className="truncate text-xs text-text-dim" title={importPath}>
-                {importPath.split(/[\\/]/).pop()}
-              </span>
-            )}
-          </div>
+      <Group title="Restore" help="Replaces this computer's profiles, settings and saved secrets with the backup's. Finishes when you restart Faro.">
+        <Row label="Backup file" keywords="restore import">
+          <Btn onClick={chooseFile} disabled={importing}>
+            Choose file…
+          </Btn>
           {importPath && (
-            <input
+            <span className="min-w-0 truncate font-mono text-xs text-text-muted" title={importPath}>
+              {importPath.split(/[\\/]/).pop()}
+            </span>
+          )}
+        </Row>
+        {importPath && (
+          <Row label="Password">
+            <TextInput
               type="password"
               value={importPw}
               onChange={(e) => {
@@ -1079,133 +1082,35 @@ function BackupSettings() {
                 setPending(null);
               }}
               placeholder="Backup password"
-              className={input}
+              aria-label="Backup password"
+              className="w-56"
               autoComplete="off"
             />
-          )}
-          {importPath && !pending && (
-            <div>
-              <button
-                type="button"
-                className={btn}
-                onClick={doInspect}
-                disabled={importing || !importPw}
-              >
-                {importing ? "Checking…" : "Preview contents"}
-              </button>
-            </div>
-          )}
-          {pending && (
-            <div className="rounded-md border border-border bg-bg-subtle p-3 text-sm">
-              <div className="mb-1.5 font-medium">This backup contains</div>
-              <ul className="mb-2.5 list-inside list-disc text-text-muted">
-                <li>
-                  {pending.profiles} connection profile
-                  {pending.profiles === 1 ? "" : "s"}
-                </li>
-                <li>
-                  {pending.credentials} saved credential
-                  {pending.credentials === 1 ? "" : "s"} (keychain)
-                </li>
-                <li>app settings + state {pending.hasSync ? "+ sync pairs" : ""}</li>
-              </ul>
-              <button
-                type="button"
-                className={danger}
-                onClick={doImport}
-                disabled={importing}
-              >
-                {importing ? "Restoring…" : "Restore & overwrite current data"}
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ToggleField({
-  label,
-  help,
-  checked,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  help?: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className={cn("text-sm", disabled && "text-text-dim")}>{label}</span>
-        {help && <InfoTip text={help} />}
-      </div>
-      <Toggle checked={checked} onChange={onChange} disabled={disabled} label={label} />
-    </div>
-  );
-}
-
-/** Settings that only matter while a parent setting is on: indented under it
- *  and inert until then. */
-function Dependent({
-  enabled,
-  reason,
-  children,
-}: {
-  enabled: boolean;
-  /** Why the children are off, for screen readers and hover. */
-  reason?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      data-settings-dependent={enabled ? "on" : "off"}
-      aria-disabled={!enabled}
-      title={!enabled ? reason : undefined}
-      className={cn("ml-2 space-y-3 border-l border-border pl-4", !enabled && "opacity-60")}
-    >
-      {children}
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-  label,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-  label?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors disabled:cursor-not-allowed",
-        checked
-          ? "bg-accent border-accent"
-          : "bg-bg-subtle border-border hover:border-text-dim"
-      )}
-    >
-      <span
-        className={cn(
-          "absolute left-px top-1/2 h-4 w-4 -translate-y-1/2 rounded-full bg-white shadow-elev-1 transition-transform",
-          checked ? "translate-x-4" : "translate-x-0"
+            {!pending && (
+              <Btn onClick={doInspect} busy={importing} disabled={!importPw}>
+                {importing ? "Checking…" : "Preview"}
+              </Btn>
+            )}
+          </Row>
         )}
-      />
-    </button>
+        {pending && (
+          <Row label="Contains">
+            <div className="flex w-full flex-col gap-2">
+              <List>
+                <ListRow title="Connection profiles" status={<span className="text-xs tabular-nums text-text-muted">{pending.profiles}</span>} />
+                <ListRow title="Saved credentials" status={<span className="text-xs tabular-nums text-text-muted">{pending.credentials}</span>} />
+                <ListRow title={pending.hasSync ? "App settings and sync pairs" : "App settings"} />
+              </List>
+              <div>
+                <Btn variant="danger" onClick={doImport} busy={importing}>
+                  {importing ? "Restoring…" : "Restore and replace"}
+                </Btn>
+              </div>
+            </div>
+          </Row>
+        )}
+      </Group>
+    </>
   );
 }
 
@@ -1249,7 +1154,7 @@ function PreviewCards<T extends string>({
     refs.current[next]?.focus();
   };
   return (
-    <div role="radiogroup" aria-label={label} className="grid w-full grid-cols-4 gap-2">
+    <div role="radiogroup" data-theme-cards aria-label={label} className="grid w-full max-w-[34rem] grid-cols-4 gap-2">
       {items.map((t, i) => {
         const active = i === selected;
         return (
@@ -1266,20 +1171,20 @@ function PreviewCards<T extends string>({
             onClick={() => onChange(t.value)}
             onKeyDown={(e) => onKeyDown(e, i)}
             className={cn(
-              "flex flex-col gap-1.5 rounded-lg border p-1.5 text-left outline-none transition-colors focus-visible:border-accent",
+              "flex flex-col gap-1 rounded border p-1 text-left transition-colors",
               active
-                ? "border-accent ring-2 ring-accent/40"
+                ? "border-text-muted"
                 : "border-border hover:border-text-dim"
             )}
           >
             {preview(t.value)}
             <span
               className={cn(
-                "flex items-center gap-1 truncate px-0.5 text-[11px] font-medium",
+                "flex items-center gap-1 truncate px-0.5 text-xs",
                 active ? "text-text" : "text-text-muted"
               )}
             >
-              {active && <Check size={11} className="shrink-0 text-accent" />}
+              {active && <Check size={11} className="shrink-0 text-text" />}
               <span className="truncate">{t.label}</span>
             </span>
           </button>
@@ -1296,7 +1201,7 @@ function ThemePreview({ theme }: { theme: AppTheme }) {
     <div
       data-theme={theme}
       aria-hidden
-      className="pointer-events-none flex h-12 overflow-hidden rounded-md border border-border bg-bg"
+      className="pointer-events-none flex h-11 overflow-hidden rounded-sm border border-border bg-bg"
     >
       <div className="w-1/4 space-y-1 border-r border-border-subtle bg-bg-subtle p-1">
         <div className="h-1.5 rounded-sm bg-accent" />
@@ -1331,7 +1236,7 @@ function TerminalPreview({ theme }: { theme: TerminalTheme }) {
     <div
       aria-hidden
       style={{ background: c.background, color: c.foreground }}
-      className="pointer-events-none h-12 overflow-hidden rounded-md border border-border px-1.5 py-1 font-mono text-[9px] leading-[13px]"
+      className="pointer-events-none h-11 overflow-hidden rounded-sm border border-border px-1.5 py-1 font-mono text-[9px] leading-[12px]"
     >
       <div className="opacity-70">$ ls</div>
       <div>logs  www</div>
@@ -1355,103 +1260,50 @@ function AccentGrid({
   const chip =
     "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors";
   return (
-    <div className="w-full space-y-2.5">
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => onChange("")}
-          className={cn(
-            chip,
-            value === ""
-              ? "border-accent bg-accent/10 text-text"
-              : "border-border text-text-muted hover:border-text-dim hover:text-text"
-          )}
-        >
-          <Ban size={12} /> Theme default
-        </button>
-        <label
-          title="Pick any color"
-          className={cn(
-            chip,
-            "cursor-pointer",
-            isCustom
-              ? "border-accent bg-accent/10 text-text"
-              : "border-border text-text-muted hover:border-text-dim hover:text-text"
-          )}
-        >
-          <span
-            className="h-3.5 w-3.5 rounded-full border border-white/20"
-            style={{
-              background: isCustom
-                ? value
-                : "conic-gradient(from 0deg, #ef4444, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7, #ef4444)",
-            }}
-          />
-          Custom
-          <input
-            type="color"
-            value={isCustom ? value : "#8b7ff6"}
-            onChange={(e) => onChange(e.target.value)}
-            className="sr-only"
-          />
-        </label>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {ACCENTS.map((a) => {
-          const active = lower === a.hex.toLowerCase();
-          return (
-            <button
-              key={a.hex}
-              onClick={() => onChange(a.hex)}
-              title={a.name}
-              aria-label={a.name}
-              aria-pressed={active}
-              style={{ background: a.hex }}
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md ring-offset-2 ring-offset-bg-panel transition-all",
-                active
-                  ? "ring-2 ring-accent"
-                  : "ring-1 ring-black/10 hover:ring-2 hover:ring-white/50"
-              )}
-            >
-              {active && (
-                <Check size={12} className="text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)]" />
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (v: T) => void;
-  options: { value: T; label: string }[];
-}) {
-  return (
-    <div className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5">
-      {options.map((o) => {
-        const active = value === o.value;
+    <div className="flex flex-wrap items-center gap-1.5">
+      {ACCENTS.map((a) => {
+        const active = lower === a.hex.toLowerCase();
         return (
           <button
-            key={o.value}
-            onClick={() => onChange(o.value)}
+            key={a.hex}
+            type="button"
+            onClick={() => onChange(a.hex)}
+            title={a.name}
+            aria-label={a.name}
+            aria-pressed={active}
+            style={{ background: a.hex }}
             className={cn(
-              "rounded-[5px] px-3 py-1 text-xs font-medium transition-colors",
-              active
-                ? "bg-bg-panel text-text shadow-elev-1"
-                : "text-text-muted hover:text-text"
+              "flex h-5 w-5 items-center justify-center rounded-sm ring-offset-2 ring-offset-bg-panel transition-shadow",
+              active ? "ring-2 ring-text" : "ring-1 ring-black/15 hover:ring-text-dim"
             )}
           >
-            {o.label}
+            {active && <Check size={11} strokeWidth={3} className="text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)]" />}
           </button>
         );
       })}
+      <span className="mx-1 h-4 w-px bg-border" />
+      <label
+        title="Pick any color"
+        className={cn(
+          "flex h-7 cursor-pointer items-center gap-1.5 rounded border px-2 text-xs transition-colors",
+          isCustom ? "border-text-dim text-text" : "border-border text-text-muted hover:text-text"
+        )}
+      >
+        <span className="h-3 w-3 rounded-sm border border-border" style={{ background: isCustom ? value : "rgb(var(--bg-subtle))" }} />
+        {isCustom ? <span className="font-mono">{value}</span> : "Custom"}
+        <input type="color" value={isCustom ? value : "#8b7ff6"} onChange={(e) => onChange(e.target.value)} className="sr-only" />
+      </label>
+      <button
+        type="button"
+        onClick={() => onChange("")}
+        aria-pressed={value === ""}
+        className={cn(
+          "flex h-7 items-center rounded border px-2 text-xs transition-colors",
+          value === "" ? "border-text-dim text-text" : "border-border text-text-muted hover:text-text"
+        )}
+      >
+        Theme default
+      </button>
     </div>
   );
 }
@@ -1476,7 +1328,7 @@ function Select<T extends string | number>({
       options={options}
       searchable={searchable}
       aria-label={label}
-      className="min-w-[11rem]"
+      className="h-7 w-52 py-0"
     />
   );
 }
@@ -1575,8 +1427,8 @@ function NumberInput({
             if (e.key === "Enter") e.currentTarget.blur();
           }}
           className={cn(
-            "w-24 rounded-md border bg-bg-subtle px-2.5 py-1.5 text-sm tabular-nums outline-none disabled:cursor-not-allowed disabled:opacity-60",
-            error ? "border-danger focus:border-danger" : "border-border focus:border-accent"
+            "h-7 w-20 rounded border bg-bg-subtle px-2.5 text-right text-sm tabular-nums outline-none disabled:cursor-not-allowed disabled:opacity-60",
+            error ? "border-danger focus:border-danger" : "border-border focus:border-text-dim"
           )}
         />
         {suffix && <span className="text-xs text-text-dim">{suffix}</span>}
@@ -1598,6 +1450,7 @@ function DebouncedText({
   value,
   onCommit,
   delay = 400,
+  mono,
   ...rest
 }: {
   value: string;
@@ -1606,6 +1459,8 @@ function DebouncedText({
   placeholder?: string;
   "aria-label"?: string;
   "data-settings-focus"?: string;
+  /** Paths and commands. */
+  mono?: boolean;
 }) {
   const [draft, setDraft] = useState(value);
   const pending = useRef<string | null>(null);
@@ -1642,7 +1497,8 @@ function DebouncedText({
         timer.current = setTimeout(flush, delay);
       }}
       onBlur={flush}
-      className="min-w-0 flex-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+      title={draft || undefined}
+      className={cn(inputClass, "w-72 max-w-full", mono && "font-mono text-xs")}
     />
   );
 }
@@ -1656,15 +1512,16 @@ function BandwidthLimit({ kbps, onChange }: { kbps: number; onChange: (n: number
     if (kbps > 0) setLast(kbps);
   }, [kbps]);
   return (
-    <div className="space-y-3">
-      <ToggleField
+    <>
+      <CheckRow
         label="Limit bandwidth"
-        help="A global cap shared by all active transfers. Off = unlimited. Also adjustable from the transfer panel."
+        keywords="throttle cap speed"
+        help="One cap shared by all transfers. Also on the transfer panel."
         checked={on}
         onChange={(v) => onChange(v ? last : 0)}
       />
-      <Dependent enabled={on} reason="Turn on Limit bandwidth first.">
-        <Field label="Limit">
+      <div data-settings-dependent={on ? "on" : "off"} aria-disabled={!on}>
+        <Row label="Limit" indent disabled={!on} keywords="bandwidth kib">
           <NumberInput
             label="Bandwidth limit"
             min={1}
@@ -1674,9 +1531,9 @@ function BandwidthLimit({ kbps, onChange }: { kbps: number; onChange: (n: number
             suffix="KiB/s"
             disabled={!on}
           />
-        </Field>
-      </Dependent>
-    </div>
+        </Row>
+      </div>
+    </>
   );
 }
 
@@ -1744,49 +1601,39 @@ function StorageSettings() {
   };
 
   return (
-    <div className="flex flex-col gap-2.5">
-      <Help>Space Faro uses for things it can rebuild. Clearing never touches your files or settings.</Help>
+    <List data-storage-list="">
       {CACHE_ORDER.map((id) => {
         const u = usage[id];
         const empty = !u || (u.bytes === 0 && u.items === 0);
         return (
-          <div
+          <ListRow
             key={id}
             data-cache-card={id}
-            className="flex items-center gap-3 rounded-lg border border-border bg-bg-subtle/60 px-3.5 py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline gap-2">
-                <span className="text-sm font-medium">{CACHE_INFO[id].title}</span>
-                <span data-cache-size className="text-xs tabular-nums text-text-muted">
-                  {!loaded
-                    ? "…"
-                    : !u
-                      ? "Unavailable"
-                      : empty
-                        ? "Empty"
-                        : `${fmtSize(u.bytes)} · ${plural(u.items, id === "thumbnails" ? "file" : id === "transferResume" ? "transfer" : "folder")}`}
-                </span>
-              </div>
-              <div className="mt-0.5 text-xs text-text-dim">{CACHE_INFO[id].note}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => void clear(id)}
-              disabled={empty || busy !== null}
-              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-text transition-colors hover:bg-bg-hover disabled:opacity-50"
-            >
-              {busy === id ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Loader2 size={13} className="animate-spin" /> Clearing…
-                </span>
-              ) : (
-                "Clear"
-              )}
-            </button>
-          </div>
+            title={
+              <span className="flex items-center gap-1.5">
+                <Highlight text={CACHE_INFO[id].title} />
+                <InfoTip text={CACHE_INFO[id].note} />
+              </span>
+            }
+            status={
+              <span data-cache-size className="text-xs tabular-nums text-text-muted">
+                {!loaded
+                  ? "…"
+                  : !u
+                    ? "Unavailable"
+                    : empty
+                      ? "Empty"
+                      : `${fmtSize(u.bytes)} · ${plural(u.items, id === "thumbnails" ? "file" : id === "transferResume" ? "transfer" : "folder")}`}
+              </span>
+            }
+            actions={
+              <Btn size="sm" onClick={() => void clear(id)} disabled={empty || busy !== null} busy={busy === id}>
+                {busy === id ? "Clearing…" : "Clear"}
+              </Btn>
+            }
+          />
         );
       })}
-    </div>
+    </List>
   );
 }
