@@ -12,6 +12,7 @@ use tauri::Manager;
 // secrets directly — credentials live in profiles::ConnectionProfile, which
 // the CLI deliberately redacts in `profiles show`.
 pub mod applog;
+pub mod env_path;
 pub mod backup;
 pub mod diagnostics;
 pub mod credential_refs;

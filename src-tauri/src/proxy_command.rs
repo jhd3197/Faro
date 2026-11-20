@@ -342,9 +342,9 @@ pub fn find_program(name: &str, cloudflared: bool) -> Option<PathBuf> {
     } else {
         vec![name.to_string()]
     };
-    let path_dirs = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .unwrap_or_default();
+    // The live PATH, so cloudflared installed while Faro runs is found
+    // without restarting Faro (or the PC).
+    let path_dirs = crate::env_path::search_dirs();
     path_dirs
         .into_iter()
         .chain(extra_dirs(cloudflared))
