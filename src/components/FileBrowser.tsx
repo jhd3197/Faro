@@ -7,6 +7,7 @@ import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
 import { useCopyJobs } from "@/stores/copyStore";
+import { useMounts } from "@/stores/mountStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSettings } from "@/stores/settingsStore";
@@ -212,6 +213,7 @@ export function FileBrowser() {
         reloadToken={reloadToken}
         onSaveSite={browseLocal || !serverSid ? undefined : siteBrowser.saveSite}
         onCopyTo={target ? (entries) => useCopyJobs.getState().openCopyTo(target, entries) : undefined}
+        onMountFolder={!browseLocal && serverSid && useMounts.getState().supported ? (p) => { const pid = useConnections.getState().sessions.find((x) => x.sessionId === serverSid)?.profileId; if (pid) useMounts.getState().open({ profileId: pid, remoteRoot: p }); } : undefined}
         toolbarActions={
           <>
             {previewToggle}

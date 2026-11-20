@@ -9,6 +9,8 @@ import { CopyToDialog } from "./components/CopyToDialog";
 import { CopyJobsPill } from "./components/CopyJobsPill";
 import { useCopyJobs } from "./stores/copyStore";
 import { useRules } from "./stores/rulesStore";
+import { useMounts } from "./stores/mountStore";
+import { MountDialog } from "./components/MountDialog";
 import { ServerRail } from "./components/ServerRail";
 import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
@@ -143,9 +145,15 @@ export default function App() {
       else cleanup = c;
     });
     void useRules.getState().load();
+    let unMounts: (() => void) | undefined;
+    void useMounts.getState().init().then((u) => {
+      if (cancelled) u();
+      else unMounts = u;
+    });
     return () => {
       cancelled = true;
       cleanup?.();
+      unMounts?.();
     };
   }, []);
 
@@ -303,6 +311,7 @@ export default function App() {
           </ResizablePanel>
           <NativeFileDrop />
           <CopyToDialog />
+          <MountDialog />
           <UploadReports />
           <TransferQueue containerRef={columnRef} />
           {!zen && <TipStrip />}

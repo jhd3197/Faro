@@ -44,6 +44,8 @@ import type {
   CopyJob,
   RuleSet,
   RuleSample,
+  Mount,
+  MountView,
 } from "./types";
 import type {
   ConnectionProfile,
@@ -809,6 +811,14 @@ export const ipc = {
    *  placeholders. Returns the count dehydrated. */
   virtualFsFreeUpSpace: (pairId: string) =>
     invoke<number>("virtualfs_free_up_space", { pairId }),
+  // Mount as folder (Plan 34): each returns every mount.
+  mounts: () => invoke<MountView[]>("virtualfs_mounts"),
+  mountSave: (mount: Mount) => invoke<MountView[]>("virtualfs_mount_save", { mount }),
+  mountRemove: (id: string) => invoke<MountView[]>("virtualfs_mount_remove", { id }),
+  mountSetEnabled: (id: string, enabled: boolean) =>
+    invoke<MountView[]>("virtualfs_mount_set_enabled", { id, enabled }),
+  /** The folder a new mount named `name` uses by default. */
+  mountDefaultRoot: (name: string) => invoke<string>("virtualfs_default_mount_root", { name }),
 
   // ---- Disk Usage Explorer ----
   /** Kick off a recursive size scan of `path` on a session; returns a scan id. */
@@ -957,6 +967,10 @@ export const ipc = {
   searchForget: (searchId: string) =>
     invoke<void>("search_forget", { searchId }),
 };
+
+export async function onVirtualFsChanged(cb: () => void): Promise<UnlistenFn> {
+  return listen("virtualfs://changed", () => cb());
+}
 
 export async function onCopyToProgress(cb: (job: CopyJob) => void): Promise<UnlistenFn> {
   return listen<CopyJob>("copyto://progress", (e) => cb(e.payload));

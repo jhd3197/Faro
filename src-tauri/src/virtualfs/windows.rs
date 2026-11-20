@@ -273,6 +273,33 @@ fn collect_local_changes(root: &Path, dir: &Path, out: &mut Vec<String>) {
     }
 }
 
+/// Remove every untouched placeholder under `root` (and folders left empty by
+/// that), keeping anything that holds local data. Called when a root is torn
+/// down, so the folder doesn't keep icons that can never open. Returns the
+/// number of files removed.
+pub fn clear_placeholders(root: &Path) -> u32 {
+    fn walk(dir: &Path) -> u32 {
+        let mut n = 0;
+        let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                let never_listed = untouched_placeholder(&path, true);
+                n += walk(&path);
+                // Only an empty folder goes; one holding local files stays.
+                if never_listed || std::fs::read_dir(&path).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                    let _ = std::fs::remove_dir(&path);
+                }
+            } else if ft.is_file() && untouched_placeholder(&path, false) && std::fs::remove_file(&path).is_ok() {
+                n += 1;
+            }
+        }
+        n
+    }
+    walk(root)
+}
+
 /// Unregister a sync root by path — the orphan-safety primitive. The live
 /// `Provider` (if any) is dropped by the caller first (disconnect), then this
 /// removes the OS registration. Works from just the persisted `local_root`, so a
@@ -769,8 +796,14 @@ mod tests {
         .await;
 
         provider.stop();
+        // Unmount: untouched placeholders go, the locally edited file stays.
+        let cleared = clear_placeholders(&dir);
+        let kept_edit = dir.join("d").join("inner.txt").exists();
+        let dropped_new = !dir.join("new.txt").exists();
         let _ = unregister_root("", Some(&dir));
         let _ = std::fs::remove_dir_all(&dir);
         outcome.expect("on-demand provider end-to-end");
+        assert!(cleared >= 1 && dropped_new, "untouched placeholders cleared ({cleared})");
+        assert!(kept_edit, "a file with local edits survives unmount");
     }
 }

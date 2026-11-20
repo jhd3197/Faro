@@ -9,6 +9,7 @@ import {
 import {
   ArrowUp,
   FolderInput,
+  HardDrive,
   ArrowLeft,
   ArrowRight,
   RefreshCw,
@@ -183,6 +184,8 @@ interface Props {
   onSaveSite?: (path: string) => void;
   /** "Copy to…" another connection (host-provided; absent hides the item). */
   onCopyTo?: (entries: DirEntry[]) => void;
+  /** "Mount as folder…" for a remote folder (host-provided). */
+  onMountFolder?: (path: string) => void;
   toolbarActions?: ReactNode;
   /** Called with the selected entries whenever the selection (or listing)
    *  changes — lets the host drive a preview pane. */
@@ -258,6 +261,7 @@ export function FilePane({
   reloadToken,
   onSaveSite,
   onCopyTo,
+  onMountFolder,
   toolbarActions,
   onSelectionChange,
 }: Props) {
@@ -1073,6 +1077,9 @@ export function FilePane({
       });
       if (single.kind === "directory" && isRemote && onSaveSite) {
         items.push({ label: "Save as site…", icon: <BookmarkPlus size={12} />, onClick: () => onSaveSite(single.path) });
+      }
+      if (single.kind === "directory" && isRemote && onMountFolder) {
+        items.push({ label: "Mount as folder…", icon: <HardDrive size={12} />, onClick: () => onMountFolder(single.path) });
       }
       // Edit-in-place sits right under the primary action so it's easy to find
       // (it used to be last, below chmod). Remote files only — local files open

@@ -40,6 +40,7 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { useConnections } from "@/stores/connectionsStore";
+import { useMounts } from "@/stores/mountStore";
 import { useBridge } from "@/stores/bridgeStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useServerView } from "@/stores/serverViewStore";
@@ -626,6 +627,9 @@ export function ServerRail() {
       });
     }
 
+    if (useMounts.getState().supported) {
+      items.push({ label: "Mount as folder…", icon: <HardDrive size={14} />, onClick: () => useMounts.getState().open({ profileId: p.id }) });
+    }
     items.push(
       { label: "Share", icon: <Link2 size={14} />, submenu: share },
       { label: "Organize", icon: <Folder size={14} />, submenu: organize },

@@ -4,6 +4,7 @@ import { SyncDialog } from "./SyncDialog";
 import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
 import { useCopyJobs } from "@/stores/copyStore";
+import { useMounts } from "@/stores/mountStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
@@ -217,6 +218,7 @@ export function DualPaneBrowser() {
           transferLabel="Download"
           onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
           onCopyTo={activeSessionId ? (entries) => useCopyJobs.getState().openCopyTo(activeSessionId, entries) : undefined}
+          onMountFolder={activeSessionId && useMounts.getState().supported ? (p) => { const pid = useConnections.getState().sessions.find((x) => x.sessionId === activeSessionId)?.profileId; if (pid) useMounts.getState().open({ profileId: pid, remoteRoot: p }); } : undefined}
           toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
         />}
         </div>

@@ -1981,3 +1981,30 @@ export interface RuleSample {
   /** View folders the file would show in. */
   views: string[];
 }
+
+// ---- Mount as folder (Plan 34 Phase 2; mirrors src-tauri/src/virtualfs/mod.rs) ----
+
+export interface Mount {
+  id: string;
+  name: string;
+  profileId: string;
+  remoteRoot: string;
+  /** Empty = the default `%USERPROFILE%\Faro\<name>`. */
+  localRoot: string;
+  enabled: boolean;
+  /** Upload files saved in the folder back to the connection. */
+  writeBack: boolean;
+  /** With write-back on, also apply deletes and renames. */
+  allowDeletes: boolean;
+  /** Keep a searchable index (dates, camera, thumbnails). */
+  index: boolean;
+  /** Rule set whose view rules show as extra folders. */
+  ruleSet?: string | null;
+}
+
+export interface MountView extends Mount {
+  running: boolean;
+  lastError?: string;
+  /** Files edited or created in the folder that the connection doesn't have. */
+  localChanges: string[];
+}

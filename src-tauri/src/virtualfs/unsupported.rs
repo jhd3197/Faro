@@ -38,6 +38,11 @@ impl Provider {
     pub fn stop(self) {}
 }
 
+/// No placeholders exist on this build.
+pub fn clear_placeholders(_root: &Path) -> u32 {
+    0
+}
+
 /// Nothing was ever registered with the OS, so unregister is a no-op.
 pub fn unregister_root(_pair_id: &str, _local_root: Option<&Path>) -> Result<()> {
     Ok(())
