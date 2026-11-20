@@ -1364,6 +1364,17 @@ async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str, flags: &CpFlags) -> 
     let src_t = parse_target(src);
     let dst_t = parse_target(dst);
 
+    // The planning flags only apply between two connections. Refuse them for
+    // a local side instead of silently copying one file (or failing on a
+    // folder): folders between this PC and a connection go through `sync`.
+    let between = matches!((&src_t, &dst_t), (Target::Remote { .. }, Target::Remote { .. }));
+    if !between && (flags.recursive || flags.dry_run || flags.json || flags.verify || flags.rules.is_some()) {
+        bail!(
+            "--recursive, --dry-run, --json, --verify and --rules work for copies between two connections \
+             (a:/path b:/path). For a folder between this PC and a connection, use `faro-cli sync`."
+        );
+    }
+
     match (src_t, dst_t) {
         // local → local
         (Target::Local(s), Target::Local(d)) => {
