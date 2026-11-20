@@ -227,6 +227,9 @@ impl FolderSync {
                 local_root: p.local_root.clone(),
                 profile_id: p.profile_id.clone(),
                 remote_root: p.remote_root.clone(),
+                write_back: false,
+                allow_deletes: false,
+                rule_set: None,
             })
             .collect()
     }

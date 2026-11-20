@@ -26,7 +26,7 @@
 //! of enabled on-demand pairs and `unregister` the difference. See
 //! [`plan_reconcile`], which is pure and unit-tested.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -57,6 +57,11 @@ pub struct OnDemandPair {
     pub local_root: String,
     pub profile_id: String,
     pub remote_root: String,
+    /// Upload edits back (mounts only; on-demand sync pairs stay read-only).
+    pub write_back: bool,
+    pub allow_deletes: bool,
+    /// Rule set whose view rules show as a `Views` folder.
+    pub rule_set: Option<String>,
 }
 
 /// A connection (or a folder of it) shown as an on-demand Windows folder,
@@ -99,6 +104,9 @@ impl Mount {
             local_root: self.local_root.clone(),
             profile_id: self.profile_id.clone(),
             remote_root: self.remote_root.clone(),
+            write_back: self.write_back,
+            allow_deletes: self.write_back && self.allow_deletes,
+            rule_set: self.rule_set.clone(),
         }
     }
 }
@@ -139,6 +147,29 @@ pub trait Hydrator: Send + Sync {
     async fn list_dir(&self, remote_path: &str) -> Result<Vec<DirEntry>>;
     /// Download a whole remote file into `dest_dir`; returns the written path.
     async fn download_to(&self, remote_path: &str, dest_dir: &Path) -> Result<PathBuf>;
+
+    /// The remote entry at `remote_path`, if it exists.
+    async fn stat(&self, remote_path: &str) -> Result<Option<DirEntry>> {
+        let (parent, name) = remote_path.rsplit_once('/').unwrap_or(("", remote_path));
+        let parent = if parent.is_empty() { "/" } else { parent };
+        Ok(self.list_dir(parent).await?.into_iter().find(|e| e.name == name))
+    }
+    /// Upload `local` into `remote_dir` under its own file name (write-back).
+    async fn upload(&self, _local: &Path, _remote_dir: &str) -> Result<()> {
+        anyhow::bail!("this folder doesn't upload")
+    }
+    /// Remove a remote file or folder (write-back with deletes allowed).
+    async fn remove(&self, _remote_path: &str) -> Result<()> {
+        anyhow::bail!("this folder doesn't apply deletes")
+    }
+    /// Rename/move a remote file or folder (write-back with deletes allowed).
+    async fn rename(&self, _from: &str, _to: &str) -> Result<()> {
+        anyhow::bail!("this folder doesn't apply renames")
+    }
+    /// View folders: name → entries pointing at real remote files.
+    async fn views(&self) -> Result<BTreeMap<String, Vec<DirEntry>>> {
+        Ok(BTreeMap::new())
+    }
 }
 
 /// Everything the platform provider needs to stand up one on-demand root.
@@ -150,7 +181,15 @@ pub struct RootConfig {
     /// How often to re-list the remote top level and add/remove placeholders
     /// for files that appeared or vanished after start. `0` disables it.
     pub refresh_secs: u64,
+    /// Upload files saved in the folder (Plan 34 Phase 6).
+    pub write_back: bool,
+    /// Apply local deletes and renames to the connection too.
+    pub allow_deletes: bool,
 }
+
+/// The folder a mount's view rules show under.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+pub const VIEWS_DIR: &str = "Views";
 
 /// Default cadence for the top-level refresh poll.
 pub const DEFAULT_REFRESH_SECS: u64 = 60;
@@ -360,13 +399,17 @@ impl VirtualFs {
         std::fs::create_dir_all(&local_root)
             .with_context(|| format!("create sync root {}", local_root.display()))?;
 
-        let hydrator: Arc<dyn Hydrator> =
-            Arc::new(SessionHydrator::new(app.clone(), pair.profile_id.clone()));
+        let hydrator: Arc<dyn Hydrator> = Arc::new(
+            SessionHydrator::new(app.clone(), pair.profile_id.clone())
+                .with_root(pair.remote_root.clone(), pair.rule_set.clone()),
+        );
         let provider = platform::Provider::start(
             RootConfig {
                 local_root,
                 remote_root: pair.remote_root.clone(),
                 refresh_secs: DEFAULT_REFRESH_SECS,
+                write_back: pair.write_back,
+                allow_deletes: pair.allow_deletes,
             },
             hydrator,
         )
@@ -552,12 +595,38 @@ pub struct SessionHydrator {
     app: AppHandle,
     profile_id: String,
     session_id: Mutex<Option<String>>,
+    /// The root's remote folder (deletes move into its recovery area) and
+    /// the rule set whose view rules make the `Views` folder.
+    remote_root: String,
+    rule_set: Option<String>,
 }
 
 #[allow(dead_code)]
 impl SessionHydrator {
     pub fn new(app: AppHandle, profile_id: String) -> Self {
-        Self { app, profile_id, session_id: Mutex::new(None) }
+        Self { app, profile_id, session_id: Mutex::new(None), remote_root: "/".into(), rule_set: None }
+    }
+
+    pub fn with_root(mut self, remote_root: String, rule_set: Option<String>) -> Self {
+        self.remote_root = remote_root;
+        self.rule_set = rule_set;
+        self
+    }
+
+    async fn wait(&self, id: &str) -> Result<String> {
+        use crate::transfer::TransferStatus;
+        let state = self.app.state::<AppState>();
+        loop {
+            match state.transfers.snapshot(id).await {
+                Some(t) => match t.status {
+                    TransferStatus::Done | TransferStatus::Skipped => return Ok(t.destination),
+                    TransferStatus::Error => anyhow::bail!("transfer failed: {}", t.error.unwrap_or_default()),
+                    TransferStatus::Canceled => anyhow::bail!("transfer canceled"),
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(120)).await,
+                },
+                None => anyhow::bail!("transfer vanished"),
+            }
+        }
     }
 
     async fn session(&self) -> Result<Arc<crate::session::Session>> {
@@ -596,7 +665,101 @@ impl Hydrator for SessionHydrator {
     async fn list_dir(&self, remote_path: &str) -> Result<Vec<DirEntry>> {
         let session = self.session().await?;
         let fs = crate::commands::fs_for_session(&session);
-        fs.list_dir(remote_path).await
+        // Faro's own recovery/staging folders never show in the folder.
+        Ok(fs
+            .list_dir(remote_path)
+            .await?
+            .into_iter()
+            .filter(|e| !crate::sync::recovery::is_reserved(&e.name))
+            .collect())
+    }
+
+    async fn upload(&self, local: &Path, remote_dir: &str) -> Result<()> {
+        use crate::transfer::OverwritePolicy;
+        let session = self.session().await?;
+        let state = self.app.state::<AppState>();
+        let id = state
+            .transfers
+            .start_upload(
+                session,
+                local.to_string_lossy().into_owned(),
+                remote_dir.to_string(),
+                OverwritePolicy::Overwrite,
+                self.app.clone(),
+            )
+            .await
+            .with_context(|| format!("start upload {}", local.display()))?;
+        self.wait(&id).await.map(|_| ())
+    }
+
+    /// Deletes are recoverable: the file or folder moves into the root's
+    /// `.faro-sync-recovery/<batch>/` area on the connection.
+    async fn remove(&self, remote_path: &str) -> Result<()> {
+        let session = self.session().await?;
+        let fs = crate::commands::fs_for_session(&session);
+        let root = self.remote_root.trim_end_matches('/');
+        let rel = remote_path
+            .strip_prefix(root)
+            .map(|r| r.trim_start_matches('/'))
+            .filter(|r| !r.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("{remote_path} is outside this folder"))?;
+        let batch = crate::sync::recovery::new_batch();
+        let dest_rel = format!("{}/{batch}/{rel}", crate::sync::recovery::DIRECTORY);
+        // Create the recovery folders, parents first.
+        let mut acc = root.to_string();
+        if let Some((parents, _)) = dest_rel.rsplit_once('/') {
+            for seg in parents.split('/') {
+                acc = format!("{acc}/{seg}");
+                let _ = fs.create_dir(&acc).await;
+            }
+        }
+        fs.rename(remote_path, &format!("{root}/{dest_rel}"))
+            .await
+            .with_context(|| format!("move {remote_path} to recovery"))
+    }
+
+    async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        let session = self.session().await?;
+        let fs = crate::commands::fs_for_session(&session);
+        fs.rename_no_replace(from, to).await
+    }
+
+    async fn views(&self) -> Result<BTreeMap<String, Vec<DirEntry>>> {
+        let Some(set_id) = self.rule_set.as_deref() else { return Ok(BTreeMap::new()) };
+        let dir = self.app.path().app_data_dir().context("app data dir")?;
+        let set = crate::rules::find_set(&dir, set_id)?;
+        let state = self.app.state::<AppState>();
+        let rows = state.db.index_search(&crate::fileindex::IndexQuery {
+            connection_id: Some(self.profile_id.clone()),
+            under: Some(self.remote_root.clone()),
+            limit: Some(5000),
+            ..Default::default()
+        })?;
+        let mut out = BTreeMap::new();
+        for (view, rows) in crate::rules::views_of_rows(&set, rows) {
+            // Flat folders: number clashing names.
+            let mut seen: HashMap<String, u32> = HashMap::new();
+            let entries = rows
+                .into_iter()
+                .map(|r| {
+                    let n = seen.entry(r.name.clone()).or_insert(0);
+                    *n += 1;
+                    let name = if *n == 1 { r.name.clone() } else { crate::copyto::with_suffix_pub(&r.name, *n - 1) };
+                    DirEntry {
+                        name,
+                        path: r.path,
+                        kind: crate::remotefs::FileKind::File,
+                        size: r.size,
+                        modified: r.mtime_ms.map(|m| m / 1000),
+                        mode: None,
+                        etag: None,
+                        link_dir: false,
+                    }
+                })
+                .collect();
+            out.insert(view, entries);
+        }
+        Ok(out)
     }
 
     async fn download_to(&self, remote_path: &str, dest_dir: &Path) -> Result<PathBuf> {
