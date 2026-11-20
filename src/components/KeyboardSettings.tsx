@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, RotateCcw, Circle, X } from "lucide-react";
+import { Search } from "lucide-react";
 import { useCommands } from "@/lib/commands";
 import { useBindings } from "@/stores/bindingsStore";
 import { effectiveCombo } from "@/lib/keybindings";
@@ -14,6 +14,7 @@ import {
 } from "@/lib/comboRules";
 import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 import { cn } from "@/lib/cn";
+import { Btn, Checkbox, Empty, InfoTip, List, TextInput } from "./settings/kit";
 
 // Settings → Keyboard (Plan 15 Phase 2). A searchable, grouped list of every
 // remappable binding — the app commands that carry a default combo, the
@@ -236,184 +237,183 @@ export function KeyboardSettings() {
 
   return (
     <div className="space-y-3">
-      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle px-3 py-2.5">
-        <input
-          type="checkbox"
+      <div className="flex min-h-7 items-center gap-1.5">
+        <Checkbox
           checked={enabled}
-          onChange={(e) => {
-            setEnabled(e.target.checked);
+          onChange={(v) => {
+            setEnabled(v);
             setRec(null);
           }}
-          className="mt-0.5 accent-[rgb(var(--accent))]"
-          aria-describedby="kb-enabled-note"
-        />
-        <span>
-          <span className="block text-sm text-text">Enable keyboard shortcuts</span>
-          <span id="kb-enabled-note" className="block text-[11px] text-text-dim">
-            Off: no shortcut does anything and menus show no keys. Your
-            changes below are kept.
-          </span>
-        </span>
-      </label>
+          label="Use keyboard shortcuts"
+        >
+          Use keyboard shortcuts
+        </Checkbox>
+        <InfoTip text="Off: no shortcut does anything and menus show no keys. Your changes below are kept." />
+      </div>
 
       <div className={cn("space-y-3", !enabled && "pointer-events-none opacity-50")} aria-disabled={!enabled}>
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search
-            size={13}
-            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-dim"
-          />
-          <input
-            data-settings-focus={SETTINGS_FOCUS.keyboardSearch}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              // First Esc clears the search; the next one closes Settings.
-              if (e.key === "Escape" && q) {
-                e.preventDefault();
-                e.stopPropagation();
-                setQ("");
-              }
-            }}
-            placeholder="Search shortcuts…"
-            className="w-full rounded-md border border-border bg-bg-subtle py-1.5 pl-8 pr-2.5 text-sm outline-none focus:border-accent"
-          />
-        </div>
-        <button
-          onClick={resetAll}
-          disabled={overrideCount === 0}
-          className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-40"
-          title="Reset every shortcut to its default"
-        >
-          <RotateCcw size={12} /> Reset all
-          {overrideCount > 0 ? ` (${overrideCount})` : ""}
-        </button>
-      </div>
-
-      {conflict && (
-        <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-          <div className="flex-1">
-            <span className="font-mono font-medium">
-              {formatCombo(conflict.combo)}
-            </span>{" "}
-            is already bound to{" "}
-            <span className="font-medium">{conflict.otherTitle}</span>. Reassign
-            it here and unbind the other?
+        <div className="flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              size={13}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-dim"
+            />
+            <TextInput
+              data-settings-focus={SETTINGS_FOCUS.keyboardSearch}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                // First Esc clears the search; the next one closes Settings.
+                if (e.key === "Escape" && q) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setQ("");
+                }
+              }}
+              placeholder="Search shortcuts…"
+              aria-label="Search shortcuts"
+              className="w-full pl-8"
+            />
           </div>
-          <button
-            onClick={resolveConflict}
-            className="btn-accent shrink-0 rounded px-2 py-1 text-[11px] font-medium text-white"
-          >
-            Reassign
-          </button>
-          <button
-            onClick={() => setConflict(null)}
-            className="shrink-0 rounded p-1 text-text-muted hover:bg-bg-hover hover:text-text"
-          >
-            <X size={13} />
-          </button>
+          <InfoTip
+            label="How to record a shortcut"
+            text={
+              <>
+                Click a shortcut, then press the keys; it saves when you let go. <kbd>Esc</kbd> cancels,{" "}
+                <kbd>Backspace</kbd> resets to default. Shortcuts need a modifier, except F1–F12 and the keys
+                file lists already use on their own. File-browser and list keys apply to the focused pane or
+                row; they never fire while you're typing.
+              </>
+            }
+          />
+          <Btn onClick={resetAll} disabled={overrideCount === 0} title="Reset every shortcut to its default">
+            Reset all{overrideCount > 0 ? ` (${overrideCount})` : ""}
+          </Btn>
         </div>
-      )}
 
-      {groupOrder.length === 0 ? (
-        <div className="py-8 text-center text-xs text-text-dim">
-          No shortcuts match “{q.trim()}”.
-        </div>
-      ) : (
-        groupOrder.map((group) => (
-          <div key={group}>
-            <div className="mb-1.5 mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
-              {group}
-            </div>
-            <div className="overflow-hidden rounded-md border border-border-subtle">
-              {byGroup.get(group)!.map((e, i) => {
-                const eff = effectiveCombo(e.id, e.defaultCombo, overrides);
-                const overridden = e.id in overrides;
-                const recording = rec?.id === e.id ? rec : null;
-                return (
-                  <div
-                    key={e.id}
-                    data-keybinding-row={e.id}
-                    data-flash={flashId === e.id ? "" : undefined}
-                    className={cn(
-                      "px-3 py-1.5 text-sm transition-colors duration-300",
-                      i > 0 && "border-t border-border-subtle",
-                      flashId === e.id && "bg-success/15"
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-text-muted">
-                        {e.title}
-                      </span>
-                      {overridden && (
-                        <button
-                          onClick={() => {
-                            clearOverride(e.id);
-                            flash(e.id);
-                          }}
-                          title="Reset to default"
-                          className="rounded p-1 text-text-dim hover:bg-bg-hover hover:text-text"
-                        >
-                          <RotateCcw size={12} />
-                        </button>
+        {conflict && (
+          <div className="flex min-h-7 items-center gap-2 text-sm text-text-muted">
+            <span className="min-w-0 flex-1">
+              <Keys label={formatCombo(conflict.combo)} /> is bound to{" "}
+              <span className="text-text">{conflict.otherTitle}</span>. Reassign it here?
+            </span>
+            <Btn variant="primary" size="sm" onClick={resolveConflict}>
+              Reassign
+            </Btn>
+            <Btn variant="ghost" size="sm" onClick={() => setConflict(null)}>
+              Cancel
+            </Btn>
+          </div>
+        )}
+
+        {groupOrder.length === 0 ? (
+          <Empty>No shortcuts match “{q.trim()}”.</Empty>
+        ) : (
+          groupOrder.map((group) => (
+            <div key={group}>
+              <h3 className="mb-1 text-xs font-semibold text-text">{group}</h3>
+              <List>
+                {byGroup.get(group)!.map((e) => {
+                  const eff = effectiveCombo(e.id, e.defaultCombo, overrides);
+                  const overridden = e.id in overrides;
+                  const recording = rec?.id === e.id ? rec : null;
+                  return (
+                    <div
+                      key={e.id}
+                      data-keybinding-row={e.id}
+                      data-flash={flashId === e.id ? "" : undefined}
+                      className={cn(
+                        "px-3 py-1 transition-colors duration-300",
+                        flashId === e.id && "bg-success/15"
                       )}
-                      <button
-                        onClick={() =>
-                          setRec(recording ? null : { id: e.id, draft: "", error: null, ready: false })
-                        }
-                        // Leaving the field drops an unsaved (or invalid) draft.
-                        onBlur={() => {
-                          if (recRef.current?.id === e.id) setRec(null);
-                        }}
-                        aria-label={`Shortcut for ${e.title}`}
-                        aria-invalid={!!recording?.error}
-                        className={cn(
-                          "min-w-[8rem] rounded border px-2 py-1 text-center font-mono text-[11px] transition-colors",
-                          recording
-                            ? recording.error
-                              ? "border-danger bg-danger/10 text-danger"
-                              : "border-accent bg-accent/10 text-accent"
-                            : "border-border bg-bg-subtle text-text-dim hover:border-accent/50 hover:text-text"
+                    >
+                      <div className="flex min-h-7 items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-sm text-text-muted">{e.title}</span>
+                        {overridden && (
+                          <Btn
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              clearOverride(e.id);
+                              flash(e.id);
+                            }}
+                            title="Reset to default"
+                          >
+                            Reset
+                          </Btn>
                         )}
-                        title="Click, then press the key combination"
-                      >
-                        {recording ? (
-                          recording.draft ? (
-                            labelFor(recording.draft)
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRec(recording ? null : { id: e.id, draft: "", error: null, ready: false })
+                          }
+                          // Leaving the field drops an unsaved (or invalid) draft.
+                          onBlur={() => {
+                            if (recRef.current?.id === e.id) setRec(null);
+                          }}
+                          aria-label={`Shortcut for ${e.title}`}
+                          aria-invalid={!!recording?.error}
+                          className={cn(
+                            "flex h-7 min-w-[8rem] items-center justify-end gap-1 rounded border px-1.5 outline-none transition-colors",
+                            recording
+                              ? recording.error
+                                ? "border-danger bg-bg-hover"
+                                : "border-border bg-bg-hover"
+                              : "border-transparent hover:bg-bg-hover"
+                          )}
+                          title="Click, then press the key combination"
+                        >
+                          {recording ? (
+                            recording.draft ? (
+                              <Keys label={labelFor(recording.draft)} tone={recording.error ? "danger" : "active"} />
+                            ) : (
+                              <span className="text-xs text-text">Press keys…</span>
+                            )
+                          ) : eff ? (
+                            <Keys label={formatCombo(eff)} />
                           ) : (
-                            <span className="inline-flex items-center gap-1.5">
-                              <Circle size={7} className="animate-pulse fill-current" />
-                              Press keys…
-                            </span>
-                          )
-                        ) : eff ? (
-                          formatCombo(eff)
-                        ) : (
-                          <span className="italic text-text-dim/70">Unbound</span>
-                        )}
-                      </button>
+                            <span className="text-xs text-text-dim">Unbound</span>
+                          )}
+                        </button>
+                      </div>
+                      {recording?.error && (
+                        <p role="alert" className="pb-1 text-right text-xs text-danger">
+                          {recording.error}
+                        </p>
+                      )}
                     </div>
-                    {recording?.error && (
-                      <p role="alert" className="mt-1 text-right text-[11px] text-danger">
-                        {recording.error}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </List>
             </div>
-          </div>
-        ))
-      )}
-
-      <p className="pt-1 text-[11px] leading-relaxed text-text-dim">
-        Click a shortcut, then press the keys; it saves when you let go.{" "}
-        <kbd>Esc</kbd> cancels, <kbd>Backspace</kbd> resets to default.
-        Shortcuts need a modifier, except F1–F12 and the keys file lists
-        already use on their own. File-browser and list keys apply to the
-        focused pane or row; they never fire while you're typing.
-      </p>
+          ))
+        )}
       </div>
     </div>
+  );
+}
+
+/** A combo label as key chips. The "+" between keys stays in the text (for
+ *  copy and screen readers) but is hidden; a literal "+" key keeps its chip. */
+function Keys({ label, tone = "default" }: { label: string; tone?: "default" | "active" | "danger" }) {
+  const parts = label.split(/\+(?=.)/);
+  return (
+    <span className="inline-flex items-center gap-1">
+      {parts.map((k, i) => (
+        <span key={i} className="contents">
+          {i > 0 && <span className="sr-only">+</span>}
+          <kbd
+            className={cn(
+              "inline-flex h-5 min-w-5 items-center justify-center rounded border px-1.5 font-mono text-xs",
+              tone === "default" && "border-border bg-bg-subtle text-text-muted",
+              tone === "active" && "border-border bg-bg-subtle text-text",
+              tone === "danger" && "border-danger/50 bg-bg-subtle text-danger"
+            )}
+          >
+            {k}
+          </kbd>
+        </span>
+      ))}
+    </span>
   );
 }

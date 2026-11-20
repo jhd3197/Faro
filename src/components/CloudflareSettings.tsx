@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
-import { Cloud, Loader2, CheckCircle2, AlertTriangle, Download, LogIn } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
 import { toastError } from "@/lib/errors";
@@ -7,6 +6,7 @@ import type { AccessStatus, ConnectionProfile } from "@/lib/types";
 import { ManagedToolCard, useManagedTool, type ToolOps } from "./ManagedToolCard";
 import { CloudflareAccountCard } from "./CloudflareAccount";
 import { SETTINGS_FOCUS } from "@/lib/settingsNav";
+import { Btn, Empty, List, ListRow, Status, SubHeading, type Tone } from "./settings/kit";
 
 /** The Access hostname a Cloudflare connection signs in to. */
 export function accessHostname(p: ConnectionProfile): string | null {
@@ -23,26 +23,29 @@ function expiresIn(expiresAt?: number): string {
   return `expires in ${Math.round(left / 86400)} d`;
 }
 
-function describe(s: AccessStatus): { text: string; ok: boolean; canLogin: boolean } {
+function describe(s: AccessStatus): { text: string; tone: Tone; canLogin: boolean } {
   switch (s.state) {
-    case "loggedIn":
+    case "loggedIn": {
+      const soon = !!s.expiresAt && s.expiresAt - Date.now() / 1000 < 3600;
       return {
         text: `Signed in as ${s.identity ?? "?"}${s.expiresAt ? ` · ${expiresIn(s.expiresAt)}` : ""}`,
-        ok: true,
+        tone: soon ? "warn" : "ok",
         canLogin: true,
       };
+    }
     case "expired":
-      return { text: "Sign-in expired", ok: false, canLogin: true };
+      return { text: "Sign-in expired", tone: "warn", canLogin: true };
     case "loggedOut":
-      return { text: "Not signed in", ok: false, canLogin: true };
+      return { text: "Not signed in", tone: "off", canLogin: true };
     case "notProtected":
-      return { text: "No Access sign-in needed", ok: true, canLogin: false };
+      return { text: "No Access sign-in needed", tone: "ok", canLogin: false };
     default:
-      return { text: s.message ? `Can't check: ${s.message}` : "Can't check the sign-in", ok: false, canLogin: true };
+      return { text: s.message ? `Can't check: ${s.message}` : "Can't check the sign-in", tone: "bad", canLogin: true };
   }
 }
 
-/** One Access hostname's sign-in state, with Log in / Log in again. */
+/** One Access hostname's sign-in state, with Log in / Log in again. A list
+ *  row in Settings; one quiet line (`compact`) in the connection editor. */
 export function AccessSignIn({
   hostname,
   compact,
@@ -54,7 +57,7 @@ export function AccessSignIn({
   /** Offer "Log in again" only once the sign-in has expired or is about to. */
   quiet?: boolean;
   /** More status after the sign-in text (the editor's tunnel and login). */
-  extra?: (signedIn: boolean) => React.ReactNode;
+  extra?: (signedIn: boolean) => ReactNode;
 }) {
   const [status, setStatus] = useState<AccessStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,45 +92,42 @@ export function AccessSignIn({
     }
   };
 
+  let state: ReactNode;
+  let action: ReactNode = null;
   if (error) {
-    return <div className="text-[11.5px] text-text-muted">{error}</div>;
+    state = <Status tone="bad">{error}</Status>;
+  } else if (!status) {
+    state = <Status tone="busy">Checking sign-in…</Status>;
+  } else {
+    const d = describe(status);
+    const fresh =
+      status.state === "loggedIn" && (!status.expiresAt || status.expiresAt - Date.now() / 1000 > 3600);
+    state = (
+      <Status tone={d.tone}>
+        <span data-access-state={status.state}>
+          {d.text}
+          {extra?.(status.state === "loggedIn")}
+        </span>
+      </Status>
+    );
+    if (d.canLogin && !(quiet && fresh)) {
+      action = (
+        <Btn size="sm" busy={busy} onClick={() => void login()}>
+          {busy ? "Waiting for the browser…" : status.state === "loggedIn" ? "Log in again" : "Log in"}
+        </Btn>
+      );
+    }
   }
-  if (!status) {
+
+  if (compact) {
     return (
-      <div className="flex items-center gap-1.5 text-[11.5px] text-text-muted">
-        <Loader2 size={12} className="animate-spin" /> Checking sign-in…
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1">{state}</div>
+        {action}
       </div>
     );
   }
-  const d = describe(status);
-  const fresh =
-    status.state === "loggedIn" && (!status.expiresAt || status.expiresAt - Date.now() / 1000 > 3600);
-  const canLogin = d.canLogin && !(quiet && fresh);
-  return (
-    <div className="flex min-w-0 items-center gap-2 text-[11.5px]">
-      {d.ok ? (
-        <CheckCircle2 size={13} className="shrink-0 text-success" />
-      ) : (
-        <AlertTriangle size={13} className="shrink-0 text-warning" />
-      )}
-      {!compact && <span className="shrink-0 font-medium text-text">{hostname}</span>}
-      <span className="min-w-0 truncate text-text-muted" data-access-state={status.state}>
-        {d.text}
-        {extra?.(status.state === "loggedIn")}
-      </span>
-      {canLogin && (
-        <button
-          type="button"
-          onClick={() => void login()}
-          disabled={busy}
-          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60"
-        >
-          {busy ? <Loader2 size={11} className="animate-spin" /> : <LogIn size={11} />}
-          {busy ? "Waiting for the browser…" : status.state === "loggedIn" ? "Log in again" : "Log in"}
-        </button>
-      )}
-    </div>
-  );
+  return <ListRow title={<span className="font-mono">{hostname}</span>} status={state} actions={action} />;
 }
 
 const CLOUDFLARED_OPS: ToolOps = {
@@ -147,28 +147,27 @@ export function InstallCloudflared({ onInstalled }: { onInstalled?: () => void }
   const cf = useCloudflared();
   if (!cf.status || cf.status.source !== "missing") return null;
   return (
-    <div className="mb-3 flex items-center gap-2 rounded-md border border-border bg-bg-subtle px-2.5 py-2 text-[11.5px] text-text-muted">
-      <AlertTriangle size={13} className="shrink-0 text-warning" />
-      <span className="min-w-0 flex-1">cloudflared isn't installed on this computer.</span>
-      <button
-        type="button"
+    <div className="mb-3 flex items-center gap-2 rounded border border-border px-3 py-1.5">
+      <div className="flex min-w-0 flex-1">
+        <Status tone="warn">cloudflared isn't installed</Status>
+      </div>
+      <Btn
+        size="sm"
+        busy={cf.busy}
         onClick={async () => {
           await cf.install();
           onInstalled?.();
         }}
-        disabled={cf.busy}
-        className="inline-flex shrink-0 items-center gap-1 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white hover:bg-accent/90 disabled:opacity-60"
       >
-        {cf.busy ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
         {cf.busy ? "Installing…" : "Install cloudflared"}
-      </button>
+      </Btn>
     </div>
   );
 }
 
 /// Settings → Cloudflare (Plan 29): which cloudflared Faro runs (install or
-/// update Faro's own verified copy, or point at your own), and the Access
-/// sign-in of every hostname the saved connections use.
+/// update Faro's own verified copy, or point at your own), the connected
+/// account, and the Access sign-in of every hostname the saved connections use.
 export function CloudflareSettings() {
   const cf = useCloudflared();
   const profiles = useConnections((s) => s.profiles);
@@ -176,21 +175,7 @@ export function CloudflareSettings() {
   const s = cf.status;
 
   return (
-    <div className="flex flex-col gap-5">
-      <div>
-        <h3 className="mb-1 flex items-center gap-2 text-sm font-medium text-text">
-          <Cloud size={15} className="text-accent" />
-          Cloudflare
-        </h3>
-        <p className="text-xs text-text-muted">
-          Connections that use Cloudflare Access run <code>cloudflared</code>. Faro can
-          download the official release for you (checksum-verified, into its own
-          folder, no admin rights) and keep it up to date.
-        </p>
-      </div>
-
-      <CloudflareAccountCard />
-
+    <div className="space-y-4">
       <ManagedToolCard
         tool={cf}
         name="cloudflared"
@@ -198,22 +183,25 @@ export function CloudflareSettings() {
         focusId={SETTINGS_FOCUS.cloudflared}
       />
 
-      <div>
-        <div className="mb-1.5 text-sm font-medium text-text">Access sign-ins</div>
+      <CloudflareAccountCard />
+
+      <section className="space-y-2">
+        <SubHeading
+          title="Access sign-ins"
+          help="The Cloudflare Access hostnames your saved connections use, and whether you're signed in to each."
+        />
         {hostnames.length === 0 ? (
-          <p className="text-xs text-text-muted">No connections use Cloudflare Access yet.</p>
+          <Empty>No connections use Cloudflare Access.</Empty>
         ) : !s || s.source === "missing" ? (
-          <p className="text-xs text-text-muted">Install cloudflared to see and manage sign-ins.</p>
+          <Empty>Install cloudflared to manage sign-ins.</Empty>
         ) : (
-          <div className="flex flex-col gap-1.5" data-testid="access-signins">
+          <List data-testid="access-signins">
             {hostnames.map((h) => (
-              <div key={h} className="rounded-md border border-border px-3 py-2">
-                <AccessSignIn hostname={h} />
-              </div>
+              <AccessSignIn key={h} hostname={h} />
             ))}
-          </div>
+          </List>
         )}
-      </div>
+      </section>
     </div>
   );
 }

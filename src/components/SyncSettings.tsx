@@ -1,23 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowRight,
-  ArrowLeft,
-  RefreshCw,
-  Trash2,
-  Plus,
-  AlertTriangle,
-  Folder,
-  Loader2,
-  Cloud,
-  CloudOff,
-  X,
-} from "lucide-react";
+import { ArrowRight, ArrowLeft, ArrowLeftRight, Trash2, Plus } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ipc } from "@/lib/ipc";
 import { useSync } from "@/stores/syncStore";
 import { useConnections } from "@/stores/connectionsStore";
 import { relTime } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { Dropdown } from "./ui/Dropdown";
+import {
+  Advanced,
+  Btn,
+  Empty,
+  Group,
+  InfoTip,
+  List,
+  ListRow,
+  Note,
+  Row,
+  Segmented,
+  Status,
+  SubHeading,
+  Switch,
+  TextInput,
+  inputClass,
+} from "./settings/kit";
 import type {
   PairView,
   SyncDirection,
@@ -41,36 +47,45 @@ export function SyncSettings() {
     void useSync.getState().refresh();
   }, []);
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-xs text-text-muted">Sync runs while Faro is open.</p>
-        </div>
-        {!adding && (
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            className="btn-accent flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white"
-          >
-            <Plus size={13} /> Add folder
-          </button>
-        )}
-      </div>
+  const addBtn = (
+    <Btn variant="primary" size="sm" icon={<Plus size={12} />} onClick={() => setAdding(true)}>
+      Add folder
+    </Btn>
+  );
 
+  return (
+    <div className="space-y-3">
       {adding && <PairForm onDone={() => setAdding(false)} />}
 
-      <div className="divide-y divide-border">
-        {pairs.length === 0 ? (
-          <div className="py-8 text-center text-sm text-text-dim">
-            No folders syncing yet.
-          </div>
-        ) : (
-          pairs.map((p) => <PairRow key={p.id} pair={p} />)
-        )}
-      </div>
+      {pairs.length === 0 ? (
+        !adding && <Empty action={addBtn}>No folders syncing yet.</Empty>
+      ) : (
+        <>
+          <SubHeading
+            title="Folders"
+            help="Sync runs while Faro is open. Each folder is watched and kept in step with its server path."
+            actions={!adding && addBtn}
+          />
+          <List data-sync-pairs="">
+            {pairs.map((p) => (
+              <PairRow key={p.id} pair={p} />
+            ))}
+          </List>
+        </>
+      )}
     </div>
   );
+}
+
+function pairStatus(pair: PairView): { tone: "ok" | "warn" | "bad" | "off" | "busy"; text: string } {
+  if (!pair.enabled) return { tone: "off", text: "Paused" };
+  if (pair.state === "error") return { tone: "bad", text: "Error" };
+  if (pair.mode === "onDemand") return { tone: "ok", text: "On demand" };
+  if (pair.state === "syncing")
+    return { tone: "busy", text: `Syncing${pair.inFlight > 0 ? ` · ${pair.inFlight}` : ""}` };
+  const live = pair.running || pair.state === "idle";
+  if (pair.lastSynced) return { tone: live ? "ok" : "off", text: `Synced ${relTime(pair.lastSynced)} ago` };
+  return { tone: "off", text: "Never synced" };
 }
 
 function PairRow({ pair }: { pair: PairView }) {
@@ -81,18 +96,30 @@ function PairRow({ pair }: { pair: PairView }) {
   const [conflicts, setConflicts] = useState<TwoWayConflict[]>([]);
   const [resolving, setResolving] = useState(false);
   const [conflictError, setConflictError] = useState<string | null>(null);
-  useEffect(() => { if (pair.twoWay) void ipc.folderSyncConflicts(pair.id).then(setConflicts).catch(e => setConflictError(String(e))); }, [pair.id, pair.twoWay, pair.state, pair.lastError, pair.lastSynced]);
+  useEffect(() => {
+    if (pair.twoWay)
+      void ipc.folderSyncConflicts(pair.id).then(setConflicts).catch((e) => setConflictError(String(e)));
+  }, [pair.id, pair.twoWay, pair.state, pair.lastError, pair.lastSynced]);
   async function resolveConflict(conflict: TwoWayConflict, local: boolean) {
-    setResolving(true); setConflictError(null);
-    try { await ipc.folderSyncResolve(pair.id, conflict, local); await syncNow(pair.id); setConflicts(await ipc.folderSyncConflicts(pair.id)); }
-    catch(e) { setConflictError(String(e)); } finally { setResolving(false); }
+    setResolving(true);
+    setConflictError(null);
+    try {
+      await ipc.folderSyncResolve(pair.id, conflict, local);
+      await syncNow(pair.id);
+      setConflicts(await ipc.folderSyncConflicts(pair.id));
+    } catch (e) {
+      setConflictError(String(e));
+    } finally {
+      setResolving(false);
+    }
   }
   const [freeing, setFreeing] = useState(false);
 
   const profile = profiles.find((p) => p.id === pair.profileId);
-  const Arrow = pair.twoWay ? RefreshCw : pair.direction === "localToRemote" ? ArrowRight : ArrowLeft;
+  const Arrow = pair.twoWay ? ArrowLeftRight : pair.direction === "localToRemote" ? ArrowRight : ArrowLeft;
   const syncing = pair.state === "syncing";
   const isOnDemand = pair.mode === "onDemand";
+  const st = pairStatus(pair);
 
   const freeUpSpace = async () => {
     setFreeing(true);
@@ -105,126 +132,106 @@ function PairRow({ pair }: { pair: PairView }) {
     }
   };
 
+  const how = isOnDemand
+    ? "On demand: files download when opened"
+    : `${pair.twoWay ? "Both directions" : pair.direction === "localToRemote" ? "Upload" : "Download"} · ${
+        pair.strategy === "mirror" ? "Sync deletions" : "Keep extra files"
+      }`;
+  const excludes = pair.exclude?.length
+    ? `\nExcludes: ${pair.exclude.join(", ")}`
+    : "";
+  const showConflicts = pair.twoWay && conflicts.length > 0;
+  const hasExtra = !!pair.lastError || !!conflictError || showConflicts;
+
   return (
-    <div className="py-4">
-      <div className="flex items-start gap-3">
-        <StatusDot pair={pair} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-text">
-              {pair.name}
-            </span>
-            <span className="shrink-0 text-[11px] text-text-dim">
-              {profile?.name ?? "unknown server"}
-            </span>
-          </div>
-          <div className="mt-1 flex items-center gap-1.5 truncate font-mono text-[11px] text-text-muted">
-            <Folder size={10} className="shrink-0 text-text-dim" />
-            <span className="truncate">{pair.localRoot}</span>
-            <Arrow size={11} className="shrink-0 text-accent" />
-            <span className="truncate">{pair.remoteRoot}</span>
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-text-dim">
-            {isOnDemand ? (
-              <span className="flex items-center gap-1 uppercase tracking-wider text-accent">
-                <Cloud size={10} /> on-demand
-              </span>
-            ) : (
-              <span>{pair.twoWay ? "Both directions" : pair.direction === "localToRemote" ? "Upload" : "Download"} · {pair.strategy === "mirror" ? "Sync deletions" : "Keep extra files"}</span>
-            )}
-            {pair.exclude?.length > 0 && (
-              <span title={pair.exclude.join("\n")}>
-                {pair.exclude.length} exclude
-                {pair.exclude.length === 1 ? "" : "s"}
-              </span>
-            )}
-            {isOnDemand ? (
-              <span>Downloads on open</span>
-            ) : syncing ? (
-              <span className="flex items-center gap-1 text-warning">
-                <Loader2 size={10} className="animate-spin" />
-                Syncing{pair.inFlight > 0 ? ` · ${pair.inFlight} in flight` : ""}
-              </span>
-            ) : pair.lastSynced ? (
-              <span>Synced {relTime(pair.lastSynced)} ago</span>
-            ) : (
-              <span>Never synced</span>
-            )}
-            {!pair.enabled && <span className="text-text-dim">Paused</span>}
-          </div>
-          {conflictError && <p className="text-xs text-danger">{conflictError}</p>}
-          {pair.twoWay && conflicts.length > 0 && <div className="mt-2 space-y-2 rounded border border-border p-2">
-            <p className="text-[11px] text-text-muted">Choose a version for each conflict. The other version goes to recovery. Choices are rechecked before applying.</p>
-            {conflicts.map(conflict => <div key={conflict.relative} className="space-y-1 border-t border-border py-1 text-[11px]">
-              <div className="break-all font-mono">{conflict.relative}</div>
-              <div className="flex gap-2">{([true, false] as const).map(local => { const file = local ? conflict.state.local : conflict.state.remote; return <button key={String(local)} disabled={resolving || !pair.enabled} className="rounded border border-border px-2 py-1 disabled:opacity-40" onClick={() => void resolveConflict(conflict, local)}>Use {local ? "local" : "remote"} {file ? `(${file.size} bytes)` : "deletion"}</button>; })}</div>
-            </div>)}
-          </div>}
+    <ListRow
+      data-sync-pair={pair.id}
+      title={
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate">{pair.name}</span>
+          <span className="shrink-0 text-xs text-text-dim">{profile?.name ?? "unknown server"}</span>
+        </span>
+      }
+      detail={
+        <span
+          className="flex min-w-0 items-center gap-1.5 font-mono"
+          title={`${pair.localRoot}\n${pair.remoteRoot}\n${how}${excludes}`}
+        >
+          <span className="min-w-0 truncate">{pair.localRoot}</span>
+          <Arrow size={11} className="shrink-0" />
+          <span className="min-w-0 truncate">{pair.remoteRoot}</span>
+        </span>
+      }
+      status={<Status tone={st.tone}>{st.text}</Status>}
+      actions={
+        <>
+          {isOnDemand ? (
+            <Btn
+              size="sm"
+              onClick={freeUpSpace}
+              busy={freeing}
+              disabled={!pair.enabled}
+              title="Evict downloaded files back to placeholders"
+            >
+              Free up space
+            </Btn>
+          ) : (
+            <Btn size="sm" onClick={() => syncNow(pair.id)} disabled={!pair.enabled || syncing} title="Sync now">
+              Sync now
+            </Btn>
+          )}
+          <Switch checked={pair.enabled} onChange={(v) => setEnabled(pair.id, v)} label={`Sync ${pair.name}`} />
+          <Btn
+            variant="ghost"
+            size="sm"
+            onClick={() => remove(pair.id)}
+            title="Remove this sync pair"
+            aria-label="Remove this sync pair"
+            className="w-6 px-0 hover:text-danger"
+            icon={<Trash2 size={12} />}
+          />
+        </>
+      }
+    >
+      {hasExtra ? (
+        <div className="space-y-1">
           {pair.lastError && (
-            <div className="mt-1 flex items-start gap-1.5 text-[11px] text-danger">
-              <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+            <Note tone="danger">
               <span className="break-all">{pair.lastError}</span>
+            </Note>
+          )}
+          {conflictError && <Note tone="danger">{conflictError}</Note>}
+          {showConflicts && (
+            <div data-sync-conflicts="" className="space-y-1">
+              <div className="flex items-center gap-1.5 text-xs text-warning">
+                {conflicts.length} conflict{conflicts.length === 1 ? "" : "s"}
+                <InfoTip text="Choose a version for each file. The other version goes to recovery. Choices are rechecked before applying." />
+              </div>
+              {conflicts.map((conflict) => (
+                <div key={conflict.relative} className="flex min-h-7 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-muted" title={conflict.relative}>
+                    {conflict.relative}
+                  </span>
+                  {([true, false] as const).map((local) => {
+                    const file = local ? conflict.state.local : conflict.state.remote;
+                    return (
+                      <Btn
+                        key={String(local)}
+                        size="sm"
+                        disabled={resolving || !pair.enabled}
+                        onClick={() => void resolveConflict(conflict, local)}
+                      >
+                        Use {local ? "local" : "remote"} {file ? `(${file.size} bytes)` : "deletion"}
+                      </Btn>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {isOnDemand ? (
-            <button
-              type="button"
-              onClick={freeUpSpace}
-              disabled={!pair.enabled || freeing}
-              title="Free up space — evict downloaded files back to placeholders"
-              className="flex items-center gap-1 rounded-md border border-border bg-bg-panel px-2 py-1 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-40"
-            >
-              <CloudOff size={11} className={cn(freeing && "animate-pulse")} />
-              Free up space
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => syncNow(pair.id)}
-              disabled={!pair.enabled || syncing}
-              title="Sync now"
-              className="flex items-center gap-1 rounded-md border border-border bg-bg-panel px-2 py-1 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-40"
-            >
-              <RefreshCw size={11} className={cn(syncing && "animate-spin")} />
-              Sync now
-            </button>
-          )}
-          <Toggle
-            checked={pair.enabled}
-            onChange={(v) => setEnabled(pair.id, v)}
-          />
-          <button
-            type="button"
-            onClick={() => remove(pair.id)}
-            title="Remove this sync pair"
-            className="flex items-center rounded-md p-1.5 text-text-dim hover:bg-danger/10 hover:text-danger"
-          >
-            <Trash2 size={12} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatusDot({ pair }: { pair: PairView }) {
-  const tone = !pair.enabled
-    ? "bg-text-dim"
-    : pair.state === "error"
-      ? "bg-danger"
-      : pair.running || pair.state === "syncing" || pair.state === "idle"
-        ? "bg-success"
-        : "bg-text-dim";
-  const pulse = pair.state === "syncing";
-  return (
-    <div className="relative mt-1.5">
-      <div className={cn("h-2 w-2 rounded-full", tone)} />
-      {pulse && (
-        <div className={cn("absolute inset-0 h-2 w-2 animate-ping rounded-full opacity-60", tone)} />
-      )}
-    </div>
+      ) : undefined}
+    </ListRow>
   );
 }
 
@@ -309,196 +316,175 @@ function PairForm({ onDone }: { onDone: () => void }) {
     }
   };
 
-  return (
-    <div className="space-y-3 border-y border-border py-3">
-      <div className="flex items-center gap-2">
-        <div className="flex-1 text-xs font-semibold text-text">Add folder</div>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!canSubmit || busy}
-          className="btn-accent flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-        >
-          {busy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-          Start syncing
-        </button>
-        <button
-          type="button"
-          onClick={onDone}
-          className="rounded-md p-1 text-text-muted hover:bg-bg-hover hover:text-text"
-          title="Cancel"
-        >
-          <X size={13} />
-        </button>
-      </div>
+  const deletedNote =
+    strategy === "additive"
+      ? twoWay
+        ? "Deleted files come back from the other side."
+        : "Extra files stay in the destination."
+      : "Deleted files go to recovery.";
 
-      <div className="grid grid-cols-2 gap-3">
-      <Field label="Name">
-        <input
+  return (
+    <Group
+      title="Add folder"
+      actions={
+        <Btn variant="ghost" size="sm" onClick={onDone}>
+          Cancel
+        </Btn>
+      }
+    >
+      <Row label="Name">
+        <TextInput
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="My project"
-          className="w-full rounded-md border border-border bg-bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+          aria-label="Name"
+          className="w-56"
         />
-      </Field>
+      </Row>
 
-      <Field label="Connection">
+      <Row label="Connection">
         {profileOptions.length === 0 ? (
-          <div className="text-xs text-text-dim">
-            No saved connections yet. Add one first.
-          </div>
+          <span className="text-sm text-text-dim">No saved connections yet.</span>
         ) : (
-          <Select
+          <Dropdown<string>
             value={profileId}
             onChange={pickProfile}
             options={profileOptions}
+            searchable={profileOptions.length > 8}
+            aria-label="Connection"
+            className="h-7 w-56 py-0"
           />
         )}
-      </Field>
+      </Row>
 
-      </div>
-      <Field label="Local folder">
-        <div className="flex w-full items-center gap-1.5">
-          <input
-            value={localRoot}
-            onChange={(e) => setLocalRoot(e.target.value)}
-            placeholder="C:\\path\\to\\folder"
-            className="min-w-0 flex-1 rounded-md border border-border bg-bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
-          />
-          <button
-            type="button"
-            onClick={browse}
-            className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm text-text-muted hover:bg-bg-hover hover:text-text"
-          >
-            Browse…
-          </button>
-        </div>
-      </Field>
+      <Row label="Local folder">
+        <TextInput
+          value={localRoot}
+          onChange={(e) => setLocalRoot(e.target.value)}
+          placeholder="C:\path\to\folder"
+          aria-label="Local folder"
+          className="min-w-0 flex-1 font-mono text-xs"
+        />
+        <Btn onClick={browse}>Browse…</Btn>
+      </Row>
 
-      <Field label="Remote path">
-        <input
+      <Row label="Remote path">
+        <TextInput
           value={remoteRoot}
           onChange={(e) => setRemoteRoot(e.target.value)}
           placeholder="/home/user/folder"
-          className="w-full rounded-md border border-border bg-bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
+          aria-label="Remote path"
+          className="min-w-0 flex-1 font-mono text-xs"
         />
-      </Field>
+      </Row>
 
       {vfsSupported && (
-        <Field label="Mode">
+        <Row
+          label="Mode"
+          help="On demand: files show as placeholders and download only when opened. Free up space turns them back into placeholders. Direction, deletions and excludes don't apply."
+        >
           <Segmented<SyncMode>
             value={mode}
             onChange={setMode}
+            label="Mode"
             options={[
-              { value: "mirror", label: "Mirror (copy files)" },
-              { value: "onDemand", label: "On-demand (placeholders)" },
+              { value: "mirror", label: "Copy files" },
+              { value: "onDemand", label: "On demand" },
             ]}
           />
-          {mode === "onDemand" && (
-            <div className="mt-2 flex items-start gap-2 rounded-md border border-accent/30 bg-accent-soft/40 px-2.5 py-2 text-[11.5px] text-text-muted">
-              <Cloud size={12} className="mt-0.5 shrink-0 text-accent" />
-              <span>
-                Files show in the folder as placeholders and download only when
-                opened. Use “Free up space” to evict them back to placeholders.
-                Direction, strategy, and excludes don’t apply.
-              </span>
-            </div>
-          )}
-        </Field>
+        </Row>
       )}
 
       {mode === "mirror" && (
         <>
-      <div className="grid grid-cols-2 gap-3">
-      <Field label="Direction">
-        <Select value={twoWay ? "both" : direction}
-          onChange={value => { setTwoWay(value === "both"); if (value !== "both") setDirection(value as SyncDirection); }}
-          options={[
-            { value: "localToRemote", label: "Upload · local to server" },
-            { value: "remoteToLocal", label: "Download · server to local" },
-            { value: "both", label: "Both directions" },
-          ]} />
-
-      </Field>
-      <Field label="Deleted files">
-        <Select value={strategy} onChange={value => setStrategy(value as SyncStrategy)} options={[
-          { value: "additive", label: "Keep extra files" },
-          { value: "mirror", label: "Sync deletions" },
-        ]} />
-      </Field>
-      </div>
-      <p className="text-xs text-text-dim">{strategy === "additive"
-        ? twoWay ? "Deleted files are restored from the other folder." : "Files missing from the source stay in the destination."
-        : "Deleted and replaced files are kept in recovery."}
-        {twoWay && " If both copies change, you choose which to keep."}</p>
-      <details className="border-t border-border pt-3">
-        <summary className="cursor-pointer text-xs text-text-muted hover:text-text">Advanced settings</summary>
-        <div className="space-y-3 pt-3">
-      {strategy === "mirror" && (
-        <div className="space-y-2 rounded-md border border-danger/30 bg-danger-soft/60 px-2.5 py-2">
-          <div className="flex items-start gap-2 text-[11.5px] text-text-muted">
-            <AlertTriangle size={12} className="mt-0.5 shrink-0 text-danger" />
-            Limit how many files can be moved to recovery in one sync. An empty source requires review before deleting files.
-          </div>
-          <div className="flex items-center gap-1.5 pl-5">
-            <span className="text-[11px] text-text-muted">
-              Max deletes per sync
-            </span>
-            <input
-              type="number"
-              min={0}
-              max={100000}
-              value={mirrorDeleteCap}
-              onChange={(e) =>
-                setMirrorDeleteCap(
-                  Math.max(0, Math.min(100000, parseInt(e.target.value) || 0))
-                )
-              }
-              className="w-20 rounded-md border border-border bg-bg-panel px-2 py-1 text-sm outline-none focus:border-accent"
+          <Row label="Direction" help={twoWay ? "If both copies change, you choose which to keep." : undefined}>
+            <Dropdown<string>
+              value={twoWay ? "both" : direction}
+              onChange={(value) => {
+                setTwoWay(value === "both");
+                if (value !== "both") setDirection(value as SyncDirection);
+              }}
+              options={[
+                { value: "localToRemote", label: "Upload to server" },
+                { value: "remoteToLocal", label: "Download from server" },
+                { value: "both", label: "Both directions" },
+              ]}
+              aria-label="Direction"
+              className="h-7 w-56 py-0"
             />
-            <span className="text-[11px] text-text-dim">0 = no cap</span>
-          </div>
-        </div>
-      )}
+          </Row>
+          <Row label="Deleted files" note={deletedNote}>
+            <Dropdown<string>
+              value={strategy}
+              onChange={(value) => setStrategy(value as SyncStrategy)}
+              options={[
+                { value: "additive", label: "Keep extra files" },
+                { value: "mirror", label: "Sync deletions" },
+              ]}
+              aria-label="Deleted files"
+              className="h-7 w-56 py-0"
+            />
+          </Row>
 
-      <Field label="Exclude patterns">
-        <textarea
-          value={excludeText}
-          onChange={(e) => setExcludeText(e.target.value)}
-          placeholder={"node_modules\n.git\n*.tmp\n/dist"}
-          rows={3}
-          spellCheck={false}
-          className="w-full resize-y rounded-md border border-border bg-bg-panel px-2.5 py-1.5 font-mono text-[12px] outline-none focus:border-accent"
-        />
-        <div className="mt-1 text-[10.5px] text-text-dim">
-          One gitignore-style pattern per line (also comma-separated). Matches are
-          never uploaded or mirror-deleted.
-        </div>
-      </Field>
+          <Advanced>
+            {strategy === "mirror" && (
+              <Row
+                label="Max deletes per sync"
+                help="Limits how many files one sync can move to recovery. An empty source always asks for review first."
+                note="0 = no limit"
+              >
+                <TextInput
+                  type="number"
+                  min={0}
+                  max={100000}
+                  value={mirrorDeleteCap}
+                  onChange={(e) =>
+                    setMirrorDeleteCap(Math.max(0, Math.min(100000, parseInt(e.target.value) || 0)))
+                  }
+                  aria-label="Max deletes per sync"
+                  className="w-[72px] text-right tabular-nums"
+                />
+              </Row>
+            )}
 
-      <Field label="Check for changes every">
-        <div className="flex items-center gap-1.5">
-          <input
-            type="number"
-            min={5}
-            max={86400}
-            value={pollIntervalSecs}
-            onChange={(e) =>
-              setPollIntervalSecs(
-                Math.max(5, Math.min(86400, parseInt(e.target.value) || 60))
-              )
-            }
-            className="w-24 rounded-md border border-border bg-bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
-          />
-          <span className="text-xs text-text-dim">seconds</span>
-        </div>
-      </Field>
-        </div>
-      </details>
+            <Row
+              label="Exclude patterns"
+              help="One gitignore-style pattern per line (commas work too). Matches are never uploaded or mirror-deleted."
+            >
+              <textarea
+                value={excludeText}
+                onChange={(e) => setExcludeText(e.target.value)}
+                placeholder={"node_modules\n.git\n*.tmp\n/dist"}
+                rows={3}
+                spellCheck={false}
+                aria-label="Exclude patterns"
+                className={cn(inputClass, "h-auto w-full resize-y py-1.5 font-mono text-xs leading-relaxed")}
+              />
+            </Row>
+
+            <Row label="Check every (seconds)">
+              <TextInput
+                type="number"
+                min={5}
+                max={86400}
+                value={pollIntervalSecs}
+                onChange={(e) =>
+                  setPollIntervalSecs(Math.max(5, Math.min(86400, parseInt(e.target.value) || 60)))
+                }
+                aria-label="Check for changes every (seconds)"
+                className="w-[72px] text-right tabular-nums"
+              />
+            </Row>
+          </Advanced>
         </>
       )}
 
-    </div>
+      <Row label="">
+        <Btn variant="primary" onClick={submit} busy={busy} disabled={!canSubmit}>
+          Start syncing
+        </Btn>
+      </Row>
+    </Group>
   );
 }
 
@@ -509,106 +495,4 @@ function parseExclude(text: string): string[] {
     .split(/[\n,]/)
     .map((s) => s.trim())
     .filter((s) => s !== "" && !s.startsWith("#"));
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div className="mb-1 text-xs text-text-muted">{label}</div>
-      {children}
-    </div>
-  );
-}
-
-function Select({
-  value,
-  onChange,
-  options,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-md border border-border bg-bg-panel px-2.5 py-1.5 text-sm outline-none hover:border-text-dim focus:border-accent"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (v: T) => void;
-  options: { value: T; label: string }[];
-}) {
-  return (
-    <div className="inline-flex w-full rounded-md border border-border bg-bg-panel p-0.5">
-      {options.map((o) => {
-        const active = value === o.value;
-        return (
-          <button
-            key={o.value}
-            type="button"
-            onClick={() => onChange(o.value)}
-            className={cn(
-              "flex-1 rounded-[5px] px-2 py-1 text-xs font-medium transition-colors",
-              active
-                ? "bg-bg-subtle text-text shadow-elev-1"
-                : "text-text-muted hover:text-text"
-            )}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
-        checked
-          ? "bg-accent border-accent"
-          : "bg-bg-subtle border-border hover:border-text-dim"
-      )}
-    >
-      <span
-        className={cn(
-          "absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-elev-1 transition-transform",
-          checked ? "translate-x-4" : "translate-x-0"
-        )}
-      />
-    </button>
-  );
 }

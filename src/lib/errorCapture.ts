@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useToasts } from "@/stores/toastStore";
 import { messageOf } from "@/lib/errors";
+import { ipc } from "@/lib/ipc";
 
 // Crashes and stray errors land in the notification centre, so the status
 // bar's error pill can count them and "Copy details" can hand them over.
@@ -18,6 +19,15 @@ export function crashDetail(
 
 let recentCrash: { message: string; at: number } | null = null;
 
+/** Also keep it in the local crash log (Settings › About › Show log file). */
+function toLogFile(text: string): void {
+  try {
+    void ipc.appLogWrite("error", text).catch(() => {});
+  } catch {
+    // No backend (tests): the notification entry is enough.
+  }
+}
+
 /** Log a region crash. The recover panel is already on screen, so no card. */
 export function logCrash(
   region: string,
@@ -25,6 +35,7 @@ export function logCrash(
   componentStack?: string | null,
 ): void {
   recentCrash = { message: messageOf(error), at: Date.now() };
+  toLogFile(`UI crash in ${region}: ${crashDetail(error, componentStack)}`);
   useToasts.getState().push({
     id: `crash:${region}`,
     variant: "error",
@@ -48,6 +59,7 @@ function logUncaught(kind: "error" | "rejection", error: unknown): void {
       Date.now() - recentCrash.at < 2000
     )
       return;
+    toLogFile(`Uncaught ${kind}: ${crashDetail(error)}`);
     useToasts.getState().push({
       id: `uncaught:${message.slice(0, 120)}`,
       variant: "error",

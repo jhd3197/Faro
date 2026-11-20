@@ -1,34 +1,18 @@
 import { useEffect, useState } from "react";
-import {
-  Info,
-  Loader2,
-  CheckCircle2,
-  TerminalSquare,
-  Plus,
-  Trash2,
-  Bell,
-  RefreshCw,
-  ArrowUpCircle,
-  Download,
-} from "lucide-react";
-import { ipc } from "@/lib/ipc";
 import { openExternal } from "@/lib/openExternal";
-import { toast } from "@/stores/toastStore";
+import { DISCORD_URL, issueUrl, showLogFile, systemInfo } from "@/lib/feedback";
 import { useSettings } from "@/stores/settingsStore";
 import { useLayout } from "@/stores/layoutStore";
-import { SETTINGS_ENTRY_POINTS } from "@/lib/settingsNav";
 import { useUpdater } from "@/stores/updaterStore";
 import { ReleaseNotesText } from "./DiscoveryDialog";
 import { releaseChanges } from "@/lib/releaseNotes";
 import { useTips } from "@/stores/tipsStore";
 import { UpdateProgress } from "./UpdateProgress";
-import type { PathStatus } from "@/lib/types";
 import { getVersion } from "@tauri-apps/api/app";
-import { cn } from "@/lib/cn";
+import { Advanced, Btn, CheckRow, Group, Note, Row, Status, type Tone } from "./settings/kit";
 
-/// Settings → About. The app's identity/version, plus the trust/UX fundamentals
-/// from Plan 16: the one-click "Add faro-cli to PATH" row (Phase 4). The updater
-/// card (Phase 2) and notification toggles (Phase 3) join this section as they land.
+/// Settings → About. The app's version and updates, desktop notifications,
+/// and tips (Plan 16). faro-cli's PATH row lives under Command line.
 export function AboutSettings() {
   const [version, setVersion] = useState<string | null>(null);
 
@@ -48,35 +32,30 @@ export function AboutSettings() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h3 className="mb-1 flex items-center gap-2 text-sm font-medium text-text">
-          <Info size={15} className="text-accent" />
-          Faro{version ? ` ${version}` : ""}
-        </h3>
-        <p className="text-xs text-text-muted">
-          A modern client for SFTP · FTP · S3 · Azure — plus the Agent Bridge.
-        </p>
-      </div>
+    <>
+      <Group title="Faro" help="A client for SFTP, FTP, S3 and Azure, plus the Agent Bridge.">
+        <Row label="Version" keywords="about version">
+          <span className="text-sm tabular-nums text-text">{version ?? "Unknown"}</span>
+        </Row>
+        <UpdaterRows />
+      </Group>
 
-      <div className="flex flex-wrap gap-2">
-        <button onClick={() => useLayout.getState().openDialog("welcome")} className="rounded-md border border-border px-3 py-2 text-xs hover:bg-bg-hover">Show welcome</button>
-        <button onClick={() => useLayout.getState().openDialog("whatsNew")} className="rounded-md border border-border px-3 py-2 text-xs hover:bg-bg-hover">What's new</button>
-        <TipsControls />
-      </div>
-      <UpdaterCard />
+      <Group title="Help">
+        <TipsRows />
+      </Group>
 
-      <NotificationsRow />
+      <FeedbackGroup />
 
-      <PathRow />
-    </div>
+      <NotificationsGroup />
+
+    </>
   );
 }
 
 /// In-app updater (Plan 16 Phase 1/2). Manual "Check for updates", the current
 /// status, and the download → restart flow. The launch check + the prompt bar
-/// live in UpdatePrompt; this is the on-demand surface.
-function UpdaterCard() {
+/// live in the title bar UpdateChip; this is the on-demand surface.
+function UpdaterRows() {
   const { status, version, downloaded, total, error, errorDetail, releaseUrl,
     notes, lastChecked, retryAction, check, download, restart, retry } = useUpdater();
   const busy = ["checking", "downloading", "verifying", "installing"].includes(status);
@@ -88,12 +67,21 @@ function UpdaterCard() {
     : status === "ready" ? `Faro ${version} is ready to install.`
     : status === "installing" ? "Installing and restarting Faro…"
     : status === "error" ? retryAction === "check" ? "Couldn't check for updates" : "Update couldn't finish"
-    : "Keep Faro up to date.";
-  const description = status === "manual" ? "This update needs a manual download. Open Downloads to get the installer."
+    : "Not checked yet";
+  const tone: Tone = busy ? "busy"
+    : status === "current" ? "ok"
+    : status === "error" ? "bad"
+    : status === "available" || status === "manual" || status === "ready" ? "warn"
+    : "off";
+  const help = status === "manual" ? "This update needs a manual download. Open Downloads to get the installer."
     : status === "available" ? "Download while you work. Install and restart when you're ready."
-    : status === "ready" ? "Your download is verified. Finish your transfers and save your work before restarting."
-    : status === "verifying" ? "Checking the download's signature before installation."
-    : status === "error" ? error : null;
+    : status === "ready" ? "The download is verified. Finish your transfers and save your work before restarting."
+    : status === "verifying" ? "Checking the download's signature before installing."
+    : undefined;
+  const note = status === "error" ? <Note tone="danger">{error}</Note>
+    : status === "ready" ? "Save your work before restarting."
+    : lastChecked && !busy ? `Last checked ${new Date(lastChecked).toLocaleString()}`
+    : undefined;
   const action = status === "available" ? download : status === "ready" ? restart
     : status === "manual" ? () => openExternal(releaseUrl)
     : status === "error" ? retry : () => check(false);
@@ -101,301 +89,154 @@ function UpdaterCard() {
     : status === "manual" ? "Open Downloads"
     : status === "error" ? retryAction === "download" ? "Retry download" : "Try again"
     : "Check for updates";
+  const primary = ["available", "manual", "ready"].includes(status);
+  const showNotes = !!releaseChanges(notes) && ["available", "manual", "ready"].includes(status);
 
   return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
-        <ArrowUpCircle size={15} className="text-accent" /> Updates
-      </div>
-      <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm">
-        <div className="flex items-start gap-2" role="status" aria-live="polite">
-          {busy ? <Loader2 size={15} className="mt-0.5 shrink-0 animate-spin text-accent" />
-            : status === "current" ? <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-500" />
-            : <ArrowUpCircle size={15} className="mt-0.5 shrink-0 text-accent" />}
-          <div className="min-w-0">
-            <div className="font-medium text-text">{title}</div>
-            {description && <p className="mt-1 text-xs leading-relaxed text-text-muted">{description}</p>}
+    <>
+      <Row label="Updates" help={help} note={note} keywords="update upgrade check release">
+        <span role="status" aria-live="polite" className="min-w-0 flex-1">
+          <Status tone={tone}>{title}</Status>
+        </span>
+        {!busy && (
+          <>
+            <Btn size="sm" variant={primary ? "primary" : "default"} onClick={() => void action()}>
+              {label}
+            </Btn>
+            {status !== "manual" && (
+              <Btn size="sm" variant="ghost" onClick={() => openExternal(releaseUrl)}>
+                {status === "error" ? "Open Downloads" : "Release notes"}
+              </Btn>
+            )}
+            {status === "manual" && (
+              <Btn size="sm" variant="ghost" onClick={() => void check(false)}>
+                Check again
+              </Btn>
+            )}
+          </>
+        )}
+      </Row>
+      {status === "downloading" && (
+        <Row label="">
+          <div className="w-full">
+            <UpdateProgress downloaded={downloaded} total={total} />
           </div>
-        </div>
-        {status === "downloading" && <div className="mt-3"><UpdateProgress downloaded={downloaded} total={total} /></div>}
-        {!busy && <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button onClick={() => void action()}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 active:scale-[0.98]">
-            {status === "available" || status === "manual" ? <Download size={13} /> : <RefreshCw size={13} />}
-            {label}
-          </button>
-          {status !== "manual" && <button onClick={() => openExternal(releaseUrl)}
-            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text">
-            {status === "error" ? "Open Downloads" : "Release notes"}
-          </button>}
-          {status === "manual" && <button onClick={() => void check(false)}
-            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text">
-            Check again
-          </button>}
-        </div>}
-        {releaseChanges(notes) && ["available", "manual", "ready"].includes(status) && <section aria-label="Release notes" className="mt-3 max-h-52 overflow-auto"><h3 className="mb-2 text-sm font-medium">What's new</h3><ReleaseNotesText notes={notes} /></section>}
-        {errorDetail && <details className="mt-3 text-xs text-text-muted">
-          <summary className="cursor-pointer hover:text-text">Technical details</summary>
-          <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words">{errorDetail}</p>
-        </details>}
-        {lastChecked && !busy && <p className="mt-3 text-xs text-text-muted">
-          Last checked {new Date(lastChecked).toLocaleString()}
-        </p>}
-      </div>
-    </div>
+        </Row>
+      )}
+      {showNotes && (
+        <Row label="What's new">
+          <section aria-label="Release notes" className="max-h-52 w-full overflow-auto text-sm">
+            <ReleaseNotesText notes={notes} />
+          </section>
+        </Row>
+      )}
+      {errorDetail && (
+        <Row label="">
+          <div className="w-full">
+            <Advanced title="Technical details">
+              <p className="max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-text-muted">
+                {errorDetail}
+              </p>
+            </Advanced>
+          </div>
+        </Row>
+      )}
+    </>
   );
 }
 
 /// Desktop-notification toggles (Plan 16 Phase 3). OS toasts for a curated set of
 /// events (transfer batch done/failed, folder-sync error, edit-in-place save
 /// failure). Off-window by default so they don't double up with in-app toasts.
-function NotificationsRow() {
+function NotificationsGroup() {
   const notifications = useSettings((s) => s.notifications);
   const setNotifications = useSettings((s) => s.setNotifications);
 
   return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
-        <Bell size={15} className="text-accent" />
-        Desktop notifications
-      </div>
-      <p className="mb-2 text-xs text-text-muted">
-        OS toasts for transfers finishing, folder-sync errors, and failed
-        edit-in-place saves — so you see them when Faro is in the background.
-      </p>
-      <div className="flex flex-col gap-2">
-        <Toggle
-          label="Enable desktop notifications"
-          checked={notifications.enabled}
-          onChange={(v) => setNotifications({ ...notifications, enabled: v })}
+    <Group title="Notifications">
+      <CheckRow
+        group="Desktop"
+        label="Show notifications"
+        keywords="desktop notifications toasts os"
+        help="OS toasts for finished transfers, folder-sync errors and failed edit-in-place saves, so you see them while Faro is in the background."
+        checked={notifications.enabled}
+        onChange={(v) => setNotifications({ ...notifications, enabled: v })}
+      />
+      {/* Only matters while notifications are on: indented under it. */}
+      <div data-settings-dependent={notifications.enabled ? "on" : "off"}>
+        <CheckRow
+          label="Only when Faro isn't focused"
+          help="Skip OS toasts while the window is in front. In-app toasts already cover it."
+          checked={notifications.unfocusedOnly}
+          disabled={!notifications.enabled}
+          disabledReason="Turn on desktop notifications first."
+          onChange={(v) => setNotifications({ ...notifications, unfocusedOnly: v })}
         />
-        {/* Only matters while notifications are on: indented under it. */}
-        <div className="ml-2 border-l border-border pl-4" data-settings-dependent={notifications.enabled ? "on" : "off"}>
-          <Toggle
-            label="Only when Faro isn't focused"
-            help="Skip toasts while the window is in the foreground (in-app toasts already cover it)."
-            checked={notifications.unfocusedOnly}
-            disabled={!notifications.enabled}
-            onChange={(v) => setNotifications({ ...notifications, unfocusedOnly: v })}
-          />
-        </div>
       </div>
-    </div>
-  );
-}
-
-/// A compact labeled switch matching the settings look.
-function Toggle({
-  label,
-  help,
-  checked,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  help?: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-left text-sm disabled:opacity-50",
-        "hover:bg-bg-hover"
-      )}
-    >
-      <span className="min-w-0">
-        <span className="text-text">{label}</span>
-        {help && <span className="mt-0.5 block text-xs text-text-muted">{help}</span>}
-      </span>
-      <span
-        className={cn(
-          "relative h-5 w-9 shrink-0 rounded-full transition-colors",
-          checked ? "bg-accent" : "bg-border"
-        )}
-      >
-        <span
-          className={cn(
-            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
-            checked ? "translate-x-4" : "translate-x-0.5"
-          )}
-        />
-      </span>
-    </button>
-  );
-}
-
-/// One-click "Add faro-cli to PATH" (Plan 16 Phase 4). Per-user only, so it never
-/// needs admin. `faro-cli` ships as a separate binary from the app; once it's on
-/// PATH it works in any terminal. On Windows this writes the per-user
-/// `HKCU\Environment\Path` (new terminals pick it up immediately); on macOS/Linux
-/// it symlinks into `~/.local/bin` and, if needed, adds one guarded line to the
-/// shell profile.
-function PathRow() {
-  const openSettings = useLayout((s) => s.openSettings);
-  const [status, setStatus] = useState<PathStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = async () => {
-    try {
-      setStatus(await ipc.pathStatus());
-    } catch (e) {
-      toast.error(`Couldn't read PATH status: ${e}`);
-    }
-  };
-
-  useEffect(() => {
-    void load();
-  }, []);
-
-  const add = async () => {
-    setBusy(true);
-    try {
-      const next = await ipc.pathAdd();
-      setStatus(next);
-      toast.success(next.detail ?? "Added faro-cli to your PATH.");
-    } catch (e) {
-      toast.error(`Add to PATH failed: ${e}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    setBusy(true);
-    try {
-      const next = await ipc.pathRemove();
-      setStatus(next);
-      toast.success(next.detail ?? "Removed faro-cli from your PATH.");
-    } catch (e) {
-      toast.error(`Remove from PATH failed: ${e}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Prefer the managed flag for the primary action: right after an add, our
-  // registry/symlink entry is present even though this already-running process's
-  // own PATH won't reflect it until a new terminal (or app restart).
-  const managed = status?.managed ?? false;
-  const onPath = status?.onPath ?? false;
-  const canInstallFirst = status ? !status.binHasCli && !onPath && !managed : false;
-
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-text">
-        <TerminalSquare size={15} className="text-accent" />
-        faro-cli on PATH
-      </div>
-      <p className="mb-2 text-xs text-text-muted">
-        Put the <code className="text-text">faro-cli</code> command on your PATH so
-        it works in any terminal. Per-user only — no admin required.
-      </p>
-
-      <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm">
-        {!status ? (
-          <div className="flex items-center gap-2 text-text-muted">
-            <Loader2 size={15} className="animate-spin" /> Checking…
-          </div>
-        ) : managed ? (
-          <div className="flex items-start gap-2">
-            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-500" />
-            <div className="min-w-0">
-              <div className="text-text">faro-cli is on your PATH (managed by Faro).</div>
-              <p className="mt-0.5 truncate text-xs text-text-muted">{status.binDir}</p>
-            </div>
-          </div>
-        ) : onPath ? (
-          <div className="flex items-start gap-2">
-            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-500" />
-            <div className="min-w-0">
-              <div className="text-text">faro-cli is already on your PATH.</div>
-              {status.cliLocation && (
-                <p className="mt-0.5 truncate text-xs text-text-muted">
-                  {status.cliLocation}
-                </p>
-              )}
-            </div>
-          </div>
-        ) : canInstallFirst ? (
-          <div className="min-w-0">
-            <div className="text-text">faro-cli isn't installed yet.</div>
-            <p className="mt-0.5 text-xs text-text-muted">
-              Install it from the{" "}
-              <button
-                type="button"
-                data-settings-link="aboutCliInstall"
-                onClick={() => openSettings(SETTINGS_ENTRY_POINTS.aboutCliInstall)}
-                className="font-medium text-accent hover:underline"
-              >
-                faro-cli
-              </button>{" "}
-              tab first, then add it to your PATH here.
-            </p>
-          </div>
-        ) : (
-          <div className="min-w-0">
-            <div className="text-text">faro-cli isn't on your PATH.</div>
-            <p className="mt-0.5 truncate text-xs text-text-muted">{status.binDir}</p>
-          </div>
-        )}
-
-        <div className="mt-3 flex gap-2">
-          {managed ? (
-            <button
-              onClick={() => void remove()}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60"
-            >
-              {busy ? (
-                <Loader2 size={13} className="animate-spin" />
-              ) : (
-                <Trash2 size={13} />
-              )}
-              Remove from PATH
-            </button>
-          ) : (
-            <button
-              onClick={() => void add()}
-              disabled={busy || onPath || canInstallFirst}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-60"
-            >
-              {busy ? (
-                <Loader2 size={13} className="animate-spin" />
-              ) : (
-                <Plus size={13} />
-              )}
-              Add to PATH
-            </button>
-          )}
-          <button
-            onClick={() => void load()}
-            disabled={busy}
-            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-    </div>
+    </Group>
   );
 }
 
 /** Tips are one-time pointers in the real UI; bring them back or switch them off. */
-function TipsControls() {
+function TipsRows() {
   const enabled = useTips((s) => s.enabled);
   useEffect(() => { void useTips.getState().init(); }, []);
-  return <>
-    <button onClick={() => useTips.getState().reset()} className="rounded-md border border-border px-3 py-2 text-xs hover:bg-bg-hover">Reset tips</button>
-    <label className="flex items-center gap-2 px-1 text-xs text-text-muted">
-      <input type="checkbox" checked={enabled} onChange={(e) => useTips.getState().setEnabled(e.target.checked)} className="accent-accent" />
-      Show tips
-    </label>
-  </>;
+  return (
+    <>
+      <CheckRow
+        group="Tips"
+        label="Show tips"
+        help="One-time pointers in the app. Reset brings back the ones you dismissed."
+        keywords="tips hints onboarding"
+        checked={enabled}
+        onChange={(v) => useTips.getState().setEnabled(v)}
+      />
+      <Row label="Guides" keywords="welcome tips what's new reset">
+        <Btn size="sm" onClick={() => useLayout.getState().openDialog("welcome")}>Welcome</Btn>
+        <Btn size="sm" onClick={() => useLayout.getState().openDialog("whatsNew")}>What's new</Btn>
+        <Btn size="sm" variant="ghost" onClick={() => useTips.getState().reset()}>Reset tips</Btn>
+      </Row>
+    </>
+  );
+}
+
+/** Feedback goes to GitHub or Discord in the browser. Faro sends nothing on
+ *  its own: the issue opens prefilled and the user reviews it there. */
+function FeedbackGroup() {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(await systemInfo());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <Group
+      title="Feedback"
+      help="Opens GitHub with a short template and your Faro version, OS and WebView filled in. You review it before anything is sent. No hosts, paths or passwords are included."
+    >
+      <Row label="Something broke" keywords="report bug issue problem crash feedback">
+        <Btn size="sm" data-feedback="bug" onClick={() => void issueUrl("bug").then(openExternal)}>
+          Report a bug
+        </Btn>
+        <Btn size="sm" variant="ghost" data-feedback="copy-info" onClick={() => void copy()}>
+          {copied ? "Copied" : "Copy system info"}
+        </Btn>
+      </Row>
+      <Row label="An idea" keywords="feature request suggestion enhancement feedback">
+        <Btn size="sm" data-feedback="idea" onClick={() => void issueUrl("idea").then(openExternal)}>
+          Suggest a feature
+        </Btn>
+      </Row>
+      <Row label="Log file" keywords="log crash logs diagnostics faro.log" help="Faro writes errors and crashes to a local file, keeping the last three sessions. Nothing is uploaded. Attach it to a bug report if it helps; check it first, it can name your servers and paths.">
+        <Btn size="sm" data-feedback="log" onClick={() => void showLogFile()}>
+          Show log file
+        </Btn>
+      </Row>
+      <Row label="Community" keywords="discord chat help support">
+        <Btn size="sm" data-feedback="discord" onClick={() => openExternal(DISCORD_URL)}>
+          Discord
+        </Btn>
+      </Row>
+    </Group>
+  );
 }

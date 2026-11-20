@@ -120,7 +120,7 @@ test("settings ux", { timeout: 180000 }, async () => {
     assert.equal(await htmlTheme(), "dark");
     await openSection("appearance");
     assert.deepEqual(
-      await page.$$eval("[role=radiogroup]", (els) => els.map((e) => e.getAttribute("aria-label"))),
+      await page.$$eval("[data-theme-cards]", (els) => els.map((e) => e.getAttribute("aria-label"))),
       ["Dark theme"],
     );
     // (The demo's Agent Bridge policy auto-approves reads, so that one is on.)
@@ -129,7 +129,7 @@ test("settings ux", { timeout: 180000 }, async () => {
     await clickText("[data-settings-focus='settings-theme-mode'] button", "System");
     await waitTheme("light");
     assert.deepEqual(
-      await page.$$eval("[role=radiogroup]", (els) => els.map((e) => e.getAttribute("aria-label"))),
+      await page.$$eval("[data-theme-cards]", (els) => els.map((e) => e.getAttribute("aria-label"))),
       ["Light theme", "Dark theme"],
     );
     // Cards are drawn in their own theme's colors.
@@ -221,7 +221,7 @@ test("settings ux", { timeout: 180000 }, async () => {
     const limitInput = "[data-settings-dependent] input[aria-label='Bandwidth limit']";
     assert.equal(await page.$eval(limitInput, (e) => e.disabled), true);
     await page.evaluate(() =>
-      document.querySelector("button[role=switch][aria-label='Limit bandwidth']").click(),
+      document.querySelector("button[role=checkbox][aria-label='Limit bandwidth']").click(),
     );
     await page.waitForFunction((sel) => !document.querySelector(sel).disabled, {}, limitInput);
     assert.equal((await settings()).transferThrottleKbps, 1024);
@@ -264,14 +264,14 @@ test("settings ux", { timeout: 180000 }, async () => {
     assert.match(sizes.transferResume, /2 transfers/);
     await shot("cache-cards");
     await page.evaluate(() => {
-      const b = document.querySelector("[data-cache-card='thumbnails'] button");
+      const b = document.querySelector("[data-cache-card='thumbnails'] button:not([data-infotip])");
       b.click();
     });
     await page.waitForFunction(
       () => document.querySelector("[data-cache-card='thumbnails'] [data-cache-size]").textContent === "Empty",
     );
     assert.equal(
-      await page.$eval("[data-cache-card='thumbnails'] button", (b) => b.disabled),
+      await page.$eval("[data-cache-card='thumbnails'] button:not([data-infotip])", (b) => b.disabled),
       true,
     );
     const toasts = await page.evaluate(() =>

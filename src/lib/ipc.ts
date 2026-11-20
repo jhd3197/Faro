@@ -153,6 +153,11 @@ const oauthAppArgs = (app?: OAuthApp) => ({
 
 export const ipc = {
   revealLocalPath: (path: string) => invoke<void>("reveal_local_path", { path }),
+  /** The local crash log (`<app data>/logs/faro.log`), or null before it opens. */
+  appLogPath: () => invoke<string | null>("app_log_path"),
+  /** Write a line from the UI into the local crash log. */
+  appLogWrite: (level: "error" | "warn" | "info", message: string) =>
+    invoke<void>("app_log_write", { level, message }),
   listProfiles: () => invoke<ConnectionProfile[]>("list_profiles"),
 
   saveProfile: (profile: ConnectionProfile) =>

@@ -697,3 +697,30 @@ textarea:focus-visible:not(.xterm-helper-textarea),
 }
 
 [data-native-hover="true"] { outline: 2px solid var(--color-accent, #6d8cff); outline-offset: -2px; background-color: rgb(109 140 255 / 12%); }
+
+/* Settings search: sections with no hit disappear; inside a section that
+   didn't match by name, blocks without a matching row disappear too. */
+[data-search-results] [data-search-section]:not([data-section-match]):not(:has([data-row-match])) {
+  display: none;
+}
+[data-search-results] [data-search-section]:not([data-section-match]) [data-search-body] > :not([data-row-match]):not(:has([data-row-match])) {
+  display: none;
+}
+[data-search-results] [data-search-section]:not([data-section-match]) [data-settings-group] > :not([data-row-match]):not(:has([data-row-match])):not(:first-child) {
+  display: none;
+}
+
+/* Settings: keyboard focus is a quiet 1px inset line, not an accent halo. */
+[data-settings-dialog] button:focus-visible,
+[data-settings-dialog] input:focus-visible,
+[data-settings-dialog] textarea:focus-visible,
+[data-settings-dialog] [tabindex]:focus-visible,
+[data-settings-dialog] summary:focus-visible {
+  outline: 1px solid rgb(var(--text-dim));
+  outline-offset: -1px;
+  border-radius: 3px;
+}
+[data-settings-dialog] input:focus-visible,
+[data-settings-dialog] textarea:focus-visible {
+  outline: none;
+}

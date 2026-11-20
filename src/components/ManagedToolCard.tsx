@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Download, FolderOpen, Loader2, X } from "lucide-react";
+import type { ReactNode } from "react";
+import { FolderOpen, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/cn";
+import { Btn, InfoTip, Note, Status } from "./settings/kit";
 import { ipc, onToolStatus } from "@/lib/ipc";
 import { toastError } from "@/lib/errors";
 import type { CloudflaredStatus, ManagedToolId } from "@/lib/types";
@@ -93,11 +95,58 @@ export function useManagedTool(ops: ToolOps, name: string, id?: ManagedToolId, o
   };
 }
 
-const quiet =
-  "inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60";
+/** One command-line tool as a single row: name · version and source (dim,
+ *  path on hover) · status dot · actions. `boxed` draws the list border for
+ *  a row that stands alone; inside another list or row, leave it off. */
+export function ToolRow({
+  name,
+  meta,
+  metaTitle,
+  help,
+  status,
+  actions,
+  message,
+  boxed,
+  className,
+  ...data
+}: {
+  name: string;
+  /** "2.41.0 · found on PATH". Rendered dim after the name. */
+  meta?: ReactNode;
+  /** Hover text for the name and meta (the full path). */
+  metaTitle?: string;
+  help?: ReactNode;
+  status: ReactNode;
+  actions?: ReactNode;
+  /** The last action's one-line result. */
+  message?: ReactNode;
+  boxed?: boolean;
+  className?: string;
+} & Record<`data-${string}`, string | undefined>) {
+  return (
+    <div {...data} className={cn(boxed && "rounded border border-border px-3 py-2", className)}>
+      <div className="flex min-h-7 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
+          <span className="min-w-0 truncate text-text" title={metaTitle}>
+            {name}
+            {meta && <span className="text-text-dim"> {meta}</span>}
+          </span>
+          {help && <InfoTip text={help} />}
+        </div>
+        <div className="shrink-0">{status}</div>
+        {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
+      </div>
+      {message && (
+        <div className="mt-1">
+          <Note>{message}</Note>
+        </div>
+      )}
+    </div>
+  );
+}
 
-/** The tool's version and source, with Install / Update, Check for updates
- *  and Use my own. `compact` drops the outer box (inside another card). */
+/** A Faro-managed tool's row: version and source, Install / Update, Check
+ *  and Use my own. `compact` drops the outer border (inside another list). */
 export function ManagedToolCard({
   tool,
   name,
@@ -109,6 +158,7 @@ export function ManagedToolCard({
   tool: ManagedTool;
   /** "cloudflared", "1Password CLI". */
   name: string;
+  /** Behind the (i) while the tool is missing. */
   missingText?: string;
   testId?: string;
   focusId?: string;
@@ -119,74 +169,84 @@ export function ManagedToolCard({
     const picked = await open({ multiple: false, directory: false, title: `Choose ${name}` });
     if (typeof picked === "string") await tool.setCustomPath(picked);
   };
+  const missing = s?.source === "missing";
+  // The one action that changes something, only when there is a reason.
+  const install = !s
+    ? null
+    : missing
+      ? `Install ${name}`
+      : s.updateAvailable
+        ? s.source === "managed"
+          ? `Update to ${s.latest}`
+          : "Install Faro's copy"
+        : null;
+
+  const status = tool.busy ? (
+    <Status tone="busy">Working</Status>
+  ) : !s ? (
+    <Status tone="busy">Checking</Status>
+  ) : missing ? (
+    <Status tone="off">Not installed</Status>
+  ) : s.updateAvailable ? (
+    <Status tone="warn">{s.latest} is available</Status>
+  ) : s.latest ? (
+    <Status tone="ok">Up to date</Status>
+  ) : (
+    <Status tone="ok">Installed</Status>
+  );
+
   return (
-    <div
-      className={cn(compact ? "text-xs" : "rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm")}
+    <ToolRow
       data-testid={testId}
       data-settings-focus={focusId}
       data-tool-source={s?.source}
-    >
-      {!s ? (
-        <div className="flex items-center gap-2 text-text-muted">
-          <Loader2 size={compact ? 12 : 15} className="animate-spin" /> Checking…
-        </div>
-      ) : s.source === "missing" ? (
-        <div className="flex items-start gap-2">
-          <AlertTriangle size={compact ? 13 : 15} className="mt-0.5 shrink-0 text-warning" />
-          <div className="text-text">{missingText ?? `${name} isn't installed.`}</div>
-        </div>
-      ) : (
-        <div className="flex items-start gap-2">
-          <CheckCircle2 size={compact ? 13 : 15} className="mt-0.5 shrink-0 text-success" />
-          <div className="min-w-0">
-            <div className="text-text">
-              {name} {s.version ?? "(version unknown)"}{" "}
-              <span className="text-text-muted">· {SOURCE_LABEL[s.source]}</span>
-            </div>
-            {s.path && <p className="mt-0.5 truncate font-mono text-[11px] text-text-dim">{s.path}</p>}
-            {s.updateAvailable && (
-              <p className="mt-0.5 text-xs text-warning">
-                {name} {s.latest} is available.
-              </p>
-            )}
-            {s.latest && !s.updateAvailable && (
-              <p className="mt-0.5 text-xs text-text-muted">Up to date (latest is {s.latest}).</p>
-            )}
-          </div>
-        </div>
-      )}
-      {s?.message && <p className="mt-2 border-t border-border/60 pt-2 text-xs text-text-muted">{s.message}</p>}
-      <div className={cn("flex flex-wrap gap-2", compact ? "mt-2" : "mt-3")}>
-        <button
-          type="button"
-          data-tool-install
-          onClick={() => void tool.install()}
-          disabled={tool.busy}
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-60"
-        >
-          {tool.busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-          {tool.busy
-            ? "Working…"
-            : s?.source === "managed"
-              ? s.updateAvailable
-                ? `Update to ${s.latest}`
-                : "Reinstall latest"
-              : s?.source === "missing"
-                ? `Install ${name}`
-                : "Install Faro's copy"}
-        </button>
-        <button type="button" data-tool-check onClick={() => void tool.check()} disabled={tool.busy} className={quiet}>
-          Check for updates
-        </button>
-        <button type="button" onClick={() => void browse()} disabled={tool.busy} className={quiet}>
-          <FolderOpen size={13} /> Use my own…
-        </button>
-        {s?.customPath && (
-          <button type="button" onClick={() => void tool.setCustomPath(null)} disabled={tool.busy} className={quiet}>
-            <X size={13} /> Stop using my own
-          </button>
-        )}
-      </div>
-    </div>
+      boxed={!compact}
+      name={name}
+      meta={s && !missing ? `${s.version ?? "unknown version"} · ${SOURCE_LABEL[s.source]}` : undefined}
+      metaTitle={s?.path}
+      help={missing ? missingText : undefined}
+      status={status}
+      message={s?.message}
+      actions={
+        <>
+          {install && (
+            <Btn size="sm" data-tool-install onClick={() => void tool.install()} disabled={tool.busy}>
+              {install}
+            </Btn>
+          )}
+          <Btn
+            size="sm"
+            variant="ghost"
+            data-tool-check
+            title="Check for updates"
+            onClick={() => void tool.check()}
+            disabled={tool.busy}
+          >
+            Check
+          </Btn>
+          {s?.customPath ? (
+            <Btn
+              size="sm"
+              variant="ghost"
+              aria-label="Stop using my own"
+              title={`Stop using my own ${name}`}
+              onClick={() => void tool.setCustomPath(null)}
+              disabled={tool.busy}
+              icon={<X size={13} />}
+            />
+          ) : (
+            <Btn
+              size="sm"
+              variant="ghost"
+              aria-label="Use my own…"
+              title={`Use my own ${name}…`}
+              onClick={() => void browse()}
+              disabled={tool.busy}
+              icon={<FolderOpen size={13} />}
+            />
+          )}
+        </>
+      }
+    />
   );
 }

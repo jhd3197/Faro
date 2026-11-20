@@ -3,21 +3,28 @@
 // intentionally not listed: they land on Appearance.
 
 export const SETTINGS_SECTIONS = [
-  { id: "appearance", label: "Appearance", keywords: "theme mode accent zoom language palette frame" },
-  { id: "transfers", label: "Transfers", keywords: "download upload overwrite bandwidth checksum" },
-  { id: "panes", label: "File panes", keywords: "hidden files sort view layout preview editor" },
-  { id: "terminal", label: "Terminal", keywords: "font scrollback shell suggestions" },
-  { id: "keyboard", label: "Keyboard", keywords: "shortcuts keybindings hotkeys remap" },
-  { id: "connections", label: "Connections", keywords: "port password keychain" },
-  { id: "passwordManagers", label: "Password managers", keywords: "1password bitwarden vault op bw ssh agent master password unlock" },
-  { id: "remoteControl", label: "Remote control", keywords: "remote control agent host pairing faro agent" },
-  { id: "sync", label: "Folder Sync", keywords: "folder sync mirror watch pair" },
-  { id: "bridge", label: "Agent Bridge", keywords: "agent bridge approval policy" },
-  { id: "cli", label: "faro-cli", keywords: "cli command line updater path" },
-  { id: "cloudflare", label: "Cloudflare", keywords: "cloudflare cloudflared access tunnel account" },
-  { id: "backup", label: "Backup", keywords: "backup restore export" },
-  { id: "storage", label: "Storage", keywords: "cache clear thumbnails resume disk space" },
-  { id: "about", label: "About", keywords: "version notifications about" },
+  { id: "appearance", group: "app", label: "Appearance", keywords: "theme mode accent zoom language palette frame" },
+  { id: "panes", group: "app", label: "File panes", keywords: "hidden files sort view layout preview editor" },
+  { id: "transfers", group: "app", label: "Transfers", keywords: "download upload overwrite bandwidth checksum" },
+  { id: "terminal", group: "app", label: "Terminal", keywords: "font scrollback shell suggestions" },
+  { id: "keyboard", group: "app", label: "Keyboard", keywords: "shortcuts keybindings hotkeys remap" },
+  { id: "connections", group: "connections", label: "Connections", keywords: "port password keychain" },
+  { id: "passwordManagers", group: "connections", label: "Password managers", keywords: "1password bitwarden vault op bw ssh agent master password unlock" },
+  { id: "cloudflare", group: "connections", label: "Cloudflare", keywords: "cloudflare cloudflared access tunnel account" },
+  { id: "remoteControl", group: "connections", label: "Remote control", keywords: "remote control agent host pairing faro agent" },
+  { id: "bridge", group: "connections", label: "Agent Bridge", keywords: "agent bridge approval policy" },
+  { id: "sync", group: "system", label: "Folder sync", keywords: "folder sync mirror watch pair" },
+  { id: "cli", group: "system", label: "CLI", keywords: "faro-cli command line terminal updater path" },
+  { id: "backup", group: "system", label: "Backup", keywords: "backup restore export" },
+  { id: "storage", group: "system", label: "Storage", keywords: "cache clear thumbnails resume disk space" },
+  { id: "about", group: "system", label: "About", keywords: "version notifications about" },
+] as const;
+
+/** Nav groups, in order. */
+export const SETTINGS_GROUPS = [
+  { id: "app", label: "App" },
+  { id: "connections", label: "Connections" },
+  { id: "system", label: "System" },
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]["id"];
@@ -66,7 +73,6 @@ export const SETTINGS_ENTRY_POINTS = {
   downloadFolder: { section: "transfers", focus: SETTINGS_FOCUS.downloadFolder },
   cloudflaredUpdate: { section: "cloudflare", focus: SETTINGS_FOCUS.cloudflared },
   profileCloudflareAccount: { section: "cloudflare", focus: SETTINGS_FOCUS.cloudflareAccount },
-  aboutCliInstall: { section: "cli" },
   keyboardCustomize: { section: "keyboard", focus: SETTINGS_FOCUS.keyboardSearch },
   pairingRemoteControl: { section: "remoteControl", focus: SETTINGS_FOCUS.showPairingCode },
   themeMenu: { section: "appearance", focus: SETTINGS_FOCUS.themeMode },

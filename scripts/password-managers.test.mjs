@@ -100,16 +100,15 @@ test("password managers", { timeout: 180000 }, async () => {
     await page.waitForSelector("[data-pm-card='1password'][data-pm-state='ready']");
     await page.waitForSelector("[data-pm-card='bitwarden'][data-pm-state='locked']");
     assert.equal(await text("[data-settings-heading]"), "Password managers");
-    assert.ok(await page.$("[data-settings-section='passwordManagers'] svg"), "nav entry has an icon");
     const op = await text("[data-pm-card='1password']");
     assert.match(op, /Ready/);
     assert.match(op, /demo@example\.com/);
-    assert.match(op, /SSH agent: found at/);
+    assert.ok(await page.$("[data-pm-card='1password'] [data-pm-agent='found']"), "1Password SSH agent found");
     assert.match(op, /Check again/);
     assert.match(op, /How to connect/);
     const bw = await text("[data-pm-card='bitwarden']");
     assert.match(bw, /Locked/);
-    assert.match(bw, /SSH agent: not running/);
+    assert.match(bw, /Not running/);
     await shot("settings-password-managers");
 
     // --- Bitwarden: an empty password is refused without calling the CLI.
@@ -162,7 +161,7 @@ test("password managers", { timeout: 180000 }, async () => {
     const bwCli = "[data-pm-card='bitwarden'] [data-pm-cli='bw']";
     await clickEnabled(`${bwCli} [data-tool-check]`);
     await page.waitForSelector(`${bwCli} [data-tool-source='missing']`);
-    assert.match(await text(bwCli), /isn't installed\. Faro can install the official release/);
+    assert.match(await text(bwCli), /Not installed/);
     assert.match(await text(`${bwCli} [data-tool-install]`), /Install Bitwarden CLI/);
     await shot("settings-cli-missing");
     await clickEnabled(`${bwCli} [data-tool-install]`);
