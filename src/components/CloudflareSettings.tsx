@@ -1,19 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { Cloud, Loader2, CheckCircle2, AlertTriangle, Download, LogIn, FolderOpen, X } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { Cloud, Loader2, CheckCircle2, AlertTriangle, Download, LogIn } from "lucide-react";
 import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
 import { toastError } from "@/lib/errors";
-import type { AccessStatus, CloudflaredStatus, ConnectionProfile } from "@/lib/types";
+import type { AccessStatus, ConnectionProfile } from "@/lib/types";
+import { ManagedToolCard, useManagedTool, type ToolOps } from "./ManagedToolCard";
 import { CloudflareAccountCard } from "./CloudflareAccount";
 import { SETTINGS_FOCUS } from "@/lib/settingsNav";
-
-const SOURCE_LABEL: Record<CloudflaredStatus["source"], string> = {
-  custom: "your own copy",
-  managed: "installed by Faro",
-  path: "found on PATH",
-  missing: "",
-};
 
 /** The Access hostname a Cloudflare connection signs in to. */
 export function accessHostname(p: ConnectionProfile): string | null {
@@ -137,32 +130,16 @@ export function AccessSignIn({
   );
 }
 
+const CLOUDFLARED_OPS: ToolOps = {
+  status: ipc.cloudflaredStatus,
+  check: ipc.cloudflaredCheck,
+  install: ipc.cloudflaredInstall,
+  setCustomPath: ipc.cloudflaredSetCustomPath,
+};
+
 /** cloudflared's state, with Install / Update; shared by Settings and the editor. */
 export function useCloudflared() {
-  const [status, setStatus] = useState<CloudflaredStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const refresh = useCallback(async () => setStatus(await ipc.cloudflaredStatus()), []);
-  const run = async (f: () => Promise<CloudflaredStatus>) => {
-    setBusy(true);
-    try {
-      setStatus(await f());
-    } catch (e) {
-      toastError(e, "Couldn't install or update cloudflared");
-    } finally {
-      setBusy(false);
-    }
-  };
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-  return {
-    status,
-    busy,
-    refresh,
-    check: () => run(ipc.cloudflaredCheck),
-    install: () => run(ipc.cloudflaredInstall),
-    setCustomPath: (p: string | null) => run(() => ipc.cloudflaredSetCustomPath(p)),
-  };
+  return useManagedTool(CLOUDFLARED_OPS, "cloudflared", "cloudflared");
 }
 
 /** Install button for when cloudflared is missing (editor). */
@@ -198,11 +175,6 @@ export function CloudflareSettings() {
   const hostnames = [...new Set(profiles.map(accessHostname).filter((h): h is string => !!h))];
   const s = cf.status;
 
-  const browse = async () => {
-    const picked = await open({ multiple: false, directory: false, title: "Choose cloudflared" });
-    if (typeof picked === "string") await cf.setCustomPath(picked);
-  };
-
   return (
     <div className="flex flex-col gap-5">
       <div>
@@ -219,79 +191,12 @@ export function CloudflareSettings() {
 
       <CloudflareAccountCard />
 
-      <div
-        className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm"
-        data-testid="cloudflared-status"
-        data-settings-focus={SETTINGS_FOCUS.cloudflared}
-      >
-        {!s ? (
-          <div className="flex items-center gap-2 text-text-muted">
-            <Loader2 size={15} className="animate-spin" /> Checking…
-          </div>
-        ) : s.source === "missing" ? (
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
-            <div className="text-text">cloudflared isn't installed.</div>
-          </div>
-        ) : (
-          <div className="flex items-start gap-2">
-            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-success" />
-            <div className="min-w-0">
-              <div className="text-text">
-                cloudflared {s.version ?? "(version unknown)"}{" "}
-                <span className="text-text-muted">· {SOURCE_LABEL[s.source]}</span>
-              </div>
-              {s.path && <p className="mt-0.5 truncate text-xs text-text-muted">{s.path}</p>}
-              {s.updateAvailable && (
-                <p className="mt-0.5 text-xs text-warning">cloudflared {s.latest} is available.</p>
-              )}
-              {s.latest && !s.updateAvailable && (
-                <p className="mt-0.5 text-xs text-text-muted">Up to date (latest is {s.latest}).</p>
-              )}
-            </div>
-          </div>
-        )}
-        {s?.message && (
-          <p className="mt-2 border-t border-border/60 pt-2 text-xs text-text-muted">{s.message}</p>
-        )}
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            onClick={() => void cf.install()}
-            disabled={cf.busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-60"
-          >
-            {cf.busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-            {s?.source === "managed"
-              ? s.updateAvailable
-                ? `Update to ${s.latest}`
-                : "Reinstall latest"
-              : "Install Faro's copy"}
-          </button>
-          <button
-            onClick={() => void cf.check()}
-            disabled={cf.busy}
-            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60"
-          >
-            Check for updates
-          </button>
-          <button
-            onClick={() => void browse()}
-            disabled={cf.busy}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60"
-          >
-            <FolderOpen size={13} /> Use my own…
-          </button>
-          {s?.customPath && (
-            <button
-              onClick={() => void cf.setCustomPath(null)}
-              disabled={cf.busy}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60"
-            >
-              <X size={13} /> Stop using my own
-            </button>
-          )}
-        </div>
-      </div>
+      <ManagedToolCard
+        tool={cf}
+        name="cloudflared"
+        testId="cloudflared-status"
+        focusId={SETTINGS_FOCUS.cloudflared}
+      />
 
       <div>
         <div className="mb-1.5 text-sm font-medium text-text">Access sign-ins</div>

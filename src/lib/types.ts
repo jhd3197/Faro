@@ -347,6 +347,16 @@ export interface AgentHostStatus {
 export type CliUpdateMode = "ask" | "auto" | "off";
 
 /** Which cloudflared Faro runs (mirrors Rust's cloudflared::BinaryStatus). */
+/** A Faro-managed command-line tool (managed_tools::ToolStatus): which copy
+ *  runs, its version, and the latest official release once checked. */
+export interface ToolStatus extends CloudflaredStatus {
+  /** `cloudflared`, `op`, `bw`. */
+  id: ManagedToolId;
+  name: string;
+}
+
+export type ManagedToolId = "cloudflared" | "op" | "bw";
+
 export interface CloudflaredStatus {
   source: "custom" | "managed" | "path" | "missing";
   path?: string;

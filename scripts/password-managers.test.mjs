@@ -132,6 +132,41 @@ test("password managers", { timeout: 180000 }, async () => {
     await page.evaluate(() => window.__demo.setPasswordManagers({ "1password": "ready" }));
     await click("[data-pm-card='1password'] [data-pm-check]");
     await page.waitForSelector("[data-pm-card='1password'][data-pm-state='ready']");
+
+    // --- The CLIs: version, Check for updates, and Faro's own copy.
+    const opCli = "[data-pm-card='1password'] [data-pm-cli='op']";
+    await page.waitForSelector(`${opCli} [data-tool-source='path']`);
+    assert.match(await text(opCli), /1Password CLI 2\.41\.0 · found on PATH/);
+    await click(`${opCli} [data-tool-check]`);
+    await page.waitForFunction((sel) => document.querySelector(sel)?.textContent.includes("2.42.0 is available"), {}, opCli);
+    assert.match(await text(`${opCli} [data-tool-install]`), /Install Faro's copy/);
+    await click(`${opCli} [data-tool-install]`);
+    await page.waitForSelector(`${opCli} [data-tool-source='managed']`);
+    assert.match(await text(opCli), /1Password CLI 2\.42\.0 · installed by Faro/);
+    assert.match(await text(opCli), /Up to date/);
+
+    // A missing Bitwarden CLI offers the install; after it, the sign-in
+    // command names Faro's copy, which isn't on PATH.
+    await page.evaluate(() => window.__demo.setPasswordManagers({ bitwarden: "missing" }));
+    await click("[data-pm-card='bitwarden'] [data-pm-check]");
+    await page.waitForSelector("[data-pm-card='bitwarden'][data-pm-state='missing']");
+    const bwCli = "[data-pm-card='bitwarden'] [data-pm-cli='bw']";
+    await click(`${bwCli} [data-tool-check]`);
+    await page.waitForSelector(`${bwCli} [data-tool-source='missing']`);
+    assert.match(await text(bwCli), /isn't installed\. Faro can install the official release/);
+    assert.match(await text(`${bwCli} [data-tool-install]`), /Install Bitwarden CLI/);
+    await shot("settings-cli-missing");
+    await click(`${bwCli} [data-tool-install]`);
+    await page.waitForSelector("[data-pm-card='bitwarden'][data-pm-state='signedOut']");
+    assert.match(await text(bwCli), /Bitwarden CLI 2026\.11\.0 · installed by Faro/);
+    const login = await text("[data-pm-card='bitwarden'] [data-pm-bw-login] code");
+    assert.match(login, /^".*com\.juandenis\.faro\/bin\/bw" login$/);
+    await shot("settings-cli-installed");
+    assert.ok(
+      (await calls()).some((c) => c.cmd === "tool_install" && c.args.id === "bw"),
+      "installed through tool_install",
+    );
+    await page.evaluate(() => window.__demo.setPasswordManagers({ bitwarden: "locked" }));
     await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
     await page.waitForFunction(() => !document.querySelector("[data-pm-card]"));
 

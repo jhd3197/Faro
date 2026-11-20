@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, Lock, RotateCw } from "lucide-react";
+import { Copy, KeyRound, Loader2, Lock, RotateCw, Terminal } from "lucide-react";
 import { isComposing } from "@faro/file-ui";
 import { cn } from "@/lib/cn";
 import { messageOf } from "@/lib/errors";
 import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 import type { AgentInfo, PmState, PmStatus } from "@/lib/types";
 import { usePasswordManagers } from "@/stores/passwordManagersStore";
+import { ManagedToolCard, toolOps, useManagedTool } from "./ManagedToolCard";
+import { toast } from "@/stores/toastStore";
 
 const STATE_LABEL: Record<PmState, string> = {
   missing: "Not installed",
@@ -86,6 +88,12 @@ function ManagerCard({
 }) {
   const lock = usePasswordManagers((s) => s.lock);
   const unlock = usePasswordManagers((s) => s.unlock);
+  const refresh = usePasswordManagers((s) => s.refresh);
+  const isOp = pm.id === "1password";
+  const toolId = isOp ? "op" : "bw";
+  const cliName = isOp ? "1Password CLI" : "Bitwarden CLI";
+  // Installing or pointing at a CLI changes what the manager can do.
+  const cli = useManagedTool(toolOps(toolId), cliName, toolId, () => void refresh());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -101,7 +109,6 @@ function ManagerCard({
     }
   };
 
-  const isOp = pm.id === "1password";
   return (
     <div
       data-pm-card={pm.id}
@@ -120,13 +127,8 @@ function ManagerCard({
       </div>
 
       {pm.account && <div className="mt-1.5 text-xs text-text">{pm.account}</div>}
-      {pm.cliPath && <div className="mt-0.5 truncate font-mono text-[11px] text-text-dim">{pm.cliPath}</div>}
-      {pm.detail && <p className="mt-1.5 text-xs text-text-muted">{pm.detail}</p>}
-      {!isOp && pm.state === "signedOut" && !pm.detail && (
-        <p className="mt-1.5 text-xs text-text-muted">
-          Run <code>bw login</code> once in a terminal, then check again.
-        </p>
-      )}
+      {pm.detail && pm.state !== "missing" && !(!isOp && pm.state === "signedOut") && <p className="mt-1.5 text-xs text-text-muted">{pm.detail}</p>}
+      {!isOp && pm.state === "signedOut" && <BwLogin cliPath={pm.cliPath} />}
 
       <AgentLine agent={agent} />
 
@@ -158,7 +160,7 @@ function ManagerCard({
         <details className="mt-3 text-xs text-text-muted" open={pm.state !== "ready"}>
           <summary className="cursor-pointer select-none text-text-muted hover:text-text">How to connect</summary>
           <ol className="mt-1.5 list-decimal space-y-0.5 pl-5">
-            <li>Install the 1Password CLI (<code>op</code>).</li>
+            <li>Install the 1Password CLI (<code>op</code>) with the button below, or use one you already have.</li>
             <li>In 1Password, open Settings › Developer and turn on Integrate with 1Password CLI.</li>
             <li>For SSH keys, turn on Use the SSH agent on the same page.</li>
           </ol>
@@ -166,9 +168,49 @@ function ManagerCard({
       )}
       {!isOp && pm.state === "missing" && (
         <p className="mt-3 text-xs text-text-muted">
-          Install the Bitwarden CLI (<code>bw</code>), run <code>bw login</code> once, then check again.
+          Install the Bitwarden CLI (<code>bw</code>) with the button below, sign in once, then check again.
         </p>
       )}
+
+      <div className="mt-3 border-t border-border/60 pt-3" data-pm-cli={toolId}>
+        <ManagedToolCard
+          tool={cli}
+          name={cliName}
+          compact
+          focusId={isOp ? SETTINGS_FOCUS.opCli : SETTINGS_FOCUS.bwCli}
+          missingText={`The ${cliName} isn't installed. Faro can install the official release for you.`}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** `bw login` needs the email, master password and two-step code in a
+ *  terminal once. The command names the exact CLI Faro runs, which may be
+ *  Faro's own copy and so not on PATH. */
+function BwLogin({ cliPath }: { cliPath?: string }) {
+  const command = cliPath ? `${/\s/.test(cliPath) ? `"${cliPath}"` : cliPath} login` : "bw login";
+  return (
+    <div className="mt-1.5 text-xs text-text-muted" data-pm-bw-login>
+      <p>Bitwarden isn't signed in. Run this once in a terminal, then check again:</p>
+      <div className="mt-1 flex items-center gap-2">
+        <code className="flex min-w-0 flex-1 items-center gap-1.5 truncate rounded bg-bg-hover px-2 py-1 font-mono text-[11px] text-text">
+          <Terminal size={11} className="shrink-0 text-text-dim" />
+          <span className="truncate">{command}</span>
+        </code>
+        <button
+          type="button"
+          aria-label="Copy the sign-in command"
+          className={btn}
+          onClick={() => {
+            void navigator.clipboard.writeText(command);
+            toast.success("Copied the sign-in command");
+          }}
+        >
+          <Copy size={12} />
+          Copy
+        </button>
+      </div>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   onAuthChanged,
   onAuthNotice,
   onCloudflaredStatus,
+  onToolStatus,
 } from "@/lib/ipc";
 import { useDialog } from "@/hooks/useDialog";
 import { useConnections } from "@/stores/connectionsStore";
@@ -82,6 +83,15 @@ export function AuthPromptModal() {
             settings: SETTINGS_ENTRY_POINTS.cloudflaredUpdate,
           }
         );
+      }
+    }).then(keep);
+    // Faro's own 1Password or Bitwarden CLI has a newer official release.
+    onToolStatus((s) => {
+      if (s.updateAvailable && s.latest && (s.id === "op" || s.id === "bw")) {
+        toast.info(`${s.name} ${s.latest} is available`, "Update it in Settings → Password managers.", {
+          label: "Open Password managers",
+          settings: s.id === "op" ? SETTINGS_ENTRY_POINTS.opCliUpdate : SETTINGS_ENTRY_POINTS.bwCliUpdate,
+        });
       }
     }).then(keep);
     return () => {

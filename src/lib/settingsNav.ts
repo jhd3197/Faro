@@ -32,6 +32,8 @@ export const SETTINGS_FOCUS = {
   themeMode: "settings-theme-mode",
   transferConcurrency: "settings-transfer-concurrency",
   bitwardenPassword: "settings-bitwarden-password",
+  opCli: "settings-op-cli",
+  bwCli: "settings-bw-cli",
 } as const;
 
 export interface SettingsTarget {
@@ -70,6 +72,8 @@ export const SETTINGS_ENTRY_POINTS = {
   themeMenu: { section: "appearance", focus: SETTINGS_FOCUS.themeMode },
   transferPanel: { section: "transfers", focus: SETTINGS_FOCUS.transferConcurrency },
   vaultLocked: { section: "passwordManagers", focus: SETTINGS_FOCUS.bitwardenPassword },
+  opCliUpdate: { section: "passwordManagers", focus: SETTINGS_FOCUS.opCli },
+  bwCliUpdate: { section: "passwordManagers", focus: SETTINGS_FOCUS.bwCli },
 } as const satisfies Record<string, SettingsTarget>;
 
 export type SettingsEntryPointId = keyof typeof SETTINGS_ENTRY_POINTS;
