@@ -47,8 +47,11 @@ const PASSWORD_ENV: &str = "FARO_BW_PASSWORD";
 const OP_MISSING: &str = "The 1Password CLI isn't installed. Install it in Settings › Password managers.";
 const BW_MISSING: &str = "The Bitwarden CLI isn't installed. Install it in Settings › Password managers.";
 const BW_CMD: &str = "Faro needs the standalone Bitwarden CLI (bw.exe); the npm bw.cmd can't be used. Install it in Settings › Password managers.";
-const OP_LOCKED: &str = "1Password didn't unlock. Approve the prompt in the 1Password app.";
-const OP_SIGNED_OUT: &str = "1Password isn't connected to the CLI. Turn on 1Password › Settings › Developer › Integrate with 1Password CLI.";
+const OP_LOCKED: &str = "Click Sign in, then approve Faro in the 1Password app.";
+const OP_SIGNED_OUT: &str = "Open the 1Password app and turn on Settings › Developer › Integrate with 1Password CLI. The app has to stay running.";
+const OP_APP_CLOSED: &str = "Faro can't reach the 1Password app. Open 1Password and unlock it, then click Check again.";
+const OP_NO_APP: &str = "The 1Password CLI only works with the 1Password app. Install the app, sign in, then turn on Settings › Developer › Integrate with 1Password CLI.";
+const OP_UNKNOWN: &str = "1Password couldn't check your account. Open the 1Password app, then click Check again.";
 const BW_LOCKED: &str = "Bitwarden is locked. Unlock it in Settings › Password managers.";
 const BW_SIGNED_OUT: &str = "Bitwarden isn't signed in. Run `bw login` once in a terminal.";
 
@@ -196,7 +199,8 @@ fn discover(provider: &str) -> Result<PathBuf> {
 }
 
 fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    // The live PATH, so a CLI installed while Faro runs is found without a restart.
+    let mut dirs = crate::env_path::search_dirs();
     dirs.extend(extra_dirs());
     dirs
 }
@@ -478,28 +482,158 @@ pub fn validate(reference: &CredentialRef) -> Result<()> {
 
 // ---------- 1Password ----------
 
-fn op_failure(stderr: &str, otherwise: &str) -> anyhow::Error {
-    let locked = ["authorization prompt dismissed", "authorization timeout", "authorization denied", "locked", "biometric", "connecting to desktop app"];
-    let signed_out = ["not currently signed in", "not signed in", "no accounts configured", "no account found", "sign in"];
-    if locked.iter().any(|p| stderr.contains(p)) {
-        anyhow!(OP_LOCKED)
-    } else if signed_out.iter().any(|p| stderr.contains(p)) {
-        anyhow!(OP_SIGNED_OUT)
+/// What a failed `op` call means, from its stderr.
+#[derive(Debug, PartialEq)]
+enum OpProblem {
+    /// The app integration works but this session isn't approved yet.
+    NeedsApproval,
+    /// The 1Password app isn't running (or is locked and unreachable).
+    AppClosed,
+    /// "Integrate with 1Password CLI" is off, or the app has no account.
+    IntegrationOff,
+    /// Anything else. op's own words are never shown (they can echo input).
+    Other,
+}
+
+fn op_problem(stderr: &str) -> OpProblem {
+    let s = stderr.to_ascii_lowercase();
+    let any = |pats: &[&str]| pats.iter().any(|p| s.contains(p));
+    // Order matters: op's "can't connect" message also tells you to turn the
+    // integration on, so reachability is checked first.
+    if any(&["connecting to desktop app", "cannot connect", "can't connect", "couldn't connect", "make sure 1password is running", "app is not running", "is not running"]) {
+        OpProblem::AppClosed
+    } else if any(&["no accounts configured", "no account found", "integration is disabled", "integrate with 1password cli"]) {
+        OpProblem::IntegrationOff
+    } else if any(&["not currently signed in", "account is not signed in", "not signed in", "authorization prompt dismissed", "authorization timeout", "authorization denied", "biometric", "locked"]) {
+        OpProblem::NeedsApproval
     } else {
-        anyhow!("{otherwise}")
+        OpProblem::Other
     }
 }
 
-async fn op_status(cli: &Cli) -> (PmState, Option<String>, Option<String>) {
-    match exec(cli, &["whoami", "--format", "json"], &[], None, VALUE_CAP).await {
-        Ok(out) if out.ok => {
-            let info = json(&out.stdout, cli.name).unwrap_or(Value::Null);
-            let account = str_at(&info, &["email"]).or_else(|| str_at(&info, &["url"])).map(str::to_string);
-            (PmState::Ready, account, None)
+fn op_failure(stderr: &str, otherwise: &str) -> anyhow::Error {
+    match op_problem(stderr) {
+        OpProblem::NeedsApproval => anyhow!(OP_LOCKED),
+        OpProblem::AppClosed => anyhow!(OP_APP_CLOSED),
+        OpProblem::IntegrationOff => anyhow!(op_not_connected()),
+        OpProblem::Other => anyhow!("{otherwise}"),
+    }
+}
+
+/// What Faro can tell about the 1Password desktop app without running it.
+#[derive(Debug, PartialEq)]
+enum OpApp {
+    NotInstalled,
+    /// Installed; `Some(true)` when its "Integrate with 1Password CLI" is on.
+    Installed { integration: Option<bool> },
+}
+
+fn op_app() -> OpApp {
+    op_app_in(&op_app_paths(), &op_settings_paths())
+}
+
+fn op_app_in(apps: &[PathBuf], settings: &[PathBuf]) -> OpApp {
+    let settings_file = settings.iter().find(|p| p.is_file());
+    if !apps.iter().any(|p| p.exists()) && settings_file.is_none() {
+        return OpApp::NotInstalled;
+    }
+    let integration = settings_file
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("developers.cliSharedLockState.enabled").and_then(Value::as_bool));
+    OpApp::Installed { integration }
+}
+
+fn op_app_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if cfg!(windows) {
+        for var in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(base) = std::env::var_os(var) {
+                out.push(PathBuf::from(base).join("1Password").join("app").join("8").join("1Password.exe"));
+            }
         }
-        Ok(out) => match op_failure(&out.stderr, OP_SIGNED_OUT).to_string().as_str() {
-            OP_LOCKED => (PmState::Locked, None, Some(OP_LOCKED.into())),
-            _ => (PmState::SignedOut, None, Some(OP_SIGNED_OUT.into())),
+        // The Microsoft Store build.
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            if let Ok(entries) = std::fs::read_dir(PathBuf::from(local).join("Packages")) {
+                out.extend(
+                    entries
+                        .flatten()
+                        .filter(|e| e.file_name().to_string_lossy().to_ascii_lowercase().contains("1password"))
+                        .map(|e| e.path()),
+                );
+            }
+        }
+    } else if cfg!(target_os = "macos") {
+        out.push(PathBuf::from("/Applications/1Password.app"));
+        if let Some(home) = dirs::home_dir() {
+            out.push(home.join("Applications/1Password.app"));
+        }
+    } else {
+        out.push(PathBuf::from("/opt/1Password/1password"));
+        out.push(PathBuf::from("/usr/bin/1password"));
+    }
+    out
+}
+
+fn op_settings_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if cfg!(windows) {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            out.push(PathBuf::from(local).join("1Password/settings/settings.json"));
+        }
+    } else if let Some(home) = dirs::home_dir() {
+        out.push(home.join("Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/settings/settings.json"));
+        out.push(home.join(".config/1Password/settings/settings.json"));
+    }
+    out
+}
+
+/// Why `op` sees no account: no app, app closed, or the setting is off.
+fn op_not_connected() -> &'static str {
+    match op_app() {
+        OpApp::NotInstalled => OP_NO_APP,
+        OpApp::Installed { integration: Some(true) } => OP_APP_CLOSED,
+        OpApp::Installed { .. } => OP_SIGNED_OUT,
+    }
+}
+
+/// `op whoami` only succeeds once this session is approved, so a "not signed
+/// in" answer alone can't tell "approve in the app" from "integration off".
+/// `op account list` can: with the integration on it lists the app's
+/// accounts without asking for approval.
+async fn op_status(cli: &Cli) -> (PmState, Option<String>, Option<String>) {
+    let whoami = match exec(cli, &["whoami", "--format", "json"], &[], None, VALUE_CAP).await {
+        Ok(out) => out,
+        Err(e) => return (PmState::SignedOut, None, Some(e.to_string())),
+    };
+    if whoami.ok {
+        let info = json(&whoami.stdout, cli.name).unwrap_or(Value::Null);
+        let account = str_at(&info, &["email"]).or_else(|| str_at(&info, &["url"])).map(str::to_string);
+        return (PmState::Ready, account, None);
+    }
+    match op_problem(&whoami.stderr) {
+        OpProblem::AppClosed => return (PmState::SignedOut, None, Some(OP_APP_CLOSED.into())),
+        OpProblem::Other => return (PmState::SignedOut, None, Some(OP_UNKNOWN.into())),
+        // "No account found" is also what op says when the app isn't there:
+        // the account list below sorts it out.
+        OpProblem::IntegrationOff | OpProblem::NeedsApproval => {}
+    }
+    match exec(cli, &["account", "list", "--format", "json"], &[], None, VALUE_CAP).await {
+        Ok(list) if list.ok => {
+            let accounts = json(&list.stdout, cli.name).unwrap_or(Value::Null);
+            let first = accounts.as_array().and_then(|a| a.first()).cloned();
+            match first {
+                Some(acct) => {
+                    let who = str_at(&acct, &["email"]).or_else(|| str_at(&acct, &["url"])).map(str::to_string);
+                    (PmState::Locked, who, Some(OP_LOCKED.into()))
+                }
+                None => (PmState::SignedOut, None, Some(op_not_connected().into())),
+            }
+        }
+        Ok(list) => match op_problem(&list.stderr) {
+            OpProblem::AppClosed => (PmState::SignedOut, None, Some(OP_APP_CLOSED.into())),
+            OpProblem::Other => (PmState::SignedOut, None, Some(OP_UNKNOWN.into())),
+            _ => (PmState::SignedOut, None, Some(op_not_connected().into())),
         },
         Err(e) => (PmState::SignedOut, None, Some(e.to_string())),
     }
@@ -1004,10 +1138,56 @@ mod tests {
     async fn op_status_states() {
         let ready = Fake::new(&[("whoami --format json", r#"{"url":"my.1password.com","email":"me@example.com"}"#, "", 0)]);
         assert_eq!(op_status(&ready.cli).await, (PmState::Ready, Some("me@example.com".into()), None));
-        let out = Fake::new(&[("whoami", "", "[ERROR] 2026/11/19 account is not signed in", 1)]);
-        assert_eq!(op_status(&out.cli).await.0, PmState::SignedOut);
-        let locked = Fake::new(&[("whoami", "", "[ERROR] authorization prompt dismissed, please try again", 1)]);
+        // Integration on, session not approved yet: the app's account shows, so "Sign in".
+        let approve = Fake::new(&[
+            ("whoami", "", "[ERROR] 2026/11/19 10:00:00 account is not signed in", 1),
+            ("account list", r#"[{"url":"my.1password.com","email":"me@example.com","user_uuid":"U","account_uuid":"A"}]"#, "", 0),
+        ]);
+        assert_eq!(op_status(&approve.cli).await, (PmState::Locked, Some("me@example.com".into()), Some(OP_LOCKED.into())));
+        // Integration off: no accounts configured.
+        let off = Fake::new(&[
+            ("whoami", "", "[ERROR] 2026/11/19 10:00:00 account is not signed in", 1),
+            ("account list", "", "[ERROR] 2026/11/19 10:00:00 No accounts configured for use with 1Password CLI.", 1),
+        ]);
+        let off_state = op_status(&off.cli).await;
+        assert_eq!(off_state.0, PmState::SignedOut);
+        assert!([OP_NO_APP, OP_SIGNED_OUT, OP_APP_CLOSED].contains(&off_state.2.as_deref().unwrap()));
+        // The app isn't running.
+        let closed = Fake::new(&[("whoami", "", "[ERROR] 2026/11/19 10:00:00 error initializing client: connecting to desktop app: cannot connect to 1Password app, make sure it is running", 1)]);
+        assert_eq!(op_status(&closed.cli).await.2.as_deref(), Some(OP_APP_CLOSED));
+        // Anything unknown gets a fixed message, never op's own text.
+        let odd = Fake::new(&[("whoami", "", "[ERROR] 2026/11/19 10:00:00 STDERR-SHOULD-NOT-LEAK", 1)]);
+        assert_eq!(op_status(&odd.cli).await.2.as_deref(), Some(OP_UNKNOWN));
+        let locked = Fake::new(&[
+            ("whoami", "", "[ERROR] authorization prompt dismissed, please try again", 1),
+            ("account list", r#"[{"url":"my.1password.com"}]"#, "", 0),
+        ]);
         assert_eq!(op_status(&locked.cli).await.0, PmState::Locked);
+    }
+
+    #[test]
+    fn op_app_detection() {
+        let dir = std::env::temp_dir().join(format!("faro-op-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("1Password.exe");
+        let settings = dir.join("settings.json");
+        assert_eq!(op_app_in(std::slice::from_ref(&app), std::slice::from_ref(&settings)), OpApp::NotInstalled);
+        std::fs::write(&app, b"").unwrap();
+        assert_eq!(op_app_in(std::slice::from_ref(&app), std::slice::from_ref(&settings)), OpApp::Installed { integration: None });
+        std::fs::write(&settings, br#"{"developers.cliSharedLockState.enabled": true}"#).unwrap();
+        assert_eq!(op_app_in(std::slice::from_ref(&app), std::slice::from_ref(&settings)), OpApp::Installed { integration: Some(true) });
+        std::fs::write(&settings, br#"{"developers.cliSharedLockState.enabled": false}"#).unwrap();
+        assert_eq!(op_app_in(&[app], &[settings]), OpApp::Installed { integration: Some(false) });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn op_problem_kinds() {
+        assert_eq!(op_problem("[error] 2026/11/20 01:13:24 no account found for filter"), OpProblem::IntegrationOff);
+        assert_eq!(op_problem("[error] account is not signed in"), OpProblem::NeedsApproval);
+        assert_eq!(op_problem("[error] connecting to desktop app: make sure 1password is running"), OpProblem::AppClosed);
+        assert_eq!(op_problem("[error] something else"), OpProblem::Other);
     }
 
     #[tokio::test]
