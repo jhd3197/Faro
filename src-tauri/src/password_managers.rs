@@ -14,6 +14,7 @@
 //! password reaches `bw unlock` through `--passwordenv` and that child's
 //! environment only.
 use crate::credential_refs::CredentialRef;
+use crate::managed_tools::{self, Feed, PgpKey, ToolSpec};
 use anyhow::{anyhow, bail, ensure, Result};
 use serde::Serialize;
 use serde_json::Value;
@@ -43,9 +44,9 @@ const MAX_ITEMS: usize = 200;
 /// The environment variable `bw unlock --passwordenv` reads.
 const PASSWORD_ENV: &str = "FARO_BW_PASSWORD";
 
-const OP_MISSING: &str = "The 1Password CLI isn't installed.";
-const BW_MISSING: &str = "The Bitwarden CLI isn't installed.";
-const BW_CMD: &str = "Faro needs the standalone Bitwarden CLI (bw.exe); the npm bw.cmd can't be used. Download bw.exe from bitwarden.com.";
+const OP_MISSING: &str = "The 1Password CLI isn't installed. Install it in Settings › Password managers.";
+const BW_MISSING: &str = "The Bitwarden CLI isn't installed. Install it in Settings › Password managers.";
+const BW_CMD: &str = "Faro needs the standalone Bitwarden CLI (bw.exe); the npm bw.cmd can't be used. Install it in Settings › Password managers.";
 const OP_LOCKED: &str = "1Password didn't unlock. Approve the prompt in the 1Password app.";
 const OP_SIGNED_OUT: &str = "1Password isn't connected to the CLI. Turn on 1Password › Settings › Developer › Integrate with 1Password CLI.";
 const BW_LOCKED: &str = "Bitwarden is locked. Unlock it in Settings › Password managers.";
@@ -168,28 +169,143 @@ fn extra_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The CLI to run: `FARO_OP_PATH` / `FARO_BW_PATH`, then `PATH`, then the
+/// The CLI to run: `FARO_OP_PATH` / `FARO_BW_PATH`, then the user's or
+/// Faro's own copy (Settings › Password managers), then `PATH`, then the
 /// usual install folders.
 fn discover(provider: &str) -> Result<PathBuf> {
-    let (name, var) = match provider {
-        ONEPASSWORD => ("op", "FARO_OP_PATH"),
-        BITWARDEN => ("bw", "FARO_BW_PATH"),
+    let (name, var, tool) = match provider {
+        ONEPASSWORD => ("op", "FARO_OP_PATH", OP_TOOL.id),
+        BITWARDEN => ("bw", "FARO_BW_PATH", BW_TOOL.id),
         other => return Err(unknown(other)),
     };
     if let Some(path) = std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from) {
         check_program(&path, provider)?;
         return Ok(path);
     }
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    dirs.extend(extra_dirs());
-    let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
-    if let Some(found) = dirs.iter().map(|d| d.join(&exe)).find(|c| c.is_absolute() && c.is_file()) {
+    if let Some(path) = managed_tools::selected(tool) {
+        check_program(&path, provider)?;
+        return Ok(path);
+    }
+    if let Some(found) = find_installed(name) {
         return Ok(found);
     }
-    if cfg!(windows) && provider == BITWARDEN && dirs.iter().any(|d| d.join("bw.cmd").is_file()) {
+    if cfg!(windows) && provider == BITWARDEN && search_dirs().iter().any(|d| d.join("bw.cmd").is_file()) {
         bail!(BW_CMD);
     }
     bail!(missing(provider))
+}
+
+fn search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    dirs.extend(extra_dirs());
+    dirs
+}
+
+/// A copy installed outside Faro: `PATH`, then the usual install folders.
+fn find_installed(name: &str) -> Option<PathBuf> {
+    let exe = managed_tools::exe_name(name);
+    search_dirs().into_iter().map(|d| d.join(&exe)).find(|c| c.is_absolute() && c.is_file())
+}
+
+// ---------- Faro-managed copies (managed_tools) ----------
+
+/// 1Password's code-signing key ("Code signing for 1Password
+/// <codesign@1password.com>"), which signs every CLI download's `op.sig`.
+pub fn op_signing_key() -> PgpKey {
+    PgpKey::from_hex("3FEF9748469ADBE15DA7CA80AC2D62742012EA22", &OP_SIGNING_KEY_N.concat(), "010001")
+}
+
+const OP_SIGNING_KEY_N: [&str; 11] = [
+    "b2e9f5078858bf62f5d9d84e46b3ba852fc4d229018bb7483cc3f36d068b4c36f796d8dce069772627613469763b9c14",
+    "6da4881146b6fb5eeb240d9c06995c783d0b21699b88a334b44f591d322b686e2e24de0d8ce79d727f56cf5a5d677952",
+    "793266e99279da206e958cc1f1711284d315c3621a41b6ded0410c351d3f2f3a350e5c151f5488f6a3b23ff9c4463600",
+    "dd91bb8645c702f21486ca2597cb8158f313efc4c4825e82f9c39df57b068697f33e980382ddce93ed2d3909c34de746",
+    "7ac2e942883646bee276e78ec4e6253d28294011c8491fdc90d8f90b1f2dce422d2506dfb83e619e04e231bc555719bb",
+    "461adc7aa0567155a603cc5f811c71d145d52cef9a56cd19b9cbfde3d23f8ee1428b5af331dd237b81146eea03f99ef3",
+    "b0eb077261eadc8b6347c752492a533a77acf1123f9c2781a805e2508498b7515a43cb41e14d7de289df59cf56a7b10a",
+    "d2ba35d4dadf36ebde564c66aee6c6ab85e0f26b89e229f54e8782033016c0d7b7e7a896d2b6d6222f98b8f9ea976e40",
+    "08b5dabeb2486aa94125ad1382d112a25e15f4d271eef8048762ea6bff501cf7f8dd934c064cd6f5b9eefa6811891d90",
+    "3453aee89e9fcc91510e0afd389c74596c702b334c39dafe345486946b1e5961f2d238892a2243c7a32c26851ed6e905",
+    "6505b8cfeb3595ad30161273f1d950d0564d425f6f67fe433f275904eb4a6865",
+];
+
+pub static OP_TOOL: ToolSpec = ToolSpec {
+    id: "op",
+    name: "1Password CLI",
+    program: "op",
+    config_file: "op-cli.json",
+    feed: Feed::Signed {
+        publisher: "1Password",
+        check_url: "https://app-updates.agilebits.com/check/1/0/CLI2/en/2.0.0/N",
+        asset: op_asset,
+        download_base: "https://cache.agilebits.com/dist/1P/op2/pkg",
+        key: op_signing_key,
+    },
+    parse_version: managed_tools::plain_version,
+    find_installed: || find_installed("op"),
+    check_custom: |p| check_program(p, ONEPASSWORD),
+    on_select: |_| {},
+};
+
+pub static BW_TOOL: ToolSpec = ToolSpec {
+    id: "bw",
+    name: "Bitwarden CLI",
+    program: "bw",
+    config_file: "bw-cli.json",
+    // The repository also publishes the desktop, web and browser apps.
+    feed: Feed::GitHub {
+        api: "https://api.github.com/repos/bitwarden/clients/releases?per_page=100",
+        tag_prefix: "cli-",
+        pick: bw_asset,
+    },
+    parse_version: managed_tools::plain_version,
+    find_installed: || find_installed("bw"),
+    check_custom: |p| check_program(p, BITWARDEN),
+    on_select: |_| {},
+};
+
+/// `v2.42.0/op_windows_amd64_v2.42.0.zip`, relative to the download base.
+pub fn op_asset(os: &str, arch: &str, version: &str) -> Result<String> {
+    let platform = match os {
+        "windows" => "windows",
+        "linux" => "linux",
+        "macos" => "darwin",
+        _ => bail!("1Password publishes no CLI build for {os}/{arch}"),
+    };
+    let cpu = match (os, arch) {
+        // No native Windows arm64 build; the amd64 one runs emulated.
+        ("windows", "x86_64" | "aarch64") => "amd64",
+        (_, "x86_64") => "amd64",
+        (_, "aarch64") => "arm64",
+        ("windows" | "linux", "x86") => "386",
+        ("linux", "arm") => "arm",
+        _ => bail!("1Password publishes no CLI build for {os}/{arch}"),
+    };
+    Ok(format!("v{version}/op_{platform}_{cpu}_v{version}.zip"))
+}
+
+/// The standalone CLI zip: `bw-bit-windows-2026.11.0.zip` (older releases:
+/// `bw-windows-…`). The full build wins over the `bw-oss-` one.
+pub fn bw_asset(os: &str, arch: &str, names: &[&str]) -> Result<String> {
+    let platform = match (os, arch) {
+        // No native Windows arm64 build; the x64 one runs emulated.
+        ("windows", "x86_64" | "aarch64") => "windows",
+        ("linux", "x86_64") => "linux",
+        ("linux", "aarch64") => "linux-arm64",
+        ("macos", "x86_64") => "macos",
+        ("macos", "aarch64") => "macos-arm64",
+        _ => bail!("Bitwarden publishes no CLI build for {os}/{arch}"),
+    };
+    for prefix in ["bw-bit-", "bw-"] {
+        let want = format!("{prefix}{platform}-");
+        let hit = names.iter().find(|n| {
+            n.ends_with(".zip") && n.strip_prefix(want.as_str()).is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        });
+        if let Some(name) = hit {
+            return Ok(name.to_string());
+        }
+    }
+    bail!("this Bitwarden CLI release has no {platform} download")
 }
 
 /// The adapter rules: an absolute path to a real file, and on Windows an

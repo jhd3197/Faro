@@ -132,6 +132,8 @@ import type {
   PmField,
   PmItem,
   PmStatus,
+  ManagedToolId,
+  ToolStatus,
 } from "./types";
 
 // Typed wrappers around the Tauri command surface. The string names must match
@@ -315,6 +317,15 @@ export const ipc = {
   cfAccessStatus: (hostname: string) => invoke<AccessStatus>("cf_access_status", { hostname }),
   /** Browser sign-in; resolves once it finishes (or fails). */
   cfAccessLogin: (hostname: string) => invoke<AccessStatus>("cf_access_login", { hostname }),
+
+  // ---- Faro-managed tools: cloudflared, the 1Password and Bitwarden CLIs ----
+  toolStatus: (id: ManagedToolId) => invoke<ToolStatus>("tool_status", { id }),
+  /** Also asks the publisher for the latest release. */
+  toolCheck: (id: ManagedToolId) => invoke<ToolStatus>("tool_check", { id }),
+  /** Download, verify and use Faro's own copy of the official release. */
+  toolInstall: (id: ManagedToolId) => invoke<ToolStatus>("tool_install", { id }),
+  toolSetCustomPath: (id: ManagedToolId, path: string | null) =>
+    invoke<ToolStatus>("tool_set_custom_path", { id, path }),
 
   // ---- One-click "Add faro-cli to PATH" (Plan 16 Phase 4): per-user, no admin.
   pathStatus: () => invoke<PathStatus>("path_status"),
@@ -1007,6 +1018,11 @@ export async function onAgentHostPaired(
 /** Access TCP forwards changed (a session connected, or one was started or stopped). */
 export async function onCfForwardsChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("cf-forward://status", () => cb());
+}
+
+/** A Faro-managed tool changed or has an update (`tools://status`). */
+export async function onToolStatus(cb: (status: ToolStatus) => void): Promise<UnlistenFn> {
+  return listen<ToolStatus>("tools://status", (e) => cb(e.payload));
 }
 
 export async function onCloudflaredStatus(

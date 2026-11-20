@@ -1,7 +1,7 @@
 // Password managers and SSH agents for the demo build (Plan 33). Made-up
 // vaults: 1Password starts signed in, Bitwarden starts locked and unlocks with
 // any non-empty master password. No command ever returns a secret value.
-import type { AgentInfo, PmField, PmItem, PmState, PmStatus } from "@/lib/types";
+import type { AgentInfo, PmField, PmItem, PmState, PmStatus, ToolStatus } from "@/lib/types";
 
 type Args = Record<string, any>;
 
@@ -105,6 +105,52 @@ let opState: PmState = "ready";
 let bwState: PmState = "locked";
 let agents: Record<string, boolean> = { system: true, "1password": true, bitwarden: false };
 
+// The CLIs themselves (managed_tools): where each comes from. A missing
+// manager has no CLI; installing one leaves the manager signed out, as a
+// fresh CLI would be.
+const LATEST = { op: "2.42.0", bw: "2026.11.0" } as const;
+type ToolId = keyof typeof LATEST;
+let tools: Record<ToolId, { source: ToolStatus["source"]; version?: string; customPath?: string; checked: boolean }> = {
+  op: { source: "path", version: "2.41.0", checked: false },
+  bw: { source: "path", version: "2026.11.0", checked: false },
+};
+const MANAGED_DIR = "~/Library/Application Support/com.juandenis.faro/bin";
+const TOOL_NAMES: Record<ToolId, string> = { op: "1Password CLI", bw: "Bitwarden CLI" };
+
+function cliPath(id: ToolId): string | undefined {
+  const t = tools[id];
+  if (t.source === "missing") return undefined;
+  if (t.source === "custom") return t.customPath;
+  if (t.source === "managed") return `${MANAGED_DIR}/${id}`;
+  return `/opt/homebrew/bin/${id}`;
+}
+
+function toolStatus(id: ToolId, message?: string): ToolStatus {
+  const t = tools[id];
+  const latest = t.checked ? LATEST[id] : undefined;
+  return {
+    id,
+    name: TOOL_NAMES[id],
+    source: t.source,
+    path: cliPath(id),
+    version: t.source === "missing" ? undefined : t.version,
+    customPath: t.customPath,
+    managedPath: `${MANAGED_DIR}/${id}`,
+    latest,
+    updateAvailable: !!latest && !!t.version && t.source !== "missing" && latest !== t.version,
+    message,
+  };
+}
+
+function managerState(id: ToolId): PmState {
+  return id === "op" ? opState : bwState;
+}
+
+function setManagerState(id: ToolId, state: PmState) {
+  if (id === "op") opState = state;
+  else bwState = state;
+}
+
 /** Every password-manager command the UI sent, newest last (tests only). */
 export const calls: { cmd: string; args: Args }[] = [];
 
@@ -112,6 +158,11 @@ export const calls: { cmd: string; args: Args }[] = [];
 export function setState(next: { "1password"?: PmState; bitwarden?: PmState }) {
   if (next["1password"]) opState = next["1password"];
   if (next.bitwarden) bwState = next.bitwarden;
+  for (const id of ["op", "bw"] as ToolId[]) {
+    const state = managerState(id);
+    if (state === "missing") tools[id] = { source: "missing", checked: tools[id].checked };
+    else if (tools[id].source === "missing") tools[id] = { source: "path", version: LATEST[id], checked: tools[id].checked };
+  }
 }
 
 /** Mark SSH agents running or not (tests only). */
@@ -123,6 +174,10 @@ export function reset() {
   opState = "ready";
   bwState = "locked";
   agents = { system: true, "1password": true, bitwarden: false };
+  tools = {
+    op: { source: "path", version: "2.41.0", checked: false },
+    bw: { source: "path", version: "2026.11.0", checked: false },
+  };
   calls.length = 0;
 }
 
@@ -131,7 +186,7 @@ function status(): PmStatus[] {
     {
       id: "1password",
       name: "1Password",
-      cliPath: opState === "missing" ? undefined : "/opt/homebrew/bin/op",
+      cliPath: cliPath("op"),
       state: opState,
       account: opState === "ready" ? "demo@example.com (my.1password.com)" : undefined,
       detail:
@@ -144,10 +199,10 @@ function status(): PmStatus[] {
     {
       id: "bitwarden",
       name: "Bitwarden",
-      cliPath: bwState === "missing" ? undefined : "/opt/homebrew/bin/bw",
+      cliPath: cliPath("bw"),
       state: bwState,
       account: bwState === "missing" || bwState === "signedOut" ? undefined : "demo@example.com",
-      detail: bwState === "signedOut" ? "Run `bw login` once in a terminal." : undefined,
+      detail: bwState === "signedOut" ? "Bitwarden isn't signed in. Run `bw login` once in a terminal." : undefined,
     },
   ];
 }
@@ -213,6 +268,29 @@ export function handle(cmd: string, a: Args): unknown {
       if (!found) throw `That item no longer exists in ${NAMES[ref.provider] ?? ref.provider}.`;
       return null;
     }
+    case "tool_status":
+    case "tool_check":
+    case "tool_install":
+    case "tool_set_custom_path": {
+      const id = a.id as ToolId;
+      if (!(id in LATEST)) throw `Unknown tool: ${a.id}`;
+      if (cmd === "tool_check") tools[id].checked = true;
+      if (cmd === "tool_install") {
+        tools[id] = { source: "managed", version: LATEST[id], checked: true };
+        if (managerState(id) === "missing") setManagerState(id, "signedOut");
+        return toolStatus(id, `Installed ${TOOL_NAMES[id]} ${LATEST[id]}`);
+      }
+      if (cmd === "tool_set_custom_path") {
+        const path = typeof a.path === "string" && a.path.trim() ? a.path.trim() : undefined;
+        if (path) {
+          tools[id] = { ...tools[id], source: "custom", customPath: path, version: LATEST[id] };
+          if (managerState(id) === "missing") setManagerState(id, "signedOut");
+        } else {
+          tools[id] = { ...tools[id], source: managerState(id) === "missing" ? "missing" : "path", customPath: undefined };
+        }
+      }
+      return toolStatus(id);
+    }
     case "ssh_agents": {
       const list: AgentInfo[] = [
         { id: "system", label: "System agent", path: "/private/tmp/com.apple.launchd.demo/Listeners", available: agents.system },
@@ -233,4 +311,8 @@ export const COMMANDS = new Set([
   "password_manager_fields",
   "credential_ref_test",
   "ssh_agents",
+  "tool_status",
+  "tool_check",
+  "tool_install",
+  "tool_set_custom_path",
 ]);

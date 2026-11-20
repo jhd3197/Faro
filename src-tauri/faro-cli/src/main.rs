@@ -694,8 +694,8 @@ async fn async_main() {
 
 async fn run(cli: Cli) -> Result<()> {
     let store = open_store()?;
-    // The cloudflared picked in the app (custom or Faro-managed copy).
-    faro_lib::cloudflared::configure(&default_data_dir()?);
+    // The tools picked in the app (custom or Faro-managed copies).
+    faro_lib::managed_tools::configure_all(&default_data_dir()?);
     // No browser here: Cloudflare routes without a token of their own use
     // the connected account's service token.
     faro_lib::proxy_command::set_fallback_service_token(faro_lib::cloudflare_api::service_token(&default_data_dir()?));

@@ -50,6 +50,8 @@ test("named entry points open a real section, and a focus id when the control is
     themeMenu: { section: "appearance", focus: nav.SETTINGS_FOCUS.themeMode },
     transferPanel: { section: "transfers", focus: nav.SETTINGS_FOCUS.transferConcurrency },
     vaultLocked: { section: "passwordManagers", focus: nav.SETTINGS_FOCUS.bitwardenPassword },
+    opCliUpdate: { section: "passwordManagers", focus: nav.SETTINGS_FOCUS.opCli },
+    bwCliUpdate: { section: "passwordManagers", focus: nav.SETTINGS_FOCUS.bwCli },
   };
   assert.deepEqual(nav.SETTINGS_ENTRY_POINTS, expected);
   for (const [id, target] of Object.entries(expected)) {
@@ -70,6 +72,8 @@ test("each entry point is wired in the UI, and generic settings still opens with
     moveToCloudflare: "../src/components/MoveToCloudflareDialog.tsx",
     downloadFolder: "../src/components/FileBrowser.tsx",
     cloudflaredUpdate: "../src/components/AuthPromptModal.tsx",
+    opCliUpdate: "../src/components/AuthPromptModal.tsx",
+    bwCliUpdate: "../src/components/AuthPromptModal.tsx",
     profileCloudflareAccount: "../src/components/ProfileEditor.tsx",
     pairingRemoteControl: "../src/components/ProfileEditor.tsx",
     aboutCliInstall: "../src/components/AboutSettings.tsx",

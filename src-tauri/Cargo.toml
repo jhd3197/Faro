@@ -158,6 +158,8 @@ argon2 = "0.5"
 aes-gcm = "0.10"
 flate2 = "1"
 rand = "0.8"
+# Checks the OpenPGP signature on tool downloads (managed_tools::openpgp).
+rsa = { version = "0.9", features = ["sha2"] }
 
 # Compress / extract for local files (issue #62). Both were already in the
 # tree transitively; zip gains Deflate through the flate2 above.

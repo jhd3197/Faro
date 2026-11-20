@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::proxy_command::e2e::{fake_cloudflared, quoted, relay_exe, scratch, ssh_server, Prompter, Verifier};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -190,13 +191,13 @@ fn route_table() -> &'static Routes {
     T.get_or_init(Default::default)
 }
 
-fn set_route(base: &str, path: &str, body: Vec<u8>) {
+pub(crate) fn set_route(base: &str, path: &str, body: Vec<u8>) {
     route_table().lock().unwrap().entry(base.to_string()).or_default().insert(path.to_string(), body);
 }
 
 /// Serves the route table's paths for this server over HTTP/1.1 until the
 /// test ends.
-async fn http_server(initial: HashMap<String, Vec<u8>>) -> String {
+pub(crate) async fn http_server(initial: HashMap<String, Vec<u8>>) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     route_table().lock().unwrap().insert(base.clone(), initial);
@@ -229,7 +230,7 @@ async fn http_server(initial: HashMap<String, Vec<u8>>) -> String {
     base
 }
 
-fn relay_bytes() -> Vec<u8> {
+pub(crate) fn relay_bytes() -> Vec<u8> {
     std::fs::read(relay_exe()).unwrap()
 }
 

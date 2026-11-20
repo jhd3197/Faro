@@ -41,6 +41,7 @@ mod foldersync;
 pub mod grant;
 pub mod importers;
 pub mod keys;
+pub mod managed_tools;
 mod known_hosts;
 pub mod oauth;
 pub mod password_managers;
@@ -81,6 +82,8 @@ pub struct AppState {
     pub cli_updater: Arc<cli_updater::CliUpdater>,
     /// Which cloudflared Faro runs, and its managed copy (Plan 29).
     pub cloudflared: Arc<cloudflared::Manager>,
+    /// Faro-managed copies of cloudflared and the password-manager CLIs.
+    pub tools: Arc<managed_tools::Tools>,
     /// Access TCP forwards (`cloudflared access tcp`) started with a session.
     pub cf_forwards: Arc<cf_forward::Manager>,
     pub foldersync: Arc<foldersync::FolderSync>,
@@ -299,6 +302,7 @@ pub fn run() {
                 }
             }
 
+            let tools = Arc::new(managed_tools::Tools::load(&handle).expect("failed to initialise managed tools"));
             let state = AppState {
                 sessions: Arc::new(session::SessionManager::new()),
                 ptys: Arc::new(terminal::PtyManager::new()),
@@ -316,9 +320,10 @@ pub fn run() {
                     cli_updater::CliUpdater::load(&handle)
                         .expect("failed to initialise CLI updater settings"),
                 ),
-                cloudflared: Arc::new(
-                    cloudflared::Manager::load(&handle).expect("failed to initialise cloudflared settings"),
-                ),
+                cloudflared: Arc::new(cloudflared::Manager::new(
+                    tools.get(cloudflared::SPEC.id).expect("cloudflared is a managed tool"),
+                )),
+                tools,
                 cf_forwards: Arc::new(cf_forward::Manager::new(
                     handle.path().app_data_dir().expect("resolving app_data_dir for Access forwards"),
                 )),
@@ -409,11 +414,11 @@ pub fn run() {
                 cli_updater.auto_start_if_enabled(cli_handle).await;
             });
 
-            // A Faro-managed cloudflared: look for a newer official release.
-            let cloudflared = app.state::<AppState>().cloudflared.clone();
-            let cf_handle = app.handle().clone();
+            // Faro-managed tools (cloudflared, op, bw): look for newer releases.
+            let tools = app.state::<AppState>().tools.clone();
+            let tools_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                cloudflared.check_on_launch(cf_handle).await;
+                tools.check_on_launch(tools_handle).await;
             });
 
             // Show transfers, agent requests and folder sync in Vela.
@@ -496,6 +501,10 @@ pub fn run() {
             cli_updater::cli_updater_update,
             cli_updater::cli_updater_set_mode,
             cloudflared::cloudflared_status,
+            managed_tools::tool_status,
+            managed_tools::tool_check,
+            managed_tools::tool_install,
+            managed_tools::tool_set_custom_path,
             cloudflared::cloudflared_check,
             cloudflared::cloudflared_install,
             cloudflared::cloudflared_set_custom_path,
