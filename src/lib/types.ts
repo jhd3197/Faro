@@ -436,6 +436,8 @@ export interface CliToolStatus {
   installUrl?: string;
   hasAccount: boolean;
   docsUrl: string;
+  /** Something to set up next to the CLI (the AWS Session Manager plugin). */
+  hint?: string;
 }
 
 export interface CloudflaredStatus {

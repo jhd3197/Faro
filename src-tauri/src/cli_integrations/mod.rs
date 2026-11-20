@@ -316,6 +316,10 @@ pub struct CliStatus {
     pub has_account: bool,
     /// Where to read about it.
     pub docs_url: String,
+    /// Something to set up next to the CLI: "AWS SSM routes need the
+    /// Session Manager plugin".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 /// Plain sentences Faro writes for each state.
@@ -505,7 +509,11 @@ impl Integrations {
             install_url: tool.install_url,
             has_account,
             docs_url: specs::docs_url(id).to_string(),
+            hint: None,
         };
+        if id == "aws" && installed && specs::find_ssm_plugin().is_none() {
+            s.hint = Some("AWS SSM routes also need the Session Manager plugin, which isn't installed: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html".into());
+        }
         if let (Some(last), true) = (last, installed) {
             s.state = last.state;
             s.accounts = last.accounts;

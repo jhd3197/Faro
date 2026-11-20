@@ -306,6 +306,12 @@ function CliDetail({ row }: { row: Row }) {
         </Note>
       )}
 
+      {s.hint && (
+        <Note tone="warning">
+          <span data-testid="cli-hint">{s.hint}</span>
+        </Note>
+      )}
+
       {/* Install */}
       <section className="rounded border border-border px-3 py-2">
         <h3 className="mb-1 text-xs font-semibold">Install</h3>

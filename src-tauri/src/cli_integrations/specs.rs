@@ -140,6 +140,18 @@ pub fn find_on_path(programs: &[&str]) -> Option<PathBuf> {
     None
 }
 
+/// The AWS Session Manager plugin `aws ssm start-session` needs.
+pub fn find_ssm_plugin() -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = crate::env_path::search_dirs();
+    if cfg!(windows) {
+        dirs.extend(env_dir("ProgramFiles", r"Amazon\SessionManagerPlugin\bin"));
+    } else {
+        dirs.push(PathBuf::from("/usr/local/sessionmanagerplugin/bin"));
+    }
+    dirs.extend(common_dirs());
+    file_names("session-manager-plugin").iter().find_map(|n| dirs.iter().map(|d| d.join(n)).find(|c| c.is_file()))
+}
+
 fn find(id: &str, program: &str) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = crate::env_path::search_dirs();
     dirs.extend(own_dirs(id));
