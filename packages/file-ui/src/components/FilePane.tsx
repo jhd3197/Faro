@@ -366,6 +366,8 @@ export function FilePane({
     y: number;
     items: MenuItem[];
   } | null>(null);
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menu != null;
   const [modal, setModal] = useState<ModalState>(null);
   // The row being renamed in place (by path).
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -523,8 +525,14 @@ export function FilePane({
           target.isContentEditable);
       const inFilter = !!target?.closest?.("[data-pane-filter]");
       if (e.key === "Escape") {
-        // Esc peels one layer at a time: filter text, then the filter box
-        // itself, then the selection. Not remappable (the universal cancel).
+        // Esc peels one layer at a time: an open context menu, filter text,
+        // then the filter box itself, then the selection. Not remappable (the
+        // universal cancel). The menu check covers an Esc that lands before
+        // the menu has taken focus, which would otherwise drop the selection.
+        if (menuOpenRef.current) {
+          setMenu(null);
+          return;
+        }
         if (typing && !inFilter) return; // the path box handles its own Esc
         if (filter) {
           setFilter("");
