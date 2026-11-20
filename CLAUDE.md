@@ -73,6 +73,13 @@ phone runs one — `adb forward tcp:8722 tcp:8722` reaches it at `127.0.0.1:8722
 --noEmit` exit 0 · a real runtime observation of the new behavior · committed
 locally on `dev` (not pushed).
 
+**Before any push: `bash scripts/ci-local.sh` must end in `ALL GREEN`.** It
+runs every step of `.github/workflows/ci.yml` in Docker on the CI image
+(ubuntu-22.04, newest stable Rust, Chrome as a non-root user): actionlint,
+unit + UI tests, Vite build, cargo check, Rust tests, the S3 CLI audit, clippy.
+Windows-only checks miss Linux-only lints, mock-build gaps and new-toolchain
+lints. Never push to "see if CI passes" — CI confirms, it doesn't discover.
+
 ## Where things live
 
 - **`RemoteFs`** (`src-tauri/src/remotefs/`) — metadata + mutation only
