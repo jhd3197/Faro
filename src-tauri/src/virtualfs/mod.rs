@@ -73,6 +73,71 @@ pub trait Hydrator: Send + Sync {
     async fn download_to(&self, remote_path: &str, dest_dir: &Path) -> Result<PathBuf>;
 }
 
+/// Everything the platform provider needs to stand up one on-demand root.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+#[derive(Debug, Clone)]
+pub struct RootConfig {
+    pub local_root: PathBuf,
+    pub remote_root: String,
+    /// How often to re-list the remote top level and add/remove placeholders
+    /// for files that appeared or vanished after start. `0` disables it.
+    pub refresh_secs: u64,
+}
+
+/// Default cadence for the top-level refresh poll.
+pub const DEFAULT_REFRESH_SECS: u64 = 60;
+
+// ---------- refresh planning (pure) ----------
+
+/// One entry already in a root's local folder, as the refresh poll sees it.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+#[derive(Debug, Clone)]
+pub struct LocalEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    /// The entry is still an untouched placeholder (no local bytes, never
+    /// edited, never populated) — the only kind the poll may delete or replace.
+    /// Anything holding local data is left alone so a refresh never loses work.
+    pub untouched_placeholder: bool,
+}
+
+/// What a refresh pass should change, by entry name.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RefreshPlan {
+    /// On the remote, missing locally → create a placeholder.
+    pub create: Vec<String>,
+    /// Untouched placeholder whose remote file is gone → remove it.
+    pub remove: Vec<String>,
+    /// Untouched placeholder whose remote size changed → remove + recreate, so
+    /// a later hydration doesn't serve a stale length.
+    pub replace: Vec<String>,
+}
+
+/// Diff a root's local entries against the remote listing. Pure so the
+/// "never delete local data" rule is unit-tested without touching the OS.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+pub fn plan_refresh(local: &[LocalEntry], remote: &[DirEntry]) -> RefreshPlan {
+    let mut plan = RefreshPlan::default();
+    for r in remote {
+        let r_dir = matches!(r.kind, crate::remotefs::FileKind::Directory);
+        match local.iter().find(|l| l.name == r.name) {
+            None => plan.create.push(r.name.clone()),
+            Some(l) if l.untouched_placeholder && !l.is_dir && !r_dir && l.size != r.size => {
+                plan.replace.push(r.name.clone())
+            }
+            Some(_) => {}
+        }
+    }
+    for l in local {
+        if l.untouched_placeholder && !remote.iter().any(|r| r.name == l.name) {
+            plan.remove.push(l.name.clone());
+        }
+    }
+    plan
+}
+
 // ---------- persisted config ----------
 
 /// One sync root we've registered with the OS. Persisted so a startup reconcile
@@ -208,11 +273,12 @@ impl VirtualFs {
         let hydrator: Arc<dyn Hydrator> =
             Arc::new(SessionHydrator::new(app.clone(), pair.profile_id.clone()));
         let provider = platform::Provider::start(
-            pair.id.clone(),
-            local_root,
-            pair.remote_root.clone(),
+            RootConfig {
+                local_root,
+                remote_root: pair.remote_root.clone(),
+                refresh_secs: DEFAULT_REFRESH_SECS,
+            },
             hydrator,
-            app.clone(),
         )
         .await?;
         self.running.lock().await.insert(pair.id.clone(), provider);
@@ -417,6 +483,51 @@ mod tests {
         let plan = plan_reconcile(&persisted, &[]);
         assert_eq!(plan.to_unregister, vec!["a".to_string(), "b".to_string()]);
         assert!(plan.to_start.is_empty());
+    }
+
+    fn remote(name: &str, size: u64, dir: bool) -> DirEntry {
+        DirEntry {
+            name: name.into(),
+            path: format!("/r/{name}"),
+            kind: if dir { crate::remotefs::FileKind::Directory } else { crate::remotefs::FileKind::File },
+            size,
+            modified: None,
+            mode: None,
+            etag: None,
+            link_dir: false,
+        }
+    }
+
+    fn local(name: &str, size: u64, dir: bool, untouched: bool) -> LocalEntry {
+        LocalEntry { name: name.into(), is_dir: dir, size, untouched_placeholder: untouched }
+    }
+
+    #[test]
+    fn refresh_creates_new_and_removes_vanished_placeholders() {
+        let plan = plan_refresh(
+            &[local("old.jpg", 5, false, true), local("keep.jpg", 5, false, true)],
+            &[remote("keep.jpg", 5, false), remote("new.jpg", 9, false), remote("dir", 0, true)],
+        );
+        assert_eq!(plan.create, vec!["new.jpg".to_string(), "dir".to_string()]);
+        assert_eq!(plan.remove, vec!["old.jpg".to_string()]);
+        assert!(plan.replace.is_empty());
+    }
+
+    #[test]
+    fn refresh_never_touches_local_data() {
+        // Hydrated or edited files and populated dirs are not "untouched":
+        // a vanished or resized remote must never delete them.
+        let plan = plan_refresh(
+            &[local("edited.txt", 5, false, false), local("dir", 0, true, false)],
+            &[remote("edited.txt", 99, false)],
+        );
+        assert_eq!(plan, RefreshPlan::default());
+    }
+
+    #[test]
+    fn refresh_replaces_resized_placeholder() {
+        let plan = plan_refresh(&[local("a.bin", 5, false, true)], &[remote("a.bin", 6, false)]);
+        assert_eq!(plan.replace, vec!["a.bin".to_string()]);
     }
 
     #[test]
