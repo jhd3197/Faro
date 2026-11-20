@@ -72,3 +72,7 @@ scripts/.cert-lab/
 
 # Local verification screenshots
 .shots/
+
+# Output from scripts/ci-local.sh
+scripts/ci-local/logs/
+scripts/ci-local/run.out

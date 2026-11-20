@@ -5,6 +5,15 @@ import { TipStrip } from "./components/TipStrip";
 import { useDiscovery } from "./stores/discoveryStore";
 import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
+import { CopyToDialog } from "./components/CopyToDialog";
+import { CopyJobsPill } from "./components/CopyJobsPill";
+import { useCopyJobs } from "./stores/copyStore";
+import { useRules } from "./stores/rulesStore";
+import { useMounts } from "./stores/mountStore";
+import { MountDialog } from "./components/MountDialog";
+import { IndexSearchHost } from "./components/IndexSearch";
+import { TagsDialog } from "./components/TagsDialog";
+import { useIndex } from "./stores/indexStore";
 import { ServerRail } from "./components/ServerRail";
 import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
@@ -129,6 +138,34 @@ export default function App() {
 
   useEffect(() => { void useDiscovery.getState().init(); }, []);
 
+  // Copy to… runs (Plan 34): live progress for the status-bar pill. Rule sets
+  // feed the dialog's Rules choice.
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    let cancelled = false;
+    void useCopyJobs.getState().init().then((c) => {
+      if (cancelled) c();
+      else cleanup = c;
+    });
+    void useRules.getState().load();
+    let unIndex: (() => void) | undefined;
+    void useIndex.getState().init().then((u) => {
+      if (cancelled) u();
+      else unIndex = u;
+    });
+    let unMounts: (() => void) | undefined;
+    void useMounts.getState().init().then((u) => {
+      if (cancelled) u();
+      else unMounts = u;
+    });
+    return () => {
+      cancelled = true;
+      cleanup?.();
+      unMounts?.();
+      unIndex?.();
+    };
+  }, []);
+
   // Pick up where the last run left off (focused server, split, Settings
   // section). Saving the session snapshot starts only after this finishes.
   useEffect(() => { void useSession.getState().restore(); }, []);
@@ -221,6 +258,7 @@ export default function App() {
       <DirectoryDiffHost />
       <FindDuplicatesHost />
       <FleetSearchHost />
+      <IndexSearchHost />
       <SkillsHost />
       <SnippetsHost />
       <CommandPalette />
@@ -282,6 +320,9 @@ export default function App() {
             </ErrorBoundary>
           </ResizablePanel>
           <NativeFileDrop />
+          <CopyToDialog />
+          <MountDialog />
+          <TagsDialog />
           <UploadReports />
           <TransferQueue containerRef={columnRef} />
           {!zen && <TipStrip />}
@@ -577,6 +618,7 @@ function StatusBar({
           </StatusPopover>
         )}
       </div>
+      <CopyJobsPill />
       <PillButton
         onClick={() => openSettings(SETTINGS_ENTRY_POINTS.statusBarSync)}
         data-settings-link="statusBarSync"

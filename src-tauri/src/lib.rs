@@ -21,6 +21,7 @@ pub mod bridge;
 pub mod commands;
 mod agent_host;
 mod cache;
+pub mod copyto;
 mod app_updater;
 mod archive_ops;
 pub mod cli_updater;
@@ -36,6 +37,7 @@ pub mod dedupe;
 pub mod diff;
 pub mod error;
 pub mod fsutil;
+pub mod fileindex;
 mod diskscan;
 mod docker;
 mod editor;
@@ -54,6 +56,7 @@ pub mod profiles;
 pub mod proxy;
 pub mod proxy_command;
 pub mod remotefs;
+pub mod rules;
 pub mod scan;
 pub mod scp;
 pub mod search;
@@ -93,6 +96,10 @@ pub struct AppState {
     /// the OS sync-root registrations; inert on non-Windows / non-`virtualfs`
     /// builds.
     pub virtualfs: Arc<virtualfs::VirtualFs>,
+    /// Copy to… runs between connections (Plan 34). Ephemeral.
+    pub copyjobs: Arc<copyto::CopyJobs>,
+    /// File index runs (Plan 34); the index itself lives in `faro.db`.
+    pub fileindex: Arc<fileindex::IndexManager>,
     /// Running disk-usage scans (Plan 4). Ephemeral — not persisted.
     pub diskscan: Arc<diskscan::ScanManager>,
     /// Long-lived streamed execs (Plan 30) — the Server view's metrics sampler.
@@ -353,6 +360,8 @@ pub fn run() {
                     virtualfs::VirtualFs::load(&handle)
                         .expect("failed to initialise virtualfs settings"),
                 ),
+                copyjobs: Arc::new(copyto::CopyJobs::new()),
+                fileindex: Arc::new(fileindex::IndexManager::new()),
                 diskscan: Arc::new(diskscan::ScanManager::new()),
                 streams: Arc::new(stream_exec::StreamManager::new()),
                 diff: Arc::new(diff::DiffManager::new()),
@@ -362,6 +371,8 @@ pub fn run() {
                 preview,
             };
             app.manage(state);
+            // Keep indexed folders fresh (Plan 34 Phase 3).
+            fileindex::spawn_background(app.handle().clone());
 
             // Apply persisted transfer-queue settings (Plan 17, Plan 23). The
             // frontend writes `transferConcurrency`/`transferThrottleKbps`/
@@ -561,7 +572,35 @@ pub fn run() {
             foldersync::foldersync_remove,
             foldersync::foldersync_set_enabled,
             foldersync::foldersync_sync_now,
+            rules::rules_list,
+            rules::rules_save,
+            rules::rules_delete,
+            rules::rules_test,
+            rules::rules_plan_in_place,
+            rules::rules_apply_in_place,
+            rules::rules_views,
+            fileindex::index_start,
+            fileindex::index_roots,
+            fileindex::index_refresh,
+            fileindex::index_forget,
+            fileindex::index_search,
+            fileindex::index_facets,
+            fileindex::index_thumbnail,
+            fileindex::index_group,
+            fileindex::tags_apply,
+            fileindex::tags_get,
+            fileindex::connection_of_session,
+            copyto::copyto_plan,
+            copyto::copyto_start,
+            copyto::copyto_jobs,
+            copyto::copyto_cancel,
+            copyto::copyto_clear,
             virtualfs::virtualfs_supported,
+            virtualfs::virtualfs_mounts,
+            virtualfs::virtualfs_mount_save,
+            virtualfs::virtualfs_mount_remove,
+            virtualfs::virtualfs_mount_set_enabled,
+            virtualfs::virtualfs_default_mount_root,
             virtualfs::virtualfs_status,
             virtualfs::virtualfs_free_up_space,
             diskscan::diskscan_start,

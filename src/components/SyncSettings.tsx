@@ -7,6 +7,7 @@ import { useConnections } from "@/stores/connectionsStore";
 import { relTime } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Dropdown } from "./ui/Dropdown";
+import { MountsSettings } from "./MountsSettings";
 import {
   Advanced,
   Btn,
@@ -73,6 +74,7 @@ export function SyncSettings() {
           </List>
         </>
       )}
+      <MountsSettings />
     </div>
   );
 }

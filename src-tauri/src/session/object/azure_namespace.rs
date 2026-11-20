@@ -227,6 +227,30 @@ impl AzureNamespace {
         }
     }
 
+    /// A blob's user metadata (`x-ms-meta-*`, names without the prefix).
+    pub async fn get_metadata(&self, key: &str) -> Result<Vec<(String, String)>> {
+        let resp = self.request(Method::HEAD, self.url(key)?, &[]).await?;
+        Ok(resp
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| {
+                let name = k.as_str().strip_prefix("x-ms-meta-")?;
+                Some((name.to_string(), v.to_str().ok()?.to_string()))
+            })
+            .collect())
+    }
+
+    /// Replace a blob's user metadata (Set Blob Metadata); content untouched.
+    pub async fn set_metadata(&self, key: &str, meta: &[(String, String)]) -> Result<()> {
+        let mut url = self.url(key)?;
+        url.query_pairs_mut().append_pair("comp", "metadata");
+        let names: Vec<String> = meta.iter().map(|(k, _)| format!("x-ms-meta-{k}")).collect();
+        let headers: Vec<(&str, String)> =
+            names.iter().zip(meta.iter()).map(|(n, (_, v))| (n.as_str(), v.clone())).collect();
+        self.request(Method::PUT, url, &headers).await?;
+        Ok(())
+    }
+
     pub async fn mkdir(&self, key: &str) -> Result<()> {
         self.request(
             Method::PUT,

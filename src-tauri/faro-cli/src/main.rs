@@ -72,11 +72,31 @@ enum Cmd {
         command: Vec<String>,
     },
 
-    /// Copy a file from one location to another.
+    /// Copy a file from one location to another. Between two saved
+    /// connections (`a:/x b:/y`) it plans first, then copies; a re-run skips
+    /// what already landed.
     Cp {
         source: String,
         /// Destination filename or directory. End remote directories with `/`.
         destination: String,
+        /// Copy a whole folder (connection to connection).
+        #[arg(short, long)]
+        recursive: bool,
+        /// Print the plan and copy nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable output (plan or result).
+        #[arg(long)]
+        json: bool,
+        /// When a destination file exists: skip (default), newer, always.
+        #[arg(long, value_enum, default_value = "skip")]
+        overwrite: CpOverwrite,
+        /// Check each destination file's size after it lands.
+        #[arg(long)]
+        verify: bool,
+        /// Rename on the way with a Settings › Rules rule set (name or id).
+        #[arg(long)]
+        rules: Option<String>,
     },
 
     /// Rename / move a file (must be within a single backend).
@@ -703,7 +723,10 @@ async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Cmd::Ls { target, bytes } => cmd_ls(&store, &target, bytes).await,
         Cmd::Exec { profile, command } => cmd_exec(&store, &profile, &command).await,
-        Cmd::Cp { source, destination } => cmd_cp(&store, &source, &destination).await,
+        Cmd::Cp { source, destination, recursive, dry_run, json, overwrite, verify, rules } => {
+            let opts = CpFlags { recursive, dry_run, json, overwrite, verify, rules };
+            cmd_cp(&store, &source, &destination, &opts).await
+        }
         Cmd::Mv { source, destination } => cmd_mv(&store, &source, &destination).await,
         Cmd::Rm { target, recursive } => cmd_rm(&store, &target, recursive).await,
         Cmd::Mkdir { target } => cmd_mkdir(&store, &target).await,
@@ -1321,9 +1344,36 @@ async fn cmd_exec(store: &ProfileStore, profile_name: &str, command: &[String]) 
     std::process::exit(code)
 }
 
-async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str) -> Result<()> {
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum CpOverwrite {
+    Skip,
+    Newer,
+    Always,
+}
+
+struct CpFlags {
+    recursive: bool,
+    dry_run: bool,
+    json: bool,
+    overwrite: CpOverwrite,
+    verify: bool,
+    rules: Option<String>,
+}
+
+async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str, flags: &CpFlags) -> Result<()> {
     let src_t = parse_target(src);
     let dst_t = parse_target(dst);
+
+    // The planning flags only apply between two connections. Refuse them for
+    // a local side instead of silently copying one file (or failing on a
+    // folder): folders between this PC and a connection go through `sync`.
+    let between = matches!((&src_t, &dst_t), (Target::Remote { .. }, Target::Remote { .. }));
+    if !between && (flags.recursive || flags.dry_run || flags.json || flags.verify || flags.rules.is_some()) {
+        bail!(
+            "--recursive, --dry-run, --json, --verify and --rules work for copies between two connections \
+             (a:/path b:/path). For a folder between this PC and a connection, use `faro-cli sync`."
+        );
+    }
 
     match (src_t, dst_t) {
         // local → local
@@ -1351,10 +1401,192 @@ async fn cmd_cp(store: &ProfileStore, src: &str, dst: &str) -> Result<()> {
             } else { PathBuf::from(&destination) };
             download_file_to(&session, &src, &target).await?;
         }
-        // remote → remote: not supported across profiles in v1.1.
-        (Target::Remote { .. }, Target::Remote { .. }) => {
-            bail!("remote-to-remote copy is not yet supported; download then upload");
+        (
+            Target::Remote { profile_name: src_name, path: src_path },
+            Target::Remote { profile_name: dst_name, path: dst_path },
+        ) => {
+            cmd_cp_between(store, &src_name, &src_path, &dst_name, &dst_path, flags).await?;
         }
+    }
+    Ok(())
+}
+
+/// Connection → connection copy (Plan 34 Phase 1): scan, plan with the same
+/// planner the app uses, then copy file by file through a private temp folder
+/// (or server-side within one object-store connection).
+async fn cmd_cp_between(
+    store: &ProfileStore,
+    src_name: &str,
+    src_path: &str,
+    dst_name: &str,
+    dst_path: &str,
+    flags: &CpFlags,
+) -> Result<()> {
+    use faro_lib::copyto::{self, CopyOptions, ItemAction, Overwrite, Source};
+
+    let src_profile = find_profile(store, src_name).await?;
+    let dst_profile = find_profile(store, dst_name).await?;
+    let summary = format!("cp {src_name}:{src_path} -> {dst_name}:{dst_path}");
+    let src_session = open_session(&src_profile, Access::Read, "download", summary.clone()).await?;
+    let dst_session = open_session(&dst_profile, Access::Write, "upload", summary).await?;
+    let src_fs = fs_for(&src_session);
+    let dst_fs = fs_for(&dst_session);
+
+    // What is the source?
+    let trimmed = src_path.trim_end_matches('/');
+    let src_base = basename(trimmed);
+    let src_entry = src_fs
+        .list_dir(&parent_of(trimmed))
+        .await
+        .with_context(|| format!("list {}", parent_of(trimmed)))?
+        .into_iter()
+        .find(|e| e.name == src_base)
+        .ok_or_else(|| anyhow!("{src_name}:{src_path} not found"))?;
+    let is_dir = matches!(src_entry.kind, FileKind::Directory);
+    if is_dir && !flags.recursive {
+        bail!("{src_name}:{src_path} is a folder; pass --recursive to copy it");
+    }
+
+    // Into an existing folder (or a path ending in `/`) keeps the source's
+    // name; otherwise the destination path names the copy.
+    let dst_trim = dst_path.trim_end_matches('/');
+    let into_dir = dst_path.ends_with('/') || dst_trim.is_empty() || dst_fs.list_dir(dst_trim).await.is_ok();
+    let (dest_dir, name) = if into_dir {
+        (if dst_trim.is_empty() { "/".to_string() } else { dst_trim.to_string() }, src_base.clone())
+    } else {
+        (parent_of(dst_trim), basename(dst_trim))
+    };
+
+    let tree = if is_dir {
+        faro_lib::scan::walk_tree(src_fs.as_ref(), trimmed).await?
+    } else {
+        copyto::single_file_tree(
+            &name,
+            &src_entry.path,
+            src_entry.size,
+            src_entry.modified.unwrap_or(0),
+            src_entry.etag.clone(),
+        )
+    };
+    let opts = CopyOptions {
+        overwrite: match flags.overwrite {
+            CpOverwrite::Skip => Overwrite::Skip,
+            CpOverwrite::Newer => Overwrite::Newer,
+            CpOverwrite::Always => Overwrite::Always,
+        },
+        verify: flags.verify,
+        rule_set: flags.rules.clone(),
+    };
+    let dest_tree = faro_lib::scan::destination_tree(dst_fs.as_ref(), &dest_dir).await?;
+    // Rules that use the date taken / camera / tags read the app's file index.
+    let facts = match faro_lib::db::Db::open(&default_data_dir()?.join("faro.db")) {
+        Ok(db) => faro_lib::rules::facts_from_index(std::sync::Arc::new(db), src_profile.id.clone()),
+        Err(_) => faro_lib::rules::facts_none(),
+    };
+    let namer = faro_lib::rules::load_namer(&default_data_dir()?, opts.rule_set.as_deref(), facts)?;
+    let plan = copyto::plan(&[Source { name, tree, is_dir }], &dest_dir, &dest_tree, &opts, namer.as_ref());
+
+    if flags.dry_run {
+        if flags.json {
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+        } else {
+            for it in &plan.items {
+                let verb = match it.action {
+                    ItemAction::Copy => "copy",
+                    ItemAction::Overwrite => "replace",
+                    ItemAction::Skip => "skip",
+                };
+                println!("{verb:<8} {} -> {}", it.source, it.dest);
+            }
+            println!(
+                "{} to copy ({}), {} skipped, {} renamed, {} name clashes",
+                plan.files_to_copy,
+                fmt_bytes(plan.bytes_to_copy),
+                plan.skipped,
+                plan.renamed,
+                plan.collisions
+            );
+        }
+        return Ok(());
+    }
+
+    for dir in &plan.directories {
+        let _ = dst_fs.create_dir(dir).await;
+    }
+    let same_object_store = src_profile.id == dst_profile.id && matches!(dst_session, Session::Object(_));
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let staging = std::env::temp_dir().join(format!("faro-cp-{}-{nonce}", std::process::id()));
+    let mut results = std::collections::HashMap::new();
+    let (mut ok, mut failed) = (0u64, 0u64);
+    for it in plan.items.iter().filter(|i| i.action != ItemAction::Skip) {
+        let res: Result<()> = async {
+            if same_object_store {
+                if let Session::Object(obj) = &dst_session {
+                    faro_lib::remotefs::object::ObjectFs::new(obj.clone())
+                        .server_copy(&it.source, &it.dest)
+                        .await?;
+                }
+            } else {
+                let local = staging.join(basename(&it.dest));
+                download_file_to(&src_session, &it.source, &local).await?;
+                let up = upload_file(&dst_session, &local.to_string_lossy(), &parent_of(&it.dest), &basename(&it.dest)).await;
+                let _ = tokio::fs::remove_file(&local).await;
+                up?;
+            }
+            if flags.verify {
+                let landed = dst_fs
+                    .list_dir(&parent_of(&it.dest))
+                    .await?
+                    .into_iter()
+                    .find(|e| e.name == basename(&it.dest))
+                    .ok_or_else(|| anyhow!("verify: {} not found after copy", it.dest))?;
+                if landed.size != it.size {
+                    bail!("verify: {} is {} bytes, source {}", it.dest, landed.size, it.size);
+                }
+            }
+            Ok(())
+        }
+        .await;
+        match res {
+            Ok(()) => {
+                ok += 1;
+                results.insert(it.dest.clone(), "ok".to_string());
+                if !flags.json {
+                    println!("copied   {}", it.dest);
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                results.insert(it.dest.clone(), format!("error: {e:#}"));
+                if !flags.json {
+                    eprintln!("failed   {}: {e:#}", it.dest);
+                }
+            }
+        }
+    }
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    if flags.json {
+        let items: Vec<_> = plan
+            .items
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "source": i.source,
+                    "dest": i.dest,
+                    "size": i.size,
+                    "result": results.get(&i.dest).cloned().unwrap_or_else(|| "skipped".into()),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "copied": ok, "failed": failed, "skipped": plan.skipped, "items": items })
+        );
+    } else {
+        println!("{ok} copied, {} skipped, {failed} failed", plan.skipped);
+    }
+    if failed > 0 {
+        bail!("{failed} file(s) failed");
     }
     Ok(())
 }

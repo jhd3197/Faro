@@ -1108,3 +1108,22 @@ async fn live_ftp_sync_recovery_roundtrip() { sync_recovery_roundtrip(ftp_sessio
 #[tokio::test]
 #[ignore = "requires FARO_LIVE_SFTP pointing at a disposable server"]
 async fn live_sftp_sync_recovery_roundtrip() { sync_recovery_roundtrip(sftp_session().await.expect("Set FARO_LIVE_SFTP")).await; }
+
+/// Plan 34 Phase 4: tags written into object metadata (server-side, in place)
+/// read back, other metadata survives, and clearing removes them.
+#[tokio::test]
+#[ignore = "requires an S3 lab and FARO_LIVE_S3"]
+async fn object_tags_round_trip() {
+    let session = object_session("FARO_LIVE_S3").await.expect("set FARO_LIVE_S3");
+    let Session::Object(obj) = &*session else { panic!("not an object session") };
+    let fs = crate::remotefs::object::ObjectFs::new(obj.clone());
+    let key = "faro-tags-live/photo.jpg";
+    obj.namespace().unwrap().mkdir(key).await.expect("create test object");
+    let tags = vec!["client-x".to_string(), "café".to_string()];
+    assert!(fs.set_object_tags(key, &tags).await.expect("write tags"));
+    let back = fs.object_tags(key).await.expect("read tags").expect("s3 holds tags");
+    assert_eq!(back, vec!["café", "client-x"]);
+    assert!(fs.set_object_tags(key, &[]).await.expect("clear tags"));
+    assert_eq!(fs.object_tags(key).await.unwrap(), Some(vec![]));
+    obj.namespace().unwrap().delete(key).await.ok();
+}

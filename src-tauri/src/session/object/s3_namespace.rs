@@ -110,9 +110,22 @@ impl S3Namespace {
         url: Url,
         copy_source: Option<&str>,
     ) -> Result<reqwest::Response> {
+        self.request_with(method, url, copy_source, &[]).await
+    }
+
+    async fn request_with(
+        &self,
+        method: Method,
+        url: Url,
+        copy_source: Option<&str>,
+        headers: &[(String, String)],
+    ) -> Result<reqwest::Response> {
         let mut builder = self.client.request(method.clone(), url);
         if method == Method::PUT {
             builder = builder.body(Vec::new());
+        }
+        for (k, v) in headers {
+            builder = builder.header(k.as_str(), v.as_str());
         }
         if let Some(source) = copy_source {
             let encoded: String = url::form_urlencoded::byte_serialize(
@@ -229,6 +242,46 @@ impl S3Namespace {
             quick_xml::de::from_str(&xml).context("S3 copy did not return a successful result")?;
         if result.etag.is_empty() {
             bail!("S3 copy returned an empty ETag");
+        }
+        Ok(())
+    }
+}
+
+impl S3Namespace {
+    /// An object's content type and user metadata (`x-amz-meta-*`, names
+    /// without the prefix, lower-case).
+    pub async fn get_metadata(&self, key: &str) -> Result<(Option<String>, Vec<(String, String)>)> {
+        let resp = self.request(Method::HEAD, self.object_url(key)?, None).await?;
+        let h = resp.headers();
+        let content_type = h.get("content-type").and_then(|v| v.to_str().ok()).map(str::to_string);
+        let meta = h
+            .iter()
+            .filter_map(|(k, v)| {
+                let name = k.as_str().strip_prefix("x-amz-meta-")?;
+                Some((name.to_string(), v.to_str().ok()?.to_string()))
+            })
+            .collect();
+        Ok((content_type, meta))
+    }
+
+    /// Replace an object's user metadata in place: a server-side copy onto
+    /// itself with `REPLACE`, keeping its content type. No bytes move.
+    pub async fn set_metadata(&self, key: &str, meta: &[(String, String)]) -> Result<()> {
+        let (content_type, _) = self.get_metadata(key).await?;
+        let mut headers = vec![("x-amz-metadata-directive".to_string(), "REPLACE".to_string())];
+        if let Some(ct) = content_type {
+            headers.push(("content-type".into(), ct));
+        }
+        for (k, v) in meta {
+            headers.push((format!("x-amz-meta-{k}"), v.clone()));
+        }
+        let xml = self
+            .request_with(Method::PUT, self.object_url(key)?, Some(key), &headers)
+            .await?
+            .text()
+            .await?;
+        if !xml.contains("ETag") {
+            bail!("S3 metadata update did not return a copy result");
         }
         Ok(())
     }

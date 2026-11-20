@@ -38,6 +38,21 @@ import type {
   DockerDiskUse,
   DockerResourceKind,
   DockerPruneKind,
+  CopyOptions,
+  CopySourceRef,
+  CopyPlan,
+  CopyJob,
+  RuleSet,
+  RuleSample,
+  RenameOp,
+  Mount,
+  MountView,
+  IndexRow,
+  IndexQuery,
+  IndexFacets,
+  IndexRootView,
+  IndexEvent,
+  TagsResult,
 } from "./types";
 import type {
   ConnectionProfile,
@@ -773,6 +788,52 @@ export const ipc = {
   folderSyncSyncNow: (id: string) =>
     invoke<PairView[]>("foldersync_sync_now", { id }),
 
+  // ---- Copy to… between connections (Plan 34) ----
+  /** Scan and plan without copying. `sourceSessionId` may be the local pane. */
+  copyToPlan: (sourceSessionId: SessionId, sources: CopySourceRef[], destProfileId: string, destDir: string, options: CopyOptions) =>
+    invoke<CopyPlan>("copyto_plan", { sourceSessionId, sources, destProfileId, destDir, options }),
+  /** Re-plan and run in the background; returns the job id. */
+  copyToStart: (sourceSessionId: SessionId, sources: CopySourceRef[], destProfileId: string, destDir: string, options: CopyOptions) =>
+    invoke<string>("copyto_start", { sourceSessionId, sources, destProfileId, destDir, options }),
+  copyToJobs: () => invoke<CopyJob[]>("copyto_jobs"),
+  copyToCancel: (id: string) => invoke<void>("copyto_cancel", { id }),
+  /** Forget finished jobs. */
+  copyToClear: () => invoke<void>("copyto_clear"),
+
+  // ---- File index + tags (Plan 34) ----
+  /** Index a folder now and keep it indexed. */
+  indexStart: (sessionId: SessionId, path: string) => invoke<void>("index_start", { sessionId, path }),
+  indexRoots: () => invoke<IndexRootView[]>("index_roots"),
+  indexRefresh: (connectionId: string, root: string) => invoke<void>("index_refresh", { connectionId, root }),
+  /** Stop indexing a folder and drop what was learned about it. */
+  indexForget: (connectionId: string, root: string) => invoke<void>("index_forget", { connectionId, root }),
+  indexSearch: (query: IndexQuery) => invoke<IndexRow[]>("index_search", { query }),
+  indexFacets: (connectionId?: string | null) => invoke<IndexFacets>("index_facets", { connectionId: connectionId ?? null }),
+  /** Base64 PNG thumbnail of an indexed image. */
+  indexThumbnail: (connectionId: string, path: string) => invoke<string>("index_thumbnail", { connectionId, path }),
+  tagsApply: (connectionId: string, paths: string[], add: string[], remove: string[]) =>
+    invoke<TagsResult>("tags_apply", { connectionId, paths, add, remove }),
+  tagsGet: (connectionId: string, path: string) => invoke<string[]>("tags_get", { connectionId, path }),
+  /** The saved connection (profile id) behind a live session. */
+  connectionOfSession: (sessionId: SessionId) => invoke<string>("connection_of_session", { sessionId }),
+
+  // ---- Settings › Rules (Plan 34) ----
+  rulesList: () => invoke<RuleSet[]>("rules_list"),
+  /** Add or replace a rule set; returns every set. */
+  rulesSave: (set: RuleSet) => invoke<RuleSet[]>("rules_save", { set }),
+  rulesDelete: (id: string) => invoke<RuleSet[]>("rules_delete", { id }),
+  /** Run `set` (unsaved edits included) over sample files from a folder. */
+  rulesTest: (set: RuleSet, sessionId: SessionId, path: string) =>
+    invoke<RuleSample[]>("rules_test", { set, sessionId, path }),
+  /** Renames that would bring a folder in line with a rule set. */
+  rulesPlanInPlace: (setId: string, sessionId: SessionId, path: string) =>
+    invoke<RenameOp[]>("rules_plan_in_place", { setId, sessionId, path }),
+  rulesApplyInPlace: (setId: string, sessionId: SessionId, path: string) =>
+    invoke<{ renamed: number; errors?: string[] }>("rules_apply_in_place", { setId, sessionId, path }),
+  /** Indexed files grouped into a rule set's view folders. */
+  rulesViews: (setId: string, connectionId?: string | null) =>
+    invoke<Record<string, IndexRow[]>>("rules_views", { setId, connectionId: connectionId ?? null }),
+
   // ---- On-demand virtual folders (Plan 9) ----
   /** Whether on-demand placeholders are available (Windows + `virtualfs` build). */
   virtualFsSupported: () => invoke<boolean>("virtualfs_supported"),
@@ -782,6 +843,14 @@ export const ipc = {
    *  placeholders. Returns the count dehydrated. */
   virtualFsFreeUpSpace: (pairId: string) =>
     invoke<number>("virtualfs_free_up_space", { pairId }),
+  // Mount as folder (Plan 34): each returns every mount.
+  mounts: () => invoke<MountView[]>("virtualfs_mounts"),
+  mountSave: (mount: Mount) => invoke<MountView[]>("virtualfs_mount_save", { mount }),
+  mountRemove: (id: string) => invoke<MountView[]>("virtualfs_mount_remove", { id }),
+  mountSetEnabled: (id: string, enabled: boolean) =>
+    invoke<MountView[]>("virtualfs_mount_set_enabled", { id, enabled }),
+  /** The folder a new mount named `name` uses by default. */
+  mountDefaultRoot: (name: string) => invoke<string>("virtualfs_default_mount_root", { name }),
 
   // ---- Disk Usage Explorer ----
   /** Kick off a recursive size scan of `path` on a session; returns a scan id. */
@@ -930,6 +999,18 @@ export const ipc = {
   searchForget: (searchId: string) =>
     invoke<void>("search_forget", { searchId }),
 };
+
+export async function onIndexProgress(cb: (e: IndexEvent) => void): Promise<UnlistenFn> {
+  return listen<IndexEvent>("index://progress", (e) => cb(e.payload));
+}
+
+export async function onVirtualFsChanged(cb: () => void): Promise<UnlistenFn> {
+  return listen("virtualfs://changed", () => cb());
+}
+
+export async function onCopyToProgress(cb: (job: CopyJob) => void): Promise<UnlistenFn> {
+  return listen<CopyJob>("copyto://progress", (e) => cb(e.payload));
+}
 
 export async function onEditSaved(
   cb: (event: EditSavedEvent) => void

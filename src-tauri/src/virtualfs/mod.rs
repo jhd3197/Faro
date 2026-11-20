@@ -26,7 +26,7 @@
 //! of enabled on-demand pairs and `unregister` the difference. See
 //! [`plan_reconcile`], which is pure and unit-tested.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -57,6 +57,82 @@ pub struct OnDemandPair {
     pub local_root: String,
     pub profile_id: String,
     pub remote_root: String,
+    /// Upload edits back (mounts only; on-demand sync pairs stay read-only).
+    pub write_back: bool,
+    pub allow_deletes: bool,
+    /// Rule set whose view rules show as a `Views` folder.
+    pub rule_set: Option<String>,
+}
+
+/// A connection (or a folder of it) shown as an on-demand Windows folder,
+/// independent of folder sync (Plan 34 Phase 2). Persisted in
+/// `virtualfs.json`. Several can run side by side, each its own sync root.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Mount {
+    pub id: String,
+    pub name: String,
+    pub profile_id: String,
+    pub remote_root: String,
+    pub local_root: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Upload files saved in the folder back to the connection (Phase 6).
+    /// Off = edits stay on this PC and show as local changes.
+    #[serde(default)]
+    pub write_back: bool,
+    /// With write-back on, also apply deletes and renames to the connection.
+    #[serde(default)]
+    pub allow_deletes: bool,
+    /// Keep a searchable index (dates, camera, thumbnails) of this folder.
+    #[serde(default)]
+    pub index: bool,
+    /// A Settings › Rules rule set whose view rules show as extra folders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_set: Option<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Mount {
+    fn as_pair(&self) -> OnDemandPair {
+        OnDemandPair {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            local_root: self.local_root.clone(),
+            profile_id: self.profile_id.clone(),
+            remote_root: self.remote_root.clone(),
+            write_back: self.write_back,
+            allow_deletes: self.write_back && self.allow_deletes,
+            rule_set: self.rule_set.clone(),
+        }
+    }
+}
+
+/// A mount merged with its live state — the shape the UI consumes.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MountView {
+    #[serde(flatten)]
+    pub mount: Mount,
+    pub running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Files edited or created in the folder that the connection doesn't have.
+    pub local_changes: Vec<String>,
+}
+
+/// `C:\Users\<me>\Faro\<name>` — the default folder for a new mount.
+pub fn default_mount_root(name: &str) -> PathBuf {
+    let clean: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.') { c } else { '-' })
+        .collect();
+    let clean = clean.trim().trim_matches('.').to_string();
+    let clean = if clean.is_empty() { "Connection".to_string() } else { clean };
+    dirs::home_dir().unwrap_or_else(std::env::temp_dir).join("Faro").join(clean)
 }
 
 /// Pulls bytes and listings from the pair's backend for the provider's callback
@@ -71,6 +147,102 @@ pub trait Hydrator: Send + Sync {
     async fn list_dir(&self, remote_path: &str) -> Result<Vec<DirEntry>>;
     /// Download a whole remote file into `dest_dir`; returns the written path.
     async fn download_to(&self, remote_path: &str, dest_dir: &Path) -> Result<PathBuf>;
+
+    /// The remote entry at `remote_path`, if it exists.
+    async fn stat(&self, remote_path: &str) -> Result<Option<DirEntry>> {
+        let (parent, name) = remote_path.rsplit_once('/').unwrap_or(("", remote_path));
+        let parent = if parent.is_empty() { "/" } else { parent };
+        Ok(self.list_dir(parent).await?.into_iter().find(|e| e.name == name))
+    }
+    /// Upload `local` into `remote_dir` under its own file name (write-back).
+    async fn upload(&self, _local: &Path, _remote_dir: &str) -> Result<()> {
+        anyhow::bail!("this folder doesn't upload")
+    }
+    /// Remove a remote file or folder (write-back with deletes allowed).
+    async fn remove(&self, _remote_path: &str) -> Result<()> {
+        anyhow::bail!("this folder doesn't apply deletes")
+    }
+    /// Rename/move a remote file or folder (write-back with deletes allowed).
+    async fn rename(&self, _from: &str, _to: &str) -> Result<()> {
+        anyhow::bail!("this folder doesn't apply renames")
+    }
+    /// View folders: name → entries pointing at real remote files.
+    async fn views(&self) -> Result<BTreeMap<String, Vec<DirEntry>>> {
+        Ok(BTreeMap::new())
+    }
+}
+
+/// Everything the platform provider needs to stand up one on-demand root.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+#[derive(Debug, Clone)]
+pub struct RootConfig {
+    pub local_root: PathBuf,
+    pub remote_root: String,
+    /// How often to re-list the remote top level and add/remove placeholders
+    /// for files that appeared or vanished after start. `0` disables it.
+    pub refresh_secs: u64,
+    /// Upload files saved in the folder (Plan 34 Phase 6).
+    pub write_back: bool,
+    /// Apply local deletes and renames to the connection too.
+    pub allow_deletes: bool,
+}
+
+/// The folder a mount's view rules show under.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+pub const VIEWS_DIR: &str = "Views";
+
+/// Default cadence for the top-level refresh poll.
+pub const DEFAULT_REFRESH_SECS: u64 = 60;
+
+// ---------- refresh planning (pure) ----------
+
+/// One entry already in a root's local folder, as the refresh poll sees it.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+#[derive(Debug, Clone)]
+pub struct LocalEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    /// The entry is still an untouched placeholder (no local bytes, never
+    /// edited, never populated) — the only kind the poll may delete or replace.
+    /// Anything holding local data is left alone so a refresh never loses work.
+    pub untouched_placeholder: bool,
+}
+
+/// What a refresh pass should change, by entry name.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RefreshPlan {
+    /// On the remote, missing locally → create a placeholder.
+    pub create: Vec<String>,
+    /// Untouched placeholder whose remote file is gone → remove it.
+    pub remove: Vec<String>,
+    /// Untouched placeholder whose remote size changed → remove + recreate, so
+    /// a later hydration doesn't serve a stale length.
+    pub replace: Vec<String>,
+}
+
+/// Diff a root's local entries against the remote listing. Pure so the
+/// "never delete local data" rule is unit-tested without touching the OS.
+#[cfg_attr(not(all(windows, feature = "virtualfs")), allow(dead_code))]
+pub fn plan_refresh(local: &[LocalEntry], remote: &[DirEntry]) -> RefreshPlan {
+    let mut plan = RefreshPlan::default();
+    for r in remote {
+        let r_dir = matches!(r.kind, crate::remotefs::FileKind::Directory);
+        match local.iter().find(|l| l.name == r.name) {
+            None => plan.create.push(r.name.clone()),
+            Some(l) if l.untouched_placeholder && !l.is_dir && !r_dir && l.size != r.size => {
+                plan.replace.push(r.name.clone())
+            }
+            Some(_) => {}
+        }
+    }
+    for l in local {
+        if l.untouched_placeholder && !remote.iter().any(|r| r.name == l.name) {
+            plan.remove.push(l.name.clone());
+        }
+    }
+    plan
 }
 
 // ---------- persisted config ----------
@@ -89,6 +261,8 @@ pub struct RegisteredRoot {
 struct Settings {
     /// Sync roots believed to be registered with the OS.
     registered: Vec<RegisteredRoot>,
+    /// Connections shown as folders (Plan 34 Phase 2).
+    mounts: Vec<Mount>,
 }
 
 // ---------- live status ----------
@@ -112,6 +286,9 @@ pub struct VirtualFs {
     /// Live providers keyed by pair id (present only on a supported build).
     running: Mutex<HashMap<String, platform::Provider>>,
     errors: Mutex<HashMap<String, String>>,
+    /// The enabled on-demand sync pairs, as folder sync last reported them;
+    /// mounts are added to these on every reconcile.
+    sync_pairs: Mutex<Vec<OnDemandPair>>,
 }
 
 impl VirtualFs {
@@ -128,6 +305,7 @@ impl VirtualFs {
             settings: Mutex::new(settings),
             running: Mutex::new(HashMap::new()),
             errors: Mutex::new(HashMap::new()),
+            sync_pairs: Mutex::new(Vec::new()),
         })
     }
 
@@ -148,6 +326,16 @@ impl VirtualFs {
     /// and register/connect any pair that isn't running yet. Idempotent — safe
     /// to call on startup and after every foldersync mutation.
     pub async fn reconcile(&self, app: &AppHandle, pairs: Vec<OnDemandPair>) {
+        *self.sync_pairs.lock().await = pairs;
+        self.reconcile_all(app).await;
+    }
+
+    /// Reconcile sync pairs + enabled mounts against the registered roots.
+    async fn reconcile_all(&self, app: &AppHandle) {
+        let mut pairs = self.sync_pairs.lock().await.clone();
+        pairs.extend(
+            self.settings.lock().await.mounts.iter().filter(|m| m.enabled).map(Mount::as_pair),
+        );
         let persisted: Vec<RegisteredRoot> = self.settings.lock().await.registered.clone();
         let live_ids: Vec<String> = pairs.iter().map(|p| p.id.clone()).collect();
         let Plan { to_unregister, to_start } = plan_reconcile(&persisted, &live_ids);
@@ -181,12 +369,18 @@ impl VirtualFs {
         let _ = app.emit("virtualfs://changed", ());
     }
 
-    /// Disconnect + unregister one root, dropping its running provider.
+    /// Disconnect + unregister one root, dropping its running provider. Its
+    /// untouched placeholders go too (they could never open again); files
+    /// holding local data stay where they are.
     async fn teardown(&self, pair_id: &str, local_root: Option<&Path>) {
         if let Some(p) = self.running.lock().await.remove(pair_id) {
             p.stop();
         }
         self.errors.lock().await.remove(pair_id);
+        if let Some(root) = local_root {
+            let removed = platform::clear_placeholders(root);
+            tracing::info!("virtualfs: cleared {removed} placeholders from {}", root.display());
+        }
         if let Err(e) = platform::unregister_root(pair_id, local_root) {
             tracing::warn!("virtualfs: unregister '{pair_id}': {e:#}");
         }
@@ -205,14 +399,19 @@ impl VirtualFs {
         std::fs::create_dir_all(&local_root)
             .with_context(|| format!("create sync root {}", local_root.display()))?;
 
-        let hydrator: Arc<dyn Hydrator> =
-            Arc::new(SessionHydrator::new(app.clone(), pair.profile_id.clone()));
+        let hydrator: Arc<dyn Hydrator> = Arc::new(
+            SessionHydrator::new(app.clone(), pair.profile_id.clone())
+                .with_root(pair.remote_root.clone(), pair.rule_set.clone()),
+        );
         let provider = platform::Provider::start(
-            pair.id.clone(),
-            local_root,
-            pair.remote_root.clone(),
+            RootConfig {
+                local_root,
+                remote_root: pair.remote_root.clone(),
+                refresh_secs: DEFAULT_REFRESH_SECS,
+                write_back: pair.write_back,
+                allow_deletes: pair.allow_deletes,
+            },
             hydrator,
-            app.clone(),
         )
         .await?;
         self.running.lock().await.insert(pair.id.clone(), provider);
@@ -229,6 +428,121 @@ impl VirtualFs {
             Some(p) => p.free_up_space().await,
             None => anyhow::bail!("on-demand folder is not active"),
         }
+    }
+
+    // ---------- mounts (Plan 34 Phase 2) ----------
+
+    pub async fn mounts(&self) -> Vec<MountView> {
+        let mounts = self.settings.lock().await.mounts.clone();
+        let running = self.running.lock().await;
+        let errors = self.errors.lock().await;
+        mounts
+            .into_iter()
+            .map(|m| MountView {
+                running: running.contains_key(&m.id),
+                last_error: errors.get(&m.id).cloned(),
+                local_changes: running.get(&m.id).map(|p| p.local_changes()).unwrap_or_default(),
+                mount: m,
+            })
+            .collect()
+    }
+
+    /// The mount with `id`, if configured.
+    pub async fn mount(&self, id: &str) -> Option<Mount> {
+        self.settings.lock().await.mounts.iter().find(|m| m.id == id).cloned()
+    }
+
+    /// Add or replace a mount, then restart it so a changed folder, remote
+    /// path or option takes effect.
+    pub async fn save_mount(&self, app: &AppHandle, mut mount: Mount) -> Result<Mount> {
+        if mount.id.is_empty() {
+            mount.id = uuid::Uuid::new_v4().to_string();
+        }
+        if mount.local_root.trim().is_empty() {
+            mount.local_root = default_mount_root(&mount.name).to_string_lossy().into_owned();
+        }
+        if mount.remote_root.trim().is_empty() {
+            mount.remote_root = "/".into();
+        }
+        let (previous, clash) = {
+            let s = self.settings.lock().await;
+            let prev = s.mounts.iter().find(|m| m.id == mount.id).cloned();
+            let same_folder = |a: &str, b: &str| {
+                Path::new(a.trim_end_matches(['\\', '/'])).eq(Path::new(b.trim_end_matches(['\\', '/'])))
+            };
+            let clash = s
+                .mounts
+                .iter()
+                .filter(|m| m.id != mount.id)
+                .map(|m| m.local_root.clone())
+                .chain(s.registered.iter().filter(|r| r.pair_id != mount.id).map(|r| r.local_root.clone()))
+                .any(|other| same_folder(&other, &mount.local_root));
+            (prev, clash)
+        };
+        if clash {
+            anyhow::bail!("{} is already an on-demand folder", mount.local_root);
+        }
+        // Only an empty (or new) folder can become a mount: registering a
+        // sync root over someone's files would turn them into placeholders.
+        let moved = previous.as_ref().map(|p| p.local_root != mount.local_root).unwrap_or(true);
+        if moved {
+            let root = Path::new(&mount.local_root);
+            if root.exists() && std::fs::read_dir(root).map(|mut d| d.next().is_some()).unwrap_or(true) {
+                anyhow::bail!("Choose an empty folder: {} already has files in it", mount.local_root);
+            }
+        }
+        // Restart: tear the old root down (clearing its placeholders) first.
+        if let Some(prev) = &previous {
+            if prev != &mount {
+                self.teardown(&prev.id, Some(Path::new(&prev.local_root))).await;
+                self.settings.lock().await.registered.retain(|r| r.pair_id != prev.id);
+            }
+        }
+        {
+            let mut s = self.settings.lock().await;
+            match s.mounts.iter_mut().find(|m| m.id == mount.id) {
+                Some(existing) => *existing = mount.clone(),
+                None => s.mounts.push(mount.clone()),
+            }
+        }
+        self.persist().await?;
+        self.reconcile_all(app).await;
+        // "Index files": keep the mount's remote folder in the file index.
+        let state = app.state::<AppState>();
+        if let Some(prev) = previous.as_ref().filter(|p| p.index && (!mount.index || p.remote_root != mount.remote_root)) {
+            let _ = state.db.index_root_forget(&prev.profile_id, &prev.remote_root);
+        }
+        if mount.index {
+            let _ = state.db.index_root_add(&mount.profile_id, &mount.remote_root);
+            state
+                .fileindex
+                .start(
+                    app.clone(),
+                    mount.profile_id.clone(),
+                    mount.remote_root.clone(),
+                    crate::fileindex::RunOptions { thumbnails: true },
+                )
+                .await;
+        }
+        Ok(mount)
+    }
+
+    pub async fn remove_mount(&self, app: &AppHandle, id: &str) -> Result<()> {
+        self.settings.lock().await.mounts.retain(|m| m.id != id);
+        self.persist().await?;
+        self.reconcile_all(app).await;
+        Ok(())
+    }
+
+    pub async fn set_mount_enabled(&self, app: &AppHandle, id: &str, enabled: bool) -> Result<()> {
+        {
+            let mut s = self.settings.lock().await;
+            let m = s.mounts.iter_mut().find(|m| m.id == id).ok_or_else(|| anyhow::anyhow!("no such mount"))?;
+            m.enabled = enabled;
+        }
+        self.persist().await?;
+        self.reconcile_all(app).await;
+        Ok(())
     }
 
     pub async fn status(&self) -> Vec<RootStatus> {
@@ -281,12 +595,38 @@ pub struct SessionHydrator {
     app: AppHandle,
     profile_id: String,
     session_id: Mutex<Option<String>>,
+    /// The root's remote folder (deletes move into its recovery area) and
+    /// the rule set whose view rules make the `Views` folder.
+    remote_root: String,
+    rule_set: Option<String>,
 }
 
 #[allow(dead_code)]
 impl SessionHydrator {
     pub fn new(app: AppHandle, profile_id: String) -> Self {
-        Self { app, profile_id, session_id: Mutex::new(None) }
+        Self { app, profile_id, session_id: Mutex::new(None), remote_root: "/".into(), rule_set: None }
+    }
+
+    pub fn with_root(mut self, remote_root: String, rule_set: Option<String>) -> Self {
+        self.remote_root = remote_root;
+        self.rule_set = rule_set;
+        self
+    }
+
+    async fn wait(&self, id: &str) -> Result<String> {
+        use crate::transfer::TransferStatus;
+        let state = self.app.state::<AppState>();
+        loop {
+            match state.transfers.snapshot(id).await {
+                Some(t) => match t.status {
+                    TransferStatus::Done | TransferStatus::Skipped => return Ok(t.destination),
+                    TransferStatus::Error => anyhow::bail!("transfer failed: {}", t.error.unwrap_or_default()),
+                    TransferStatus::Canceled => anyhow::bail!("transfer canceled"),
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(120)).await,
+                },
+                None => anyhow::bail!("transfer vanished"),
+            }
+        }
     }
 
     async fn session(&self) -> Result<Arc<crate::session::Session>> {
@@ -325,7 +665,101 @@ impl Hydrator for SessionHydrator {
     async fn list_dir(&self, remote_path: &str) -> Result<Vec<DirEntry>> {
         let session = self.session().await?;
         let fs = crate::commands::fs_for_session(&session);
-        fs.list_dir(remote_path).await
+        // Faro's own recovery/staging folders never show in the folder.
+        Ok(fs
+            .list_dir(remote_path)
+            .await?
+            .into_iter()
+            .filter(|e| !crate::sync::recovery::is_reserved(&e.name))
+            .collect())
+    }
+
+    async fn upload(&self, local: &Path, remote_dir: &str) -> Result<()> {
+        use crate::transfer::OverwritePolicy;
+        let session = self.session().await?;
+        let state = self.app.state::<AppState>();
+        let id = state
+            .transfers
+            .start_upload(
+                session,
+                local.to_string_lossy().into_owned(),
+                remote_dir.to_string(),
+                OverwritePolicy::Overwrite,
+                self.app.clone(),
+            )
+            .await
+            .with_context(|| format!("start upload {}", local.display()))?;
+        self.wait(&id).await.map(|_| ())
+    }
+
+    /// Deletes are recoverable: the file or folder moves into the root's
+    /// `.faro-sync-recovery/<batch>/` area on the connection.
+    async fn remove(&self, remote_path: &str) -> Result<()> {
+        let session = self.session().await?;
+        let fs = crate::commands::fs_for_session(&session);
+        let root = self.remote_root.trim_end_matches('/');
+        let rel = remote_path
+            .strip_prefix(root)
+            .map(|r| r.trim_start_matches('/'))
+            .filter(|r| !r.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("{remote_path} is outside this folder"))?;
+        let batch = crate::sync::recovery::new_batch();
+        let dest_rel = format!("{}/{batch}/{rel}", crate::sync::recovery::DIRECTORY);
+        // Create the recovery folders, parents first.
+        let mut acc = root.to_string();
+        if let Some((parents, _)) = dest_rel.rsplit_once('/') {
+            for seg in parents.split('/') {
+                acc = format!("{acc}/{seg}");
+                let _ = fs.create_dir(&acc).await;
+            }
+        }
+        fs.rename(remote_path, &format!("{root}/{dest_rel}"))
+            .await
+            .with_context(|| format!("move {remote_path} to recovery"))
+    }
+
+    async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        let session = self.session().await?;
+        let fs = crate::commands::fs_for_session(&session);
+        fs.rename_no_replace(from, to).await
+    }
+
+    async fn views(&self) -> Result<BTreeMap<String, Vec<DirEntry>>> {
+        let Some(set_id) = self.rule_set.as_deref() else { return Ok(BTreeMap::new()) };
+        let dir = self.app.path().app_data_dir().context("app data dir")?;
+        let set = crate::rules::find_set(&dir, set_id)?;
+        let state = self.app.state::<AppState>();
+        let rows = state.db.index_search(&crate::fileindex::IndexQuery {
+            connection_id: Some(self.profile_id.clone()),
+            under: Some(self.remote_root.clone()),
+            limit: Some(5000),
+            ..Default::default()
+        })?;
+        let mut out = BTreeMap::new();
+        for (view, rows) in crate::rules::views_of_rows(&set, rows) {
+            // Flat folders: number clashing names.
+            let mut seen: HashMap<String, u32> = HashMap::new();
+            let entries = rows
+                .into_iter()
+                .map(|r| {
+                    let n = seen.entry(r.name.clone()).or_insert(0);
+                    *n += 1;
+                    let name = if *n == 1 { r.name.clone() } else { crate::copyto::with_suffix_pub(&r.name, *n - 1) };
+                    DirEntry {
+                        name,
+                        path: r.path,
+                        kind: crate::remotefs::FileKind::File,
+                        size: r.size,
+                        modified: r.mtime_ms.map(|m| m / 1000),
+                        mode: None,
+                        etag: None,
+                        link_dir: false,
+                    }
+                })
+                .collect();
+            out.insert(view, entries);
+        }
+        Ok(out)
     }
 
     async fn download_to(&self, remote_path: &str, dest_dir: &Path) -> Result<PathBuf> {
@@ -385,6 +819,48 @@ pub async fn virtualfs_status(state: State<'_, AppState>) -> Result<Vec<RootStat
 }
 
 #[tauri::command]
+pub async fn virtualfs_mounts(state: State<'_, AppState>) -> Result<Vec<MountView>, String> {
+    Ok(state.virtualfs.mounts().await)
+}
+
+#[tauri::command]
+pub async fn virtualfs_mount_save(
+    mount: Mount,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<MountView>, String> {
+    state.virtualfs.save_mount(&app, mount).await.map_err(|e| format!("{e:#}"))?;
+    Ok(state.virtualfs.mounts().await)
+}
+
+#[tauri::command]
+pub async fn virtualfs_mount_remove(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<MountView>, String> {
+    state.virtualfs.remove_mount(&app, &id).await.map_err(err)?;
+    Ok(state.virtualfs.mounts().await)
+}
+
+#[tauri::command]
+pub async fn virtualfs_mount_set_enabled(
+    id: String,
+    enabled: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<MountView>, String> {
+    state.virtualfs.set_mount_enabled(&app, &id, enabled).await.map_err(err)?;
+    Ok(state.virtualfs.mounts().await)
+}
+
+/// The folder a new mount named `name` would use by default.
+#[tauri::command]
+pub async fn virtualfs_default_mount_root(name: String) -> Result<String, String> {
+    Ok(default_mount_root(&name).to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 pub async fn virtualfs_free_up_space(
     pair_id: String,
     state: State<'_, AppState>,
@@ -417,6 +893,70 @@ mod tests {
         let plan = plan_reconcile(&persisted, &[]);
         assert_eq!(plan.to_unregister, vec!["a".to_string(), "b".to_string()]);
         assert!(plan.to_start.is_empty());
+    }
+
+    fn remote(name: &str, size: u64, dir: bool) -> DirEntry {
+        DirEntry {
+            name: name.into(),
+            path: format!("/r/{name}"),
+            kind: if dir { crate::remotefs::FileKind::Directory } else { crate::remotefs::FileKind::File },
+            size,
+            modified: None,
+            mode: None,
+            etag: None,
+            link_dir: false,
+        }
+    }
+
+    fn local(name: &str, size: u64, dir: bool, untouched: bool) -> LocalEntry {
+        LocalEntry { name: name.into(), is_dir: dir, size, untouched_placeholder: untouched }
+    }
+
+    #[test]
+    fn refresh_creates_new_and_removes_vanished_placeholders() {
+        let plan = plan_refresh(
+            &[local("old.jpg", 5, false, true), local("keep.jpg", 5, false, true)],
+            &[remote("keep.jpg", 5, false), remote("new.jpg", 9, false), remote("dir", 0, true)],
+        );
+        assert_eq!(plan.create, vec!["new.jpg".to_string(), "dir".to_string()]);
+        assert_eq!(plan.remove, vec!["old.jpg".to_string()]);
+        assert!(plan.replace.is_empty());
+    }
+
+    #[test]
+    fn refresh_never_touches_local_data() {
+        // Hydrated or edited files and populated dirs are not "untouched":
+        // a vanished or resized remote must never delete them.
+        let plan = plan_refresh(
+            &[local("edited.txt", 5, false, false), local("dir", 0, true, false)],
+            &[remote("edited.txt", 99, false)],
+        );
+        assert_eq!(plan, RefreshPlan::default());
+    }
+
+    #[test]
+    fn refresh_replaces_resized_placeholder() {
+        let plan = plan_refresh(&[local("a.bin", 5, false, true)], &[remote("a.bin", 6, false)]);
+        assert_eq!(plan.replace, vec!["a.bin".to_string()]);
+    }
+
+    #[test]
+    fn default_mount_root_is_a_safe_folder_name() {
+        let p = default_mount_root("R2: media/2024");
+        assert_eq!(p.file_name().unwrap(), "R2- media-2024");
+        assert_eq!(p.parent().unwrap().file_name().unwrap(), "Faro");
+        assert_eq!(default_mount_root("..").file_name().unwrap(), "Connection");
+    }
+
+    #[test]
+    fn old_settings_without_mounts_still_load() {
+        let s: Settings = serde_json::from_str(r#"{"registered":[{"pairId":"a","localRoot":"C:/x"}]}"#).unwrap();
+        assert!(s.mounts.is_empty());
+        let m: Mount = serde_json::from_str(
+            r#"{"id":"m","name":"n","profileId":"p","remoteRoot":"/","localRoot":"C:/m"}"#,
+        )
+        .unwrap();
+        assert!(m.enabled && !m.write_back && !m.index);
     }
 
     #[test]

@@ -113,8 +113,13 @@ def main():
             exact = work / "download-renamed.txt"
             check("cp: explicit local destination filename", ["cp", "lab:/copy/small.txt", exact], lambda r: exact.is_file() and exact.read_bytes() == small.read_bytes())
             check("cp: missing object is an error", ["cp", "lab:/copy/missing.txt", down], lambda r: "404" in r["stderr"], expected_code=1)
-            check("cp: remote-to-remote explicitly unsupported", ["cp", "lab:/copy/small.txt", "lab:/other.txt"], lambda r: "not yet supported" in r["stderr"], expected_code=1)
-            check("cp: recursive option explicitly unavailable", ["cp", "--recursive", "lab:/browse", down], lambda r: "unexpected argument" in r["stderr"], expected_code=2)
+            check("cp: connection-to-connection file copy", ["cp", "lab:/copy/small.txt", "lab:/between/other.txt"], lambda r: body("between/other.txt") == small.read_bytes())
+            check("cp: connection-to-connection re-run skips", ["cp", "lab:/copy/small.txt", "lab:/between/other.txt"], lambda r: body("between/other.txt") == small.read_bytes())
+            check("cp: folder needs --recursive", ["cp", "lab:/browse", "lab:/between-tree/"], lambda r: "--recursive" in r["stderr"], expected_code=1)
+            check("cp: --dry-run copies nothing", ["cp", "--recursive", "--dry-run", "lab:/browse", "lab:/dry/"], lambda r: keys("dry/") == [])
+            check("cp: recursive folder copy", ["cp", "--recursive", "lab:/browse", "lab:/between-tree/"],
+                  lambda r: sorted(k for k in keys("between-tree/") if not k.endswith("/")) == ["between-tree/browse/empty.txt", "between-tree/browse/nested/hello.txt"] and body("between-tree/browse/nested/hello.txt") == b"payload\n")
+            check("cp: recursive to this PC points at sync", ["cp", "--recursive", "lab:/browse", down], lambda r: "faro-cli sync" in r["stderr"], expected_code=1)
 
             for name in ["café.txt", "100%.txt", "hash#.txt"]:
                 put(f"special/{name}")

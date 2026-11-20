@@ -9,9 +9,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use tauri::AppHandle;
 
-use super::Hydrator;
+use super::{Hydrator, RootConfig};
 
 /// On-demand virtual folders are never available on this build.
 pub fn supported() -> bool {
@@ -23,13 +22,7 @@ pub fn supported() -> bool {
 pub struct Provider;
 
 impl Provider {
-    pub async fn start(
-        _pair_id: String,
-        _local_root: std::path::PathBuf,
-        _remote_root: String,
-        _hydrator: Arc<dyn Hydrator>,
-        _app: AppHandle,
-    ) -> Result<Provider> {
+    pub async fn start(_config: RootConfig, _hydrator: Arc<dyn Hydrator>) -> Result<Provider> {
         anyhow::bail!("on-demand virtual folders need a Windows build with --features virtualfs")
     }
 
@@ -37,7 +30,17 @@ impl Provider {
         Ok(0)
     }
 
+    /// Files edited locally that the remote doesn't have yet (none here).
+    pub fn local_changes(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     pub fn stop(self) {}
+}
+
+/// No placeholders exist on this build.
+pub fn clear_placeholders(_root: &Path) -> u32 {
+    0
 }
 
 /// Nothing was ever registered with the OS, so unregister is a no-op.

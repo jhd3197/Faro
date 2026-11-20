@@ -8,6 +8,10 @@ import {
 } from "../lib/columns";
 import {
   ArrowUp,
+  FolderInput,
+  HardDrive,
+  Images,
+  Tag,
   ArrowLeft,
   ArrowRight,
   RefreshCw,
@@ -180,6 +184,14 @@ interface Props {
   reloadToken?: number;
   /** Host-provided shortcuts for a remote folder; absent in generic/local panes. */
   onSaveSite?: (path: string) => void;
+  /** "Copy to…" another connection (host-provided; absent hides the item). */
+  onCopyTo?: (entries: DirEntry[]) => void;
+  /** "Mount as folder…" for a remote folder (host-provided). */
+  onMountFolder?: (path: string) => void;
+  /** "Index this folder" for search by date/camera/tag (host-provided). */
+  onIndexFolder?: (path: string) => void;
+  /** "Tags…" for the selected files (host-provided). */
+  onEditTags?: (entries: DirEntry[]) => void;
   toolbarActions?: ReactNode;
   /** Called with the selected entries whenever the selection (or listing)
    *  changes — lets the host drive a preview pane. */
@@ -254,6 +266,10 @@ export function FilePane({
   transferLabel = "Transfer",
   reloadToken,
   onSaveSite,
+  onCopyTo,
+  onMountFolder,
+  onIndexFolder,
+  onEditTags,
   toolbarActions,
   onSelectionChange,
 }: Props) {
@@ -350,6 +366,8 @@ export function FilePane({
     y: number;
     items: MenuItem[];
   } | null>(null);
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menu != null;
   const [modal, setModal] = useState<ModalState>(null);
   // The row being renamed in place (by path).
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -507,8 +525,14 @@ export function FilePane({
           target.isContentEditable);
       const inFilter = !!target?.closest?.("[data-pane-filter]");
       if (e.key === "Escape") {
-        // Esc peels one layer at a time: filter text, then the filter box
-        // itself, then the selection. Not remappable (the universal cancel).
+        // Esc peels one layer at a time: an open context menu, filter text,
+        // then the filter box itself, then the selection. Not remappable (the
+        // universal cancel). The menu check covers an Esc that lands before
+        // the menu has taken focus, which would otherwise drop the selection.
+        if (menuOpenRef.current) {
+          setMenu(null);
+          return;
+        }
         if (typing && !inFilter) return; // the path box handles its own Esc
         if (filter) {
           setFilter("");
@@ -1070,6 +1094,15 @@ export function FilePane({
       if (single.kind === "directory" && isRemote && onSaveSite) {
         items.push({ label: "Save as site…", icon: <BookmarkPlus size={12} />, onClick: () => onSaveSite(single.path) });
       }
+      if (single.kind === "directory" && isRemote && onMountFolder) {
+        items.push({ label: "Mount as folder…", icon: <HardDrive size={12} />, onClick: () => onMountFolder(single.path) });
+      }
+      if (single.kind === "directory" && isRemote && onIndexFolder) {
+        items.push({ label: "Index this folder", icon: <Images size={12} />, onClick: () => onIndexFolder(single.path) });
+      }
+      if (single.kind === "file" && isRemote && onEditTags) {
+        items.push({ label: "Tags…", icon: <Tag size={12} />, onClick: () => onEditTags([single]) });
+      }
       // Edit-in-place sits right under the primary action so it's easy to find
       // (it used to be last, below chmod). Remote files only — local files open
       // in their app via the OS, and there's nothing to upload back.
@@ -1116,6 +1149,9 @@ export function FilePane({
             },
           ],
         });
+      }
+      if (onCopyTo) {
+        items.push({ label: "Copy to…", icon: <FolderInput size={12} />, onClick: () => onCopyTo([single]) });
       }
       if (extractItem) items.push(extractItem);
       if (compressItem) items.push(compressItem);
@@ -1208,8 +1244,19 @@ export function FilePane({
         label: `${transferLabel} ${selectedItems.length} items`,
         icon: sessionId === LOCAL_SESSION ? <Upload size={14} /> : <Download size={14} />,
         onClick: () => onTransfer?.(selectedItems),
-        separatorAfter: !compressItem,
+        separatorAfter: !compressItem && !onCopyTo,
       });
+      if (onEditTags && isRemote && selectedItems.every((e) => e.kind === "file")) {
+        items.push({ label: `Tags for ${selectedItems.length} files…`, icon: <Tag size={12} />, onClick: () => onEditTags(selectedItems) });
+      }
+      if (onCopyTo) {
+        items.push({
+          label: `Copy ${selectedItems.length} items to…`,
+          icon: <FolderInput size={12} />,
+          onClick: () => onCopyTo(selectedItems),
+          separatorAfter: !compressItem,
+        });
+      }
       if (compressItem) items.push({ ...compressItem, separatorAfter: true });
     }
     // Cut / Copy the selection; Paste into a folder row once something is on

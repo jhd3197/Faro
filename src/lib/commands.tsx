@@ -32,9 +32,11 @@ import {
   PanelRight,
   Activity,
   PanelLeft,
+  Images,
 } from "lucide-react";
 import { toggleFullscreen, toggleZen } from "@/lib/windowMode";
 import { useConnections } from "@/stores/connectionsStore";
+import { useIndex } from "@/stores/indexStore";
 import { useTransfers } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import {
@@ -163,6 +165,14 @@ export function useCommands(): Command[] {
       icon: <Wand2 size={14} />,
       keywords: "skill skills fleet automation run command multi server mcp agent",
       run: () => openSkills(),
+    },
+    {
+      id: "index-search",
+      title: "Search indexed files…",
+      group: "General",
+      icon: <Images size={14} />,
+      keywords: "index photos images library date camera tag search find media dam",
+      run: () => useIndex.getState().openSearch(),
     },
     {
       id: "snippets",

@@ -134,6 +134,8 @@ percent-encoding = "2"
 # keeps out the codecs that need system libs (avif/dav1d); the enabled set covers
 # the web-common raster formats we gate previews to. `rayon` parallelises the
 # resize across cores.
+# EXIF (date taken, camera, GPS) for the file index (Plan 34 Phase 3).
+kamadak-exif = "0.6"
 image = { version = "0.25", default-features = false, features = [
     "jpeg", "png", "gif", "webp", "bmp", "ico", "tiff",
 ] }
@@ -207,13 +209,14 @@ libc = "0.2"
 tokio = { version = "1", features = ["test-util"] }
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "virtualfs"]
 custom-protocol = ["tauri/custom-protocol"]
 # On-demand virtual folders (Plan 9): the Windows Cloud Filter provider —
 # OneDrive-style placeholders that hydrate on open and free-up-space to evict.
-# OFF by default: it compiles native `cldapi` FFI and registers OS sync roots on
-# the user's disk, which must be verified manually in Explorer (hydrate on open,
-# free-up-space, badge states) before shipping. Enable with `--features virtualfs`.
+# ON by default since Plan 34 (Mount as folder). Its deps are Windows-only and
+# the provider is gated on `all(windows, feature = "virtualfs")`, so other
+# platforms build the inert stub. `--no-default-features --features
+# custom-protocol` turns it off.
 virtualfs = ["dep:cloud-filter", "dep:windows"]
 
 [profile.dev]

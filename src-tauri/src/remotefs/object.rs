@@ -18,10 +18,85 @@ impl ObjectFs {
     pub fn new(session: Arc<ObjectSession>) -> Self {
         Self { session }
     }
+
+    /// Tags stored in the object's metadata (Plan 34 Phase 4). `Ok(None)` when
+    /// this store can't hold them (only S3-compatible and Azure can).
+    pub async fn object_tags(&self, path: &str) -> Result<Option<Vec<String>>> {
+        if !crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
+            return Ok(None);
+        }
+        let api = self.session.namespace()?;
+        let key = normalize_prefix(path);
+        let meta = api.get_metadata(&key).await?;
+        Ok(Some(
+            meta.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(api.tags_key()))
+                .map(|(_, v)| decode_tags(v))
+                .unwrap_or_default(),
+        ))
+    }
+
+    /// Write `tags` into the object's metadata, keeping its other metadata.
+    /// Server-side; no bytes move. `Ok(false)` when the store can't hold tags.
+    pub async fn set_object_tags(&self, path: &str, tags: &[String]) -> Result<bool> {
+        if !crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
+            return Ok(false);
+        }
+        let api = self.session.namespace()?;
+        let key = normalize_prefix(path);
+        let mut meta: Vec<(String, String)> = api
+            .get_metadata(&key)
+            .await?
+            .into_iter()
+            .filter(|(k, _)| !k.eq_ignore_ascii_case(api.tags_key()))
+            .collect();
+        if !tags.is_empty() {
+            meta.push((api.tags_key().to_string(), encode_tags(tags)));
+        }
+        // S3 caps user metadata at 2 KiB in total.
+        let total: usize = meta.iter().map(|(k, v)| k.len() + v.len()).sum();
+        if total > 2000 {
+            anyhow::bail!("too many tags for this file: object metadata is limited to 2 KB");
+        }
+        api.set_metadata(&key, &meta).await?;
+        Ok(true)
+    }
+
+    /// Copy one object to another key in the same bucket/container, server
+    /// side — no bytes pass through Faro (Copy to… within one connection).
+    pub async fn server_copy(&self, from: &str, to: &str) -> Result<()> {
+        let src = normalize_prefix(from);
+        let dst = normalize_prefix(to);
+        if src.is_empty() || dst.is_empty() {
+            anyhow::bail!("cannot copy the bucket root");
+        }
+        if crate::session::object::namespace::Namespace::supported(&self.session.profile.protocol) {
+            return self.session.namespace()?.copy(&src, &dst).await;
+        }
+        self.session
+            .store
+            .copy(&ObjPath::parse(&src)?, &ObjPath::parse(&dst)?)
+            .await
+            .with_context(|| format!("object copy {src} -> {dst}"))
+    }
 }
 
 #[cfg(test)]
 mod tests;
+
+
+/// Tags as one metadata value: comma-separated, percent-encoded so non-ASCII
+/// survives HTTP headers.
+pub fn encode_tags(tags: &[String]) -> String {
+    // Non-ASCII bytes are always escaped; `%` too, so decoding is exact.
+    const SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS.add(b'%');
+    percent_encoding::utf8_percent_encode(&tags.join(","), SET).to_string()
+}
+
+pub fn decode_tags(raw: &str) -> Vec<String> {
+    let text = percent_encoding::percent_decode_str(raw).decode_utf8_lossy().into_owned();
+    crate::fileindex::normalize_tags(&[text])
+}
 
 fn normalize_prefix(raw: &str) -> String {
     let trimmed = raw.trim_matches('/');
@@ -250,5 +325,16 @@ impl RemoteFs for ObjectFs {
             // (not necessarily an MD5 for multipart uploads). See ChangeSignal.
             change_signal: ChangeSignal::Etag,
         }
+    }
+}
+
+#[cfg(test)]
+mod tag_encoding_tests {
+    #[test]
+    fn tags_round_trip_through_a_header_value() {
+        let tags = vec!["café".to_string(), "50%".to_string(), "client x".to_string()];
+        let raw = super::encode_tags(&tags);
+        assert!(raw.is_ascii(), "{raw}");
+        assert_eq!(super::decode_tags(&raw), vec!["50%", "café", "client x"]);
     }
 }

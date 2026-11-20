@@ -679,6 +679,30 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       pathManaged = false;
       return { ...pathStatus(), detail: "Removed from your account's PATH." };
 
+    // Plan 34 — Copy to…, index/tags, rules, mounts. Lists start empty; the
+    // mock build has no on-demand provider, so mounts stay unsupported.
+    case "copyto_jobs":
+    case "index_roots":
+    case "index_search":
+    case "rules_list":
+    case "rules_save":
+    case "rules_delete":
+    case "rules_test":
+    case "rules_plan_in_place":
+    case "virtualfs_mounts":
+    case "virtualfs_mount_save":
+    case "virtualfs_mount_remove":
+    case "virtualfs_mount_set_enabled":
+    case "virtualfs_status":
+    case "tags_get":
+      return [];
+    case "virtualfs_supported":
+      return false;
+    case "index_facets":
+      return { cameras: [], tags: [], files: 0 };
+    case "rules_views":
+      return {};
+
     default:
       return null;
   }

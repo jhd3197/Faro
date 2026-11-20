@@ -3,6 +3,9 @@ import { FilePane } from "@faro/file-ui";
 import { SyncDialog } from "./SyncDialog";
 import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
+import { useCopyJobs } from "@/stores/copyStore";
+import { useMounts } from "@/stores/mountStore";
+import { useIndex } from "@/stores/indexStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
@@ -153,6 +156,7 @@ export function DualPaneBrowser() {
           onTransfer={uploadAll}
           onDrop={downloadAll}
           transferLabel="Upload"
+          onCopyTo={(entries) => useCopyJobs.getState().openCopyTo(LOCAL_SESSION, entries)}
           toolbarActions={sync.toolbar}
         />
         </div>
@@ -214,6 +218,10 @@ export function DualPaneBrowser() {
           onDrop={uploadAll}
           transferLabel="Download"
           onSaveSite={activeSessionId ? siteBrowser.saveSite : undefined}
+          onCopyTo={activeSessionId ? (entries) => useCopyJobs.getState().openCopyTo(activeSessionId, entries) : undefined}
+          onIndexFolder={activeSessionId ? (p) => void useIndex.getState().indexFolder(activeSessionId, p) : undefined}
+          onEditTags={activeSessionId ? (entries) => { const pid = useConnections.getState().sessions.find((x) => x.sessionId === activeSessionId)?.profileId; if (pid) useIndex.getState().openTags({ connectionId: pid, paths: entries.map((e) => e.path) }); } : undefined}
+          onMountFolder={activeSessionId && useMounts.getState().supported ? (p) => { const pid = useConnections.getState().sessions.find((x) => x.sessionId === activeSessionId)?.profileId; if (pid) useMounts.getState().open({ profileId: pid, remoteRoot: p }); } : undefined}
           toolbarActions={activeSessionId ? siteBrowser.toolbar : undefined}
         />}
         </div>

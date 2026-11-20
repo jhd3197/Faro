@@ -45,6 +45,28 @@ impl Namespace {
             Self::Azure(a) => a.delete(key).await,
         }
     }
+    /// User metadata as `(name, value)`, names without the provider prefix.
+    pub async fn get_metadata(&self, key: &str) -> Result<Vec<(String, String)>> {
+        match self {
+            Self::S3(a) => Ok(a.get_metadata(key).await?.1),
+            Self::Azure(a) => a.get_metadata(key).await,
+        }
+    }
+    /// Replace all user metadata (content type is kept).
+    pub async fn set_metadata(&self, key: &str, meta: &[(String, String)]) -> Result<()> {
+        match self {
+            Self::S3(a) => a.set_metadata(key, meta).await,
+            Self::Azure(a) => a.set_metadata(key, meta).await,
+        }
+    }
+    /// The metadata name tags are stored under (Azure names must be
+    /// identifiers, so no dash there).
+    pub fn tags_key(&self) -> &'static str {
+        match self {
+            Self::S3(_) => "faro-tags",
+            Self::Azure(_) => "faro_tags",
+        }
+    }
     pub async fn copy(&self, from: &str, to: &str) -> Result<()> {
         match self {
             Self::S3(a) => a.copy(from, to).await,

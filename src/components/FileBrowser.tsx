@@ -6,6 +6,9 @@ import { FilePane } from "@faro/file-ui";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { NoConnections } from "./NoConnections";
 import { useConnections } from "@/stores/connectionsStore";
+import { useCopyJobs } from "@/stores/copyStore";
+import { useMounts } from "@/stores/mountStore";
+import { useIndex } from "@/stores/indexStore";
 import { useTransfers, toTransferItem } from "@/stores/transfersStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useSettings } from "@/stores/settingsStore";
@@ -210,6 +213,10 @@ export function FileBrowser() {
         transferLabel={browseLocal ? "Upload" : "Download"}
         reloadToken={reloadToken}
         onSaveSite={browseLocal || !serverSid ? undefined : siteBrowser.saveSite}
+        onCopyTo={target ? (entries) => useCopyJobs.getState().openCopyTo(target, entries) : undefined}
+        onIndexFolder={!browseLocal && serverSid ? (p) => void useIndex.getState().indexFolder(serverSid, p) : undefined}
+        onEditTags={!browseLocal && serverSid ? (entries) => { const pid = useConnections.getState().sessions.find((x) => x.sessionId === serverSid)?.profileId; if (pid) useIndex.getState().openTags({ connectionId: pid, paths: entries.map((e) => e.path) }); } : undefined}
+        onMountFolder={!browseLocal && serverSid && useMounts.getState().supported ? (p) => { const pid = useConnections.getState().sessions.find((x) => x.sessionId === serverSid)?.profileId; if (pid) useMounts.getState().open({ profileId: pid, remoteRoot: p }); } : undefined}
         toolbarActions={
           <>
             {previewToggle}

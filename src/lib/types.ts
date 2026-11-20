@@ -1871,3 +1871,215 @@ export interface DockerDiskUse {
 
 export type DockerResourceKind = "image" | "volume" | "network";
 export type DockerPruneKind = "containers" | "images" | "volumes" | "networks";
+
+// ---- Copy to… (Plan 34 Phase 1; mirrors src-tauri/src/copyto.rs) ----
+
+export type CopyOverwrite = "skip" | "newer" | "always";
+
+export interface CopyOptions {
+  overwrite: CopyOverwrite;
+  /** Check each destination file's size after it lands. */
+  verify: boolean;
+  /** A Settings › Rules rule set id to rename files on the way. */
+  ruleSet?: string | null;
+}
+
+export interface CopySourceRef {
+  path: string;
+  isDir: boolean;
+}
+
+export type CopyItemAction = "copy" | "overwrite" | "skip";
+
+export interface CopyItem {
+  source: string;
+  dest: string;
+  relDest: string;
+  size: number;
+  action: CopyItemAction;
+  renamed?: boolean;
+}
+
+export interface CopyPlan {
+  destRoot: string;
+  items: CopyItem[];
+  directories: string[];
+  filesToCopy: number;
+  bytesToCopy: number;
+  skipped: number;
+  renamed: number;
+  collisions: number;
+}
+
+export type CopyJobState = "running" | "done" | "failed" | "canceled";
+
+export interface CopyJob {
+  id: string;
+  state: CopyJobState;
+  sourceLabel: string;
+  destLabel: string;
+  total: number;
+  done: number;
+  failed: number;
+  skipped: number;
+  bytesTotal: number;
+  bytesDone: number;
+  current?: string;
+  report?: string;
+  error?: string;
+}
+
+// ---- Settings › Rules (Plan 34 Phase 5; mirrors src-tauri/src/rules.rs) ----
+
+export type RuleKind = "rename" | "sort" | "view";
+
+/** Which files a rule applies to. Empty fields match everything. */
+export interface RuleCondition {
+  /** `image`, `video`, `audio`, `document`, `archive`, `other`. */
+  kinds?: string[];
+  /** Glob on the file name, e.g. `*.jpg` or `IMG_*`. */
+  nameGlob?: string;
+  tag?: string;
+  camera?: string;
+  /** ISO dates (yyyy-mm-dd), inclusive. */
+  takenFrom?: string;
+  takenTo?: string;
+  minSize?: number;
+  maxSize?: number;
+}
+
+export interface RuleCleanup {
+  lowercaseExt?: boolean;
+  spacesTo?: string;
+  stripIllegal?: boolean;
+}
+
+export interface Rule {
+  id: string;
+  kind: RuleKind;
+  enabled: boolean;
+  when: RuleCondition;
+  /** rename: a file-name template (`{taken:yyyy-MM-dd}_{name}{ext}`);
+   *  sort: a folder template (`{taken:yyyy}/{taken:MM}`);
+   *  view: the folder name the matching files show under. */
+  template: string;
+  cleanup?: RuleCleanup;
+  /** Value for a missing token (no date, no camera). */
+  fallback?: string;
+}
+
+export interface RuleSet {
+  id: string;
+  name: string;
+  rules: Rule[];
+}
+
+/** One sample file run through a rule set (the editor's live test). */
+export interface RuleSample {
+  from: string;
+  to: string;
+  /** View folders the file would show in. */
+  views: string[];
+}
+
+// ---- Mount as folder (Plan 34 Phase 2; mirrors src-tauri/src/virtualfs/mod.rs) ----
+
+export interface Mount {
+  id: string;
+  name: string;
+  profileId: string;
+  remoteRoot: string;
+  /** Empty = the default `%USERPROFILE%\Faro\<name>`. */
+  localRoot: string;
+  enabled: boolean;
+  /** Upload files saved in the folder back to the connection. */
+  writeBack: boolean;
+  /** With write-back on, also apply deletes and renames. */
+  allowDeletes: boolean;
+  /** Keep a searchable index (dates, camera, thumbnails). */
+  index: boolean;
+  /** Rule set whose view rules show as extra folders. */
+  ruleSet?: string | null;
+}
+
+export interface MountView extends Mount {
+  running: boolean;
+  lastError?: string;
+  /** Files edited or created in the folder that the connection doesn't have. */
+  localChanges: string[];
+}
+
+// ---- File index + tags (Plan 34 Phases 3–4; mirrors src-tauri/src/fileindex.rs) ----
+
+export type IndexKind = "image" | "video" | "audio" | "document" | "archive" | "other";
+
+export interface IndexRow {
+  connectionId: string;
+  path: string;
+  root: string;
+  name: string;
+  size: number;
+  changeToken: string;
+  kind: IndexKind;
+  takenMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  camera?: string | null;
+  lens?: string | null;
+  gpsLat?: number | null;
+  gpsLon?: number | null;
+  contentHash?: string | null;
+  mtimeMs?: number | null;
+  tags: string[];
+}
+
+export interface IndexQuery {
+  connectionId?: string | null;
+  under?: string | null;
+  text?: string | null;
+  kinds?: string[];
+  takenFromMs?: number | null;
+  takenToMs?: number | null;
+  camera?: string | null;
+  tag?: string | null;
+  hasGps?: boolean | null;
+  limit?: number;
+}
+
+export interface IndexFacets {
+  cameras: string[];
+  tags: string[];
+  files: number;
+}
+
+export interface IndexRootView {
+  connectionId: string;
+  root: string;
+  files: number;
+  lastRunMs?: number | null;
+  running: boolean;
+  done: number;
+  total: number;
+}
+
+export interface IndexEvent {
+  connectionId: string;
+  root: string;
+  running: boolean;
+  done: number;
+  total: number;
+  error?: string;
+}
+
+export interface TagsResult {
+  updated: number;
+  storedRemote: number;
+  /** The connection can't hold tags; they're kept on this PC only. */
+  localOnly: boolean;
+  errors?: string[];
+}
+
+export interface RenameOp {
+  from: string;
+  to: string;
+}

@@ -68,11 +68,17 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     const onAnyClick = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) onClose();
     };
+    // Capture phase, so an Esc pressed before focus has moved into the menu
+    // (the rAF below) closes only the menu: marking it handled stops the file
+    // pane's own Esc from also clearing the selection. Keys inside the menu
+    // are left to onMenuKeyDown (it closes a submenu first).
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape" || ref.current?.contains(e.target as Node)) return;
+      e.preventDefault();
+      onClose();
     };
     window.addEventListener("mousedown", onAnyClick);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     window.addEventListener("resize", onClose);
     // Move focus into the menu so it's keyboard-operable straight away.
     const raf = requestAnimationFrame(() =>
@@ -83,7 +89,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("mousedown", onAnyClick);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("resize", onClose);
     };
   }, [onClose]);
