@@ -232,14 +232,16 @@ export function CheckRow({
       <div className="flex min-h-7 items-center text-sm text-text-muted">
         {group && <span className="truncate">{group}</span>}
       </div>
-      <div className={cn("flex min-w-0 flex-col gap-0.5", indent && "pl-5")}>
+      {/* An indented child lines its box up under the parent's label text:
+          box (w-3.5) + gap (gap-2) = 1.375rem. */}
+      <div className={cn("flex min-w-0 flex-col gap-0.5", indent && "pl-[1.375rem]")}>
         <div className="flex min-h-7 items-center gap-1.5" title={disabled ? disabledReason : undefined}>
           <Checkbox checked={checked} onChange={onChange} disabled={disabled} label={label}>
             <Highlight text={label} />
           </Checkbox>
           {help && <InfoTip text={help} />}
         </div>
-        {note && <div className="pl-[22px]"><Note>{note}</Note></div>}
+        {note && <div className="pl-[1.375rem]"><Note>{note}</Note></div>}
       </div>
     </div>
   );
@@ -403,8 +405,8 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        // Slim 22×12 track, 8px knob: reads as a control, not a pill button.
-        "relative h-3 w-[22px] shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        // Slim track (1.375 × 0.75rem), 0.5rem knob: reads as a control, not a pill button.
+        "relative h-3 w-[1.375rem] shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         checked ? "bg-accent" : "bg-text-dim/40 hover:bg-text-dim/60"
       )}
     >
@@ -526,7 +528,9 @@ const DOT: Record<Tone, string> = {
 /** A 6px dot and a word. No glow, no pulse. */
 export function Status({ tone, children }: { tone: Tone; children: ReactNode }) {
   return (
-    <span data-status={tone} className="inline-flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
+    // Block-level flex so it centers on the row instead of sitting on the
+    // text baseline of whatever span wraps it.
+    <span data-status={tone} className="flex w-fit min-w-0 max-w-full items-center gap-1.5 text-xs text-text-muted">
       {tone === "busy" ? (
         <Loader2 size={11} className="shrink-0 animate-spin text-text-dim" />
       ) : (
