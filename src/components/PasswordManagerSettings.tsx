@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
-import { Copy, KeyRound, Loader2, Lock, RotateCw, Terminal } from "lucide-react";
+import { Copy, Lock } from "lucide-react";
 import { isComposing } from "@faro/file-ui";
-import { cn } from "@/lib/cn";
 import { messageOf } from "@/lib/errors";
 import { SETTINGS_FOCUS } from "@/lib/settingsNav";
 import type { AgentInfo, PmState, PmStatus } from "@/lib/types";
 import { usePasswordManagers } from "@/stores/passwordManagersStore";
 import { ManagedToolCard, toolOps, useManagedTool } from "./ManagedToolCard";
 import { toast } from "@/stores/toastStore";
+import { Advanced, Btn, Note, Row, Status, SubHeading, TextInput, type Tone } from "./settings/kit";
 
 const STATE_LABEL: Record<PmState, string> = {
   missing: "Not installed",
@@ -16,18 +16,18 @@ const STATE_LABEL: Record<PmState, string> = {
   ready: "Ready",
 };
 
-const STATE_TONE: Record<PmState, string> = {
-  missing: "bg-bg-hover text-text-muted",
-  signedOut: "bg-warning-soft text-warning",
-  locked: "bg-warning-soft text-warning",
-  ready: "bg-success-soft text-success",
+const STATE_TONE: Record<PmState, Tone> = {
+  missing: "off",
+  signedOut: "warn",
+  locked: "warn",
+  ready: "ok",
 };
 
-const btn =
-  "inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60";
+const ABOUT =
+  "Connect with passwords and SSH keys kept in your password manager. Faro reads a secret only when a connection opens and never stores it.";
 
-// Settings › Password managers (Plan 33): one card per manager with its
-// state, account and SSH agent, plus Check again / Unlock / Lock.
+// Settings › Password managers (Plan 33): one block per manager with its
+// state, account, SSH agent and CLI, plus Check again / Unlock / Lock.
 export function PasswordManagerSettings() {
   const status = usePasswordManagers((s) => s.status);
   const agents = usePasswordManagers((s) => s.agents);
@@ -51,18 +51,12 @@ export function PasswordManagerSettings() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-xs text-text-muted">
-        Connect with passwords and SSH keys kept in 1Password or Bitwarden. Faro
-        reads a secret only when a connection opens and never stores it.
-      </p>
+    <div className="flex flex-col gap-6">
       {!loaded && status.length === 0 ? (
-        <div className="flex items-center gap-2 text-sm text-text-muted">
-          <Loader2 size={14} className="animate-spin" /> Checking…
-        </div>
+        <Status tone="busy">Checking</Status>
       ) : (
         status.map((pm) => (
-          <ManagerCard
+          <ManagerSection
             key={pm.id}
             pm={pm}
             agent={agents.find((a) => a.id === pm.id)}
@@ -75,7 +69,7 @@ export function PasswordManagerSettings() {
   );
 }
 
-function ManagerCard({
+function ManagerSection({
   pm,
   agent,
   checking,
@@ -109,78 +103,91 @@ function ManagerCard({
     }
   };
 
+  const bwSignedOut = !isOp && pm.state === "signedOut";
+  const showDetail = pm.detail && pm.state !== "missing" && !bwSignedOut;
+
   return (
-    <div
-      data-pm-card={pm.id}
-      data-pm-state={pm.state}
-      className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm"
-    >
-      <div className="flex items-center gap-2">
-        <KeyRound size={15} className="shrink-0 text-accent" />
-        <span className="font-medium text-text">{pm.name}</span>
-        <span
-          data-pm-state-label
-          className={cn("rounded px-1.5 py-0.5 text-[10.5px] font-medium", STATE_TONE[pm.state])}
-        >
-          {STATE_LABEL[pm.state]}
-        </span>
-      </div>
-
-      {pm.account && <div className="mt-1.5 text-xs text-text">{pm.account}</div>}
-      {pm.detail && pm.state !== "missing" && !(!isOp && pm.state === "signedOut") && <p className="mt-1.5 text-xs text-text-muted">{pm.detail}</p>}
-      {!isOp && pm.state === "signedOut" && <BwLogin cliPath={pm.cliPath} />}
-
-      <AgentLine agent={agent} />
-
-      {!isOp && pm.state === "locked" && (
-        <div className="mt-3">
-          <UnlockForm focusId={SETTINGS_FOCUS.bitwardenPassword} />
+    <div data-pm-card={pm.id} data-pm-state={pm.state} className="flex flex-col gap-0.5">
+      <SubHeading
+        title={pm.name}
+        help={
+          isOp
+            ? ABOUT
+            : `${ABOUT} Install the Bitwarden CLI (bw), sign in once, then check again.`
+        }
+        actions={
+          <>
+            <span data-pm-state-label className="mr-1.5">
+              <Status tone={STATE_TONE[pm.state]}>{STATE_LABEL[pm.state]}</Status>
+            </span>
+            {isOp && (pm.state === "locked" || pm.state === "signedOut") && (
+              <Btn size="sm" busy={busy} onClick={() => void run(() => unlock("1password", ""))}>
+                Sign in
+              </Btn>
+            )}
+            {!isOp && pm.state === "ready" && (
+              <Btn
+                size="sm"
+                data-pm-lock
+                disabled={busy}
+                icon={<Lock size={12} />}
+                onClick={() => void run(() => lock("bitwarden"))}
+              >
+                Lock
+              </Btn>
+            )}
+            <Btn size="sm" variant="ghost" data-pm-check busy={checking} onClick={onCheck}>
+              Check again
+            </Btn>
+          </>
+        }
+      />
+      {(showDetail || error) && (
+        <div className="pt-1.5">
+          {showDetail && <Note>{pm.detail}</Note>}
+          {error && (
+            <p role="alert" className="text-xs text-danger">
+              {error}
+            </p>
+          )}
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {isOp && (pm.state === "locked" || pm.state === "signedOut") && (
-          <button type="button" disabled={busy} className={btn} onClick={() => void run(() => unlock("1password", ""))}>
-            {busy && <Loader2 size={12} className="animate-spin" />}Sign in
-          </button>
-        )}
-        {!isOp && pm.state === "ready" && (
-          <button type="button" data-pm-lock disabled={busy} className={btn} onClick={() => void run(() => lock("bitwarden"))}>
-            <Lock size={12} />Lock
-          </button>
-        )}
-        <button type="button" data-pm-check disabled={checking} className={btn} onClick={onCheck}>
-          {checking ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
-          Check again
-        </button>
-      </div>
-      {error && <p role="alert" className="mt-2 text-xs text-danger">{error}</p>}
+      {pm.account && (
+        <Row label="Account">
+          <span className="min-w-0 truncate text-sm text-text">{pm.account}</span>
+        </Row>
+      )}
+      {bwSignedOut && <BwLogin cliPath={pm.cliPath} />}
+      {!isOp && pm.state === "locked" && (
+        <Row label="Master password">
+          <div className="w-full max-w-sm">
+            <UnlockForm focusId={SETTINGS_FOCUS.bitwardenPassword} />
+          </div>
+        </Row>
+      )}
+      <AgentRow agent={agent} />
+      <Row label="Command-line tool">
+        <div className="min-w-0 flex-1" data-pm-cli={toolId}>
+          <ManagedToolCard
+            tool={cli}
+            name={cliName}
+            compact
+            focusId={isOp ? SETTINGS_FOCUS.opCli : SETTINGS_FOCUS.bwCli}
+            missingText={`The ${cliName} isn't installed. Faro can install the official release for you.`}
+          />
+        </div>
+      </Row>
 
       {isOp && (
-        <details className="mt-3 text-xs text-text-muted" open={pm.state !== "ready"}>
-          <summary className="cursor-pointer select-none text-text-muted hover:text-text">How to connect</summary>
-          <ol className="mt-1.5 list-decimal space-y-0.5 pl-5">
-            <li>Install the 1Password CLI (<code>op</code>) with the button below, or use one you already have.</li>
-            <li>In 1Password, open Settings › Developer and turn on Integrate with 1Password CLI.</li>
+        <Advanced title="How to connect" open={pm.state !== "ready"}>
+          <ol className="list-decimal space-y-0.5 pl-9 text-xs leading-relaxed text-text-muted">
+            <li>Install the 1Password CLI above, or use your own.</li>
+            <li>In 1Password, Settings › Developer: turn on Integrate with 1Password CLI.</li>
             <li>For SSH keys, turn on Use the SSH agent on the same page.</li>
           </ol>
-        </details>
+        </Advanced>
       )}
-      {!isOp && pm.state === "missing" && (
-        <p className="mt-3 text-xs text-text-muted">
-          Install the Bitwarden CLI (<code>bw</code>) with the button below, sign in once, then check again.
-        </p>
-      )}
-
-      <div className="mt-3 border-t border-border/60 pt-3" data-pm-cli={toolId}>
-        <ManagedToolCard
-          tool={cli}
-          name={cliName}
-          compact
-          focusId={isOp ? SETTINGS_FOCUS.opCli : SETTINGS_FOCUS.bwCli}
-          missingText={`The ${cliName} isn't installed. Faro can install the official release for you.`}
-        />
-      </div>
     </div>
   );
 }
@@ -191,43 +198,45 @@ function ManagerCard({
 function BwLogin({ cliPath }: { cliPath?: string }) {
   const command = cliPath ? `${/\s/.test(cliPath) ? `"${cliPath}"` : cliPath} login` : "bw login";
   return (
-    <div className="mt-1.5 text-xs text-text-muted" data-pm-bw-login>
-      <p>Bitwarden isn't signed in. Run this once in a terminal, then check again:</p>
-      <div className="mt-1 flex items-center gap-2">
-        <code className="flex min-w-0 flex-1 items-center gap-1.5 truncate rounded bg-bg-hover px-2 py-1 font-mono text-[11px] text-text">
-          <Terminal size={11} className="shrink-0 text-text-dim" />
-          <span className="truncate">{command}</span>
+    <div data-pm-bw-login>
+      <Row
+        label="Sign in"
+        help="Bitwarden isn't signed in. Run this once in a terminal, then check again."
+      >
+        <code
+          title={command}
+          className="flex h-7 min-w-0 flex-1 items-center truncate rounded border border-border bg-bg-subtle px-2.5 font-mono text-xs text-text"
+        >
+          {command}
         </code>
-        <button
-          type="button"
+        <Btn
+          size="sm"
+          variant="ghost"
           aria-label="Copy the sign-in command"
-          className={btn}
+          icon={<Copy size={12} />}
           onClick={() => {
             void navigator.clipboard.writeText(command);
             toast.success("Copied the sign-in command");
           }}
         >
-          <Copy size={12} />
           Copy
-        </button>
-      </div>
+        </Btn>
+      </Row>
     </div>
   );
 }
 
-function AgentLine({ agent }: { agent?: AgentInfo }) {
+function AgentRow({ agent }: { agent?: AgentInfo }) {
   if (!agent) return null;
   const sharedPipe = /openssh-ssh-agent/i.test(agent.path);
   return (
-    <div data-pm-agent={agent.available ? "found" : "missing"} className="mt-1.5 text-xs text-text-muted">
-      {agent.available ? (
-        <>
-          SSH agent: found at <span className="break-all font-mono text-[11px]">{agent.path}</span>
-          {sharedPipe && " (the shared OpenSSH pipe)"}
-        </>
-      ) : (
-        "SSH agent: not running"
-      )}
+    <div data-pm-agent={agent.available ? "found" : "missing"}>
+      <Row
+        label="SSH agent"
+        help={agent.available ? `${agent.path}${sharedPipe ? " (the shared OpenSSH pipe)" : ""}` : undefined}
+      >
+        {agent.available ? <Status tone="ok">Found</Status> : <Status tone="off">Not running</Status>}
+      </Row>
     </div>
   );
 }
@@ -263,7 +272,7 @@ export function UnlockForm({ focusId, onUnlocked, autoFocus }: { focusId?: strin
   return (
     <div data-settings-focus={focusId} data-pm-unlock>
       <div className="flex items-center gap-2">
-        <input
+        <TextInput
           type="password"
           aria-label="Bitwarden master password"
           placeholder="Master password"
@@ -278,17 +287,11 @@ export function UnlockForm({ focusId, onUnlocked, autoFocus }: { focusId?: strin
             e.stopPropagation();
             void submit();
           }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+          className="flex-1"
         />
-        <button
-          type="button"
-          data-pm-unlock-button
-          disabled={busy}
-          onClick={() => void submit()}
-          className="btn-accent inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
-        >
-          {busy && <Loader2 size={12} className="animate-spin" />}Unlock
-        </button>
+        <Btn variant="primary" data-pm-unlock-button busy={busy} onClick={() => void submit()}>
+          Unlock
+        </Btn>
       </div>
       {error && <p role="alert" data-pm-unlock-error className="mt-1.5 text-xs text-danger">{error}</p>}
     </div>

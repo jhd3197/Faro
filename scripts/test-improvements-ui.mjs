@@ -178,7 +178,7 @@ try {
   await page.type('[aria-label="Host relay address"]', "new-relay.example.com:8723");
   await new Promise(resolve => setTimeout(resolve, 5200));
   assert.equal(await page.$eval('[aria-label="Host relay address"]', input => input.value), "new-relay.example.com:8723");
-  await click("Save relay settings");
+  await click("Save");
   await page.waitForFunction(() => window.__savedRelay?.address === "new-relay.example.com:8723");
   await page.evaluate(() => window.__demo.useLayout.getState().closeDialog());
   await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));

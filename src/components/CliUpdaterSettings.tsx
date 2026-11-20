@@ -1,13 +1,13 @@
 import { useEffect } from "react";
-import { Terminal, Loader2, CheckCircle2, AlertTriangle, Download } from "lucide-react";
 import { useCliUpdater } from "@/stores/cliUpdaterStore";
 import type { CliUpdateMode } from "@/lib/types";
-import { cn } from "@/lib/cn";
+import { Btn, Row, Segmented, Status } from "./settings/kit";
+import { ToolRow } from "./ManagedToolCard";
 
-const MODES: { value: CliUpdateMode; label: string; help: string }[] = [
-  { value: "ask", label: "Ask me", help: "Prompt when the CLI is out of date." },
-  { value: "auto", label: "Automatic", help: "Update silently on launch." },
-  { value: "off", label: "Off", help: "Never check." },
+const MODES: { value: CliUpdateMode; label: string }[] = [
+  { value: "ask", label: "Ask me" },
+  { value: "auto", label: "Automatic" },
+  { value: "off", label: "Off" },
 ];
 
 /// Settings → faro-cli (Plan 10 Phase 0c/0d). Shows whether the standalone
@@ -27,115 +27,63 @@ export function CliUpdaterSettings() {
   }, [refresh]);
 
   const mode = status?.mode ?? "ask";
+  const missing = status && !status.installed;
+  const action = missing ? "Install faro-cli" : status?.stale ? "Update now" : null;
 
   return (
-    <div className="flex flex-col gap-5">
-      <div>
-        <h3 className="mb-1 flex items-center gap-2 text-sm font-medium text-text">
-          <Terminal size={15} className="text-accent" />
-          faro-cli
-        </h3>
-        <p className="text-xs text-text-muted">
-          The command-line client ships as a separate download from the app, so it
-          can fall behind after an app update. Keep it in step here.
-        </p>
-      </div>
-
-      {/* Status card */}
-      <div className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm">
-        {!status ? (
-          <div className="flex items-center gap-2 text-text-muted">
-            <Loader2 size={15} className="animate-spin" /> Checking…
-          </div>
-        ) : !status.installed ? (
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-500" />
-            <div className="min-w-0">
-              <div className="text-text">faro-cli isn't installed (or isn't on your PATH).</div>
-              <p className="mt-0.5 text-xs text-text-muted">
-                Install it from the release page, or click Install to download the
-                matching build into Faro's data folder.
-              </p>
-            </div>
-          </div>
-        ) : status.stale ? (
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-500" />
-            <div className="min-w-0">
-              <div className="text-text">
-                faro-cli v{status.cliVersion} is older than Faro v{status.appVersion}.
-              </div>
-              {status.cliPath && (
-                <p className="mt-0.5 truncate text-xs text-text-muted">{status.cliPath}</p>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-start gap-2">
-            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-500" />
-            <div className="min-w-0">
-              <div className="text-text">faro-cli v{status.cliVersion} is up to date.</div>
-              {status.cliPath && (
-                <p className="mt-0.5 truncate text-xs text-text-muted">{status.cliPath}</p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {status?.message && (
-          <p className="mt-2 border-t border-border/60 pt-2 text-xs text-text-muted">
-            {status.message}
-          </p>
-        )}
-
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={() => void update()}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-60"
-          >
-            {busy ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Download size={13} />
+    <div className="flex flex-col gap-3">
+      <ToolRow
+        boxed
+        data-cli-status={!status ? "checking" : missing ? "missing" : status.stale ? "stale" : "current"}
+        name="faro-cli"
+        meta={status?.cliVersion ? `v${status.cliVersion}` : undefined}
+        metaTitle={status?.cliPath ?? undefined}
+        help={
+          missing
+            ? "Not found on your PATH. Install downloads the build that matches this app into Faro's data folder."
+            : "The command-line client ships separately from the app, so it can fall behind after an app update."
+        }
+        status={
+          busy ? (
+            <Status tone="busy">Updating</Status>
+          ) : !status ? (
+            <Status tone="busy">Checking</Status>
+          ) : missing ? (
+            <Status tone="off">Not installed</Status>
+          ) : status.stale ? (
+            <Status tone="warn">Older than Faro v{status.appVersion}</Status>
+          ) : (
+            <Status tone="ok">Up to date</Status>
+          )
+        }
+        message={status?.message ?? undefined}
+        actions={
+          <>
+            {action && (
+              <Btn size="sm" onClick={() => void update()} disabled={busy}>
+                {action}
+              </Btn>
             )}
-            {!status?.installed ? "Install faro-cli" : busy ? "Updating…" : "Update now"}
-          </button>
-          <button
-            onClick={() => void refresh()}
-            disabled={busy}
-            className="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60"
-          >
-            Check again
-          </button>
-        </div>
-      </div>
+            <Btn size="sm" variant="ghost" onClick={() => void refresh()} disabled={busy}>
+              Check again
+            </Btn>
+          </>
+        }
+      />
 
-      {/* Preference */}
-      <div>
-        <div className="mb-1.5 text-sm font-medium text-text">When the CLI is out of date</div>
-        <div className="flex flex-col gap-1.5">
-          {MODES.map((m) => (
-            <button
-              key={m.value}
-              onClick={() => void setMode(m.value)}
-              disabled={busy}
-              className={cn(
-                "flex items-center justify-between rounded-md border px-3 py-2 text-left text-sm disabled:opacity-60",
-                mode === m.value
-                  ? "border-accent bg-accent/10 text-text"
-                  : "border-border text-text-muted hover:bg-bg-hover hover:text-text"
-              )}
-            >
-              <span>
-                <span className="font-medium">{m.label}</span>
-                <span className="ml-2 text-xs text-text-muted">{m.help}</span>
-              </span>
-              {mode === m.value && <CheckCircle2 size={15} className="text-accent" />}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Row
+        label="When out of date"
+        keywords="update automatic ask"
+        help="Ask me: prompt when the CLI is older than the app. Automatic: update quietly at launch. Off: never check."
+      >
+        <Segmented
+          label="When the CLI is out of date"
+          value={mode}
+          onChange={(v) => void setMode(v)}
+          options={MODES}
+          disabled={busy}
+        />
+      </Row>
     </div>
   );
 }

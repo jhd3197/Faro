@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, KeyRound, Link2, Loader2, LogOut, Server, Trash2, AlertTriangle } from "lucide-react";
 import { ipc } from "@/lib/ipc";
 import { toast } from "@/stores/toastStore";
 import { toastError } from "@/lib/errors";
 import { openExternal } from "@/lib/openExternal";
 import type { CfAccountStatus, CfSshHostname } from "@/lib/types";
 import { SETTINGS_FOCUS } from "@/lib/settingsNav";
+import { cn } from "@/lib/cn";
+import { Btn, Group, List, ListRow, Row, Status, TextInput } from "./settings/kit";
 
 const TOKEN_PAGE = "https://dash.cloudflare.com/profile/api-tokens";
 
@@ -39,8 +40,9 @@ function formatSeen(iso: string): string {
   return iso.slice(0, 10);
 }
 
-/** Tunnel health: status, and when we know them the connector's last seen
- *  time and the cloudflared version on the server. */
+/** Tunnel health: a dot and the status, and when we know them the
+ *  connector's last seen time and the cloudflared version on the server.
+ *  Inline, so it can sit inside a sentence or a status line. */
 export function TunnelHealth({
   status,
   lastSeen,
@@ -51,12 +53,20 @@ export function TunnelHealth({
   version?: string;
 }) {
   if (!status && !lastSeen && !version) return null;
-  const tone = status === "healthy" ? "text-success" : status === "degraded" ? "text-warning" : "text-danger";
+  const dot = status === "healthy" ? "bg-success" : status === "degraded" ? "bg-warning" : "bg-danger";
   return (
-    <span className={tone} data-tunnel-status={status || undefined} data-testid="tunnel-health" title={lastSeen}>
-      {status ? `tunnel ${status === "inactive" ? "not connected" : status}` : "tunnel"}
-      {version ? <span className="text-text-dim"> · cloudflared {version}</span> : null}
-      {lastSeen ? <span className="text-text-dim"> · connector {formatSeen(lastSeen)}</span> : null}
+    <span
+      className="inline-flex min-w-0 items-center gap-1.5 text-text-muted"
+      data-tunnel-status={status || undefined}
+      data-testid="tunnel-health"
+      title={lastSeen}
+    >
+      {status && <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot)} />}
+      <span className="truncate">
+        {status ? `tunnel ${status === "inactive" ? "not connected" : status}` : "tunnel"}
+        {version ? <span className="text-text-dim"> · cloudflared {version}</span> : null}
+        {lastSeen ? <span className="text-text-dim"> · connector {formatSeen(lastSeen)}</span> : null}
+      </span>
     </span>
   );
 }
@@ -104,155 +114,141 @@ export function CloudflareAccountCard() {
       return s;
     }, "Couldn't connect the Cloudflare account");
 
-  const btn =
-    "inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-hover hover:text-text disabled:opacity-60";
-
   if (!status) return null;
   return (
-    <div
-      className="rounded-lg border border-border bg-bg-subtle/50 p-3 text-sm"
-      data-testid="cf-account"
-      data-settings-focus={SETTINGS_FOCUS.cloudflareAccount}
-    >
-      <div className="mb-1 font-medium text-text">Cloudflare account</div>
-      {!status.connected ? (
-        <>
-          <p className="mb-2 text-xs text-text-muted">
-            Connect an account once so Faro can list its SSH servers, show tunnel health, keep one
-            service token for faro-cli, invite teammates and move servers behind Cloudflare. Create
-            an API token with these permissions, and paste it here. It's kept in the system
-            keychain.
-          </p>
-          <ul className="mb-2 list-disc pl-5 text-[11px] text-text-dim">
-            {status.permissions.map((p) => (
-              <li key={p}>{p}</li>
-            ))}
-          </ul>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              aria-label="Cloudflare API token"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="API token"
-              autoComplete="off"
-              className="min-w-0 flex-1 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-xs outline-none focus:border-accent"
-            />
-            <button
-              onClick={() => void connect()}
-              disabled={busy || !token.trim()}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-60"
+    <div data-testid="cf-account" data-settings-focus={SETTINGS_FOCUS.cloudflareAccount}>
+      <Group
+        title="Cloudflare account"
+        help="Lets Faro list the account's SSH servers, show tunnel health, keep a service token for faro-cli, invite teammates and move servers behind Cloudflare. Without one, Cloudflare connections still work: type the server's hostname in the connection editor."
+      >
+        {!status.connected ? (
+          <>
+            <Row
+              label="API token"
+              keywords="cloudflare account connect"
+              help={
+                <>
+                  Create an API token with these permissions and paste it here. It's kept in the
+                  system keychain.
+                  <span className="mt-1 block">{status.permissions.join(" · ")}</span>
+                </>
+              }
             >
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
-              Connect account
-            </button>
-            <button onClick={() => openExternal(TOKEN_PAGE)} className={btn}>
-              Create a token…
-            </button>
-          </div>
-          {status.choices.length > 0 && (
-            <div className="mt-2 flex flex-col gap-1">
-              <div className="text-xs text-text-muted">This token reaches several accounts. Which one?</div>
-              {status.choices.map((a) => (
-                <button key={a.id} onClick={() => void connect(a.id)} disabled={busy} className={btn}>
-                  {a.name}
-                </button>
-              ))}
-            </div>
-          )}
-          <p className="mt-2 text-[11px] text-text-dim">
-            Without an account, Cloudflare connections still work: type the server's hostname in the
-            connection editor.
-          </p>
-        </>
-      ) : (
-        <>
-          <div className="mb-2 flex items-center gap-2 text-xs">
-            <CheckCircle2 size={14} className="text-success" />
-            <span className="text-text">{status.accountName}</span>
-            <span className="text-text-dim">· {status.accountId}</span>
-            <button
-              onClick={() => void run(async () => {
-                await ipc.cfAccountDisconnect();
-                setHosts(null);
-                return await ipc.cfAccountStatus();
-              }, "Couldn't disconnect")}
-              disabled={busy}
-              className={`${btn} ml-auto`}
-            >
-              <LogOut size={13} /> Disconnect
-            </button>
-          </div>
-
-          <div className="mb-3 rounded-md border border-border px-2.5 py-2">
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text">
-              <KeyRound size={13} /> Service token for unattended runs
-            </div>
-            {status.serviceTokenClientId ? (
-              <div className="flex items-center gap-2 text-xs text-text-muted">
-                <span className="min-w-0 flex-1 truncate font-mono" data-testid="cf-service-token">
-                  {status.serviceTokenClientId}
-                </span>
-                <button
-                  onClick={() => void run(ipc.cfAccountDeleteServiceToken, "Couldn't delete the service token")}
-                  disabled={busy}
-                  className={btn}
-                >
-                  <Trash2 size={13} /> Delete
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-xs text-text-muted">
-                <span className="min-w-0 flex-1">
-                  faro-cli uses it to reach Cloudflare servers with no browser to sign in. Add it to an
-                  application's policy to let it in (Faro does when it sets up a server).
-                </span>
-                <button
-                  onClick={() => void run(ipc.cfAccountCreateServiceToken, "Couldn't create the service token")}
-                  disabled={busy}
-                  className={btn}
-                >
-                  <KeyRound size={13} /> Create
-                </button>
-              </div>
+              <TextInput
+                type="password"
+                aria-label="Cloudflare API token"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="API token"
+                autoComplete="off"
+                className="min-w-0 flex-1"
+              />
+              <Btn variant="primary" busy={busy} disabled={!token.trim()} onClick={() => void connect()}>
+                Connect account
+              </Btn>
+              <Btn variant="ghost" onClick={() => openExternal(TOKEN_PAGE)}>
+                Create a token…
+              </Btn>
+            </Row>
+            {status.choices.length > 0 && (
+              <Row label="Pick an account" help="This token reaches several accounts.">
+                {status.choices.map((a) => (
+                  <Btn key={a.id} onClick={() => void connect(a.id)} disabled={busy}>
+                    {a.name}
+                  </Btn>
+                ))}
+              </Row>
             )}
-          </div>
-
-          <div className="text-xs font-medium text-text">SSH servers in this account</div>
-          {hosts === null ? (
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
-              <Loader2 size={12} className="animate-spin" /> Loading…
-            </div>
-          ) : hosts.length === 0 ? (
-            <p className="mt-1 text-xs text-text-muted">
-              None yet. Move a server behind Cloudflare from its rail menu.
-            </p>
-          ) : (
-            <div className="mt-1 flex flex-col gap-1" data-testid="cf-hostnames">
-              {hosts.map((h) => (
-                <div key={h.hostname} className="flex items-center gap-2 text-xs">
-                  <Server size={12} className="shrink-0 text-text-dim" />
-                  <span className="font-mono text-text">{h.hostname}</span>
-                  <span className="text-text-dim">{h.label}</span>
-                  <span className="ml-auto">
-                    {h.tunnelStatus ? (
-                      <TunnelHealth
-                        status={h.tunnelStatus}
-                        lastSeen={h.connectorLastSeen}
-                        version={h.connectorVersion}
-                      />
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-text-dim">
-                        <AlertTriangle size={11} /> no tunnel here
-                      </span>
-                    )}
+          </>
+        ) : (
+          <>
+            <Row label="Account" keywords="cloudflare">
+              <span className="min-w-0 truncate text-sm text-text">{status.accountName}</span>
+              <span className="min-w-0 truncate font-mono text-xs text-text-dim">{status.accountId}</span>
+              <Btn
+                className="ml-auto"
+                disabled={busy}
+                onClick={() =>
+                  void run(async () => {
+                    await ipc.cfAccountDisconnect();
+                    setHosts(null);
+                    return await ipc.cfAccountStatus();
+                  }, "Couldn't disconnect")
+                }
+              >
+                Disconnect
+              </Btn>
+            </Row>
+            <Row
+              label="Service token"
+              keywords="faro-cli unattended"
+              help="faro-cli uses it to reach Cloudflare servers with no browser to sign in. Add it to an application's policy to let it in; Faro does when it sets up a server."
+            >
+              {status.serviceTokenClientId ? (
+                <>
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-xs text-text"
+                    data-testid="cf-service-token"
+                  >
+                    {status.serviceTokenClientId}
                   </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
+                  <Btn
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => void run(ipc.cfAccountDeleteServiceToken, "Couldn't delete the service token")}
+                  >
+                    Delete
+                  </Btn>
+                </>
+              ) : (
+                <>
+                  <span className="min-w-0 flex-1 text-sm text-text-dim">None</span>
+                  <Btn
+                    disabled={busy}
+                    onClick={() => void run(ipc.cfAccountCreateServiceToken, "Couldn't create the service token")}
+                  >
+                    Create
+                  </Btn>
+                </>
+              )}
+            </Row>
+            <Row
+              label="SSH servers"
+              keywords="hostnames tunnel"
+              help="SSH servers in this account. Move a server behind Cloudflare from its rail menu."
+            >
+              {hosts === null ? (
+                <Status tone="busy">Loading…</Status>
+              ) : hosts.length === 0 ? (
+                <span className="text-sm text-text-dim">None yet</span>
+              ) : (
+                <List data-testid="cf-hostnames" className="w-full">
+                  {hosts.map((h) => (
+                    <ListRow
+                      key={h.hostname}
+                      title={<span className="font-mono">{h.hostname}</span>}
+                      detail={h.label || undefined}
+                      status={
+                        h.tunnelStatus ? (
+                          <span className="text-xs">
+                            <TunnelHealth
+                              status={h.tunnelStatus}
+                              lastSeen={h.connectorLastSeen}
+                              version={h.connectorVersion}
+                            />
+                          </span>
+                        ) : (
+                          <Status tone="off">No tunnel</Status>
+                        )
+                      }
+                    />
+                  ))}
+                </List>
+              )}
+            </Row>
+          </>
+        )}
+      </Group>
     </div>
   );
 }

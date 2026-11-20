@@ -1,22 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  MonitorSmartphone,
-  KeyRound,
-  Loader2,
-  Copy,
-  Check,
-  Trash2,
-  ShieldAlert,
-} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { ipc } from "@/lib/ipc";
 import { toast } from "@/stores/toastStore";
 import type { AgentHostStatus } from "@/lib/types";
 import { onAgentHostPaired } from "@/lib/ipc";
-import { cn } from "@/lib/cn";
 import { SETTINGS_FOCUS } from "@/lib/settingsNav";
+import {
+  Advanced,
+  Btn,
+  CheckRow,
+  Empty,
+  Group,
+  InfoTip,
+  List,
+  ListRow,
+  Row,
+  Status,
+  SubHeading,
+  SwitchRow,
+  TextInput,
+} from "./settings/kit";
 
 /// Settings → Remote control. Lets THIS machine be driven from the user's other
-/// Faros: flip it on, click "Show pairing code", read the six digits into the
+/// Faros: flip it on, click "Pair a device", read the six digits into the
 /// other device. No separate daemon download, no terminal — the app hosts the
 /// same faro-agentd stack in-process.
 export function RemoteControlSettings() {
@@ -24,7 +29,6 @@ export function RemoteControlSettings() {
   const [relayAddress, setRelayAddress] = useState("");
   const [relayKey, setRelayKey] = useState("");
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -89,195 +93,248 @@ export function RemoteControlSettings() {
     }
   };
 
-  const toggleEnabled = (v: boolean) =>
-    run(() => ipc.agentHostSetEnabled(v));
+  if (!status) {
+    return <Status tone="busy">Loading…</Status>;
+  }
 
-  const copyCode = async () => {
-    if (!status?.pairing) return;
+  const relayState = status.relay
+    ? status.relayOnline
+      ? "Relay available"
+      : "Reconnecting to relay…"
+    : null;
+  const switchStatus = status.running
+    ? `Listening on port ${status.port}${relayState ? ` · ${relayState}` : ""}`
+    : status.enabled
+      ? "Not running"
+      : "Off";
+  const saveRelay = () =>
+    run(() =>
+      ipc.agentHostSetRelay(
+        relayAddress.trim() ? { address: relayAddress.trim(), publicKey: relayKey.trim() } : null
+      )
+    );
+
+  return (
+    <div className="space-y-4">
+      <SwitchRow
+        label="Remote control"
+        help={
+          <>
+            Runs an encrypted agent so another Faro on your network can browse, transfer files and,
+            if you allow it, run commands here.
+            {navigator.platform.startsWith("Win") && " Windows may ask to allow Faro through the firewall the first time."}
+          </>
+        }
+        status={switchStatus}
+        checked={status.enabled}
+        onChange={(v) => run(() => ipc.agentHostSetEnabled(v))}
+        busy={busy}
+        keywords="pair agent remote"
+      />
+
+      {status.running && (
+        <>
+          <section className="space-y-2">
+            <SubHeading
+              title={`Paired devices (${status.peers.length})`}
+              help="Paired devices can connect to this computer until you remove them."
+              actions={
+                !status.pairing && (
+                  <Btn
+                    variant="primary"
+                    size="sm"
+                    data-settings-focus={SETTINGS_FOCUS.showPairingCode}
+                    disabled={busy}
+                    onClick={() => run(() => ipc.agentHostOpenPairing())}
+                  >
+                    Pair a device
+                  </Btn>
+                )
+              }
+            />
+            {status.pairing && (
+              <PairingCode
+                code={status.pairing.code}
+                remainingSecs={status.pairing.remainingSecs}
+                hostname={status.hostname}
+                busy={busy}
+                onClose={() => run(() => ipc.agentHostClosePairing())}
+              />
+            )}
+            {status.peers.length === 0 ? (
+              <Empty>No paired devices.</Empty>
+            ) : (
+              <List data-testid="paired-devices">
+                {status.peers.map((p) => (
+                  <ListRow
+                    key={p.publicKey}
+                    title={p.name}
+                    detail={<span className="font-mono">{p.fingerprint}</span>}
+                    actions={
+                      <Btn
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        title="This device can no longer connect"
+                        onClick={() => run(() => ipc.agentHostRevokePeer(p.publicKey))}
+                      >
+                        Remove
+                      </Btn>
+                    }
+                  />
+                ))}
+              </List>
+            )}
+          </section>
+
+          <Group title="Paired machines may">
+            <CheckRow
+              label="Run commands"
+              help="Paired controllers, and any AI agent driving them, can run shell commands here. Turn off for browse and transfer only."
+              note={status.allowExec ? "Only pair devices you trust." : undefined}
+              checked={status.allowExec}
+              disabled={busy}
+              keywords="exec shell"
+              onChange={(v) => run(() => ipc.agentHostSetPolicy(v, status.allowWrite))}
+            />
+            <CheckRow
+              label="Write files"
+              help="Upload, delete and rename. Reading and listing are always allowed once paired."
+              checked={status.allowWrite}
+              disabled={busy}
+              keywords="upload delete rename"
+              onChange={(v) => run(() => ipc.agentHostSetPolicy(status.allowExec, v))}
+            />
+          </Group>
+        </>
+      )}
+
+      <Advanced open={!!status.relay}>
+        <Row
+          label="Relay address"
+          help="A self-hosted relay reaches this machine over the internet. Pair your devices first, then add this machine and its controllers to the relay allowlist."
+          keywords="relay internet self-hosted"
+        >
+          <TextInput
+            className="w-full"
+            aria-label="Host relay address"
+            placeholder="relay.example.com:8723"
+            value={relayAddress}
+            onChange={(e) => setRelayAddress(e.target.value)}
+          />
+        </Row>
+        <Row label="Relay public key" keywords="relay">
+          <TextInput
+            className="w-full font-mono"
+            aria-label="Host relay public key"
+            placeholder="Base64"
+            value={relayKey}
+            onChange={(e) => setRelayKey(e.target.value)}
+          />
+        </Row>
+        {status.publicKey && (
+          <Row label="This machine's key" help="Add it to the relay allowlist." keywords="public key relay">
+            <CopyValue value={status.publicKey} />
+          </Row>
+        )}
+        {status.fingerprint && (
+          <Row label="Fingerprint" keywords="key">
+            <span className="truncate font-mono text-xs text-text" title={status.os}>
+              {status.fingerprint}
+            </span>
+          </Row>
+        )}
+        {/* An action row with no label: the button lines up with the inputs. */}
+        <div className="grid grid-cols-[12.5rem_minmax(0,1fr)] gap-x-5 py-1">
+          <div />
+          <div className="flex min-h-8 items-center gap-2">
+            <Btn
+              disabled={busy || (!!relayAddress.trim() && !relayKey.trim())}
+              title={relayAddress.trim() && !relayKey.trim() ? "Enter the relay public key" : undefined}
+              onClick={saveRelay}
+            >
+              Save
+            </Btn>
+            <span className="text-xs text-text-dim">Saving disconnects active sessions.</span>
+          </div>
+        </div>
+      </Advanced>
+    </div>
+  );
+}
+
+function PairingCode({
+  code,
+  remainingSecs,
+  hostname,
+  busy,
+  onClose,
+}: {
+  code: string;
+  remainingSecs: number;
+  hostname: string;
+  busy: boolean;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
     try {
-      await navigator.clipboard.writeText(status.pairing.code);
+      await navigator.clipboard.writeText(code);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       /* clipboard blocked — the code is on screen anyway */
     }
   };
-
-  if (!status) {
-    return (
-      <div className="flex items-center gap-2 text-xs text-text-dim">
-        <Loader2 size={13} className="animate-spin" /> Loading…
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-4">
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 text-sm">
-            <MonitorSmartphone size={14} className="text-accent" />
-            Let my other machines control this computer
-          </div>
-          <div className="mt-1 text-xs text-text-dim">
-            Runs a tiny encrypted agent so another Faro on your network can browse,
-            transfer files, and (if you allow it) run commands here. Off by default.
-            {status.running && (
-              <>
-                {" "}
-                Listening on port{" "}
-                <span className="font-mono text-text-muted">{status.port}</span>.
-              </>
-            )}
-          </div>
-        </div>
-        <Toggle checked={status.enabled} disabled={busy} onChange={toggleEnabled} />
-      </div>
-
-      <div className="space-y-2 rounded-lg border border-border p-3">
-        <div className="text-xs font-medium">Self-hosted internet relay</div>
-        {status.relay && <p role="status" className="text-[11px] text-text-muted">{!status.running ? "Remote control is off" : status.relayOnline ? "Relay available" : "Reconnecting to relay…"}</p>}
-        <p className="text-[11px] text-text-muted">Pair your devices first. Add this machine and its controllers to the relay allowlist. Saving restarts remote control and disconnects active sessions.</p>
-        <input className="w-full rounded-md border border-border bg-bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent" aria-label="Host relay address" placeholder="relay.example.com:8723" value={relayAddress} onChange={e => setRelayAddress(e.target.value)} />
-        <input className="w-full rounded-md border border-border bg-bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent" aria-label="Host relay public key" placeholder="Relay public key (base64)" value={relayKey} onChange={e => setRelayKey(e.target.value)} />
-        {status.publicKey && <div className="break-all text-[11px] text-text-muted">This machine's public key: <span className="select-all font-mono">{status.publicKey}</span></div>}
-        <button disabled={busy || (!!relayAddress.trim() && !relayKey.trim())} className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50" onClick={() => run(() => ipc.agentHostSetRelay(relayAddress.trim() ? { address: relayAddress.trim(), publicKey: relayKey.trim() } : null))}>Save relay settings</button>
-      </div>
-
-      {status.running && (
-        <>
-          {/* Pairing */}
-          <div className="rounded-lg border border-border bg-bg-subtle p-3">
-            {status.pairing ? (
-              <div className="space-y-2">
-                <div className="text-xs text-text-muted">
-                  On your other machine: New Connection → Faro Agent → pick{" "}
-                  <span className="font-medium text-text">
-                    {status.hostname || "this machine"}
-                  </span>{" "}
-                  → enter this code.
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-center font-mono text-2xl font-semibold tracking-[0.4em] text-text">
-                    {status.pairing.code}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={copyCode}
-                    className="rounded-md border border-border bg-bg-panel p-2 text-text-muted hover:bg-bg-hover hover:text-text"
-                    title="Copy code"
-                  >
-                    {copied ? (
-                      <Check size={14} className="text-success" />
-                    ) : (
-                      <Copy size={14} />
-                    )}
-                  </button>
-                </div>
-                <div className="flex items-center justify-between text-[11px] text-text-dim">
-                  <span>Expires in {formatCountdown(status.pairing.remainingSecs)}</span>
-                  <button
-                    type="button"
-                    onClick={() => run(() => ipc.agentHostClosePairing())}
-                    className="underline hover:text-text"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                data-settings-focus={SETTINGS_FOCUS.showPairingCode}
-                disabled={busy}
-                onClick={() => run(() => ipc.agentHostOpenPairing())}
-                className="btn-accent flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-              >
-                <KeyRound size={13} /> Show pairing code
-              </button>
-            )}
-          </div>
-
-          {/* What controllers may do here */}
-          <div className="space-y-2">
-            <div className="text-xs font-medium text-text">
-              What paired machines may do here
-            </div>
-            <PolicyToggle
-              label="Run commands (exec)"
-              help="Allow paired controllers — and any AI agent driving them — to run shell commands on this machine. The headline capability; turn off for a browse/read-only foothold."
-              checked={status.allowExec}
-              disabled={busy}
-              onChange={(v) =>
-                run(() => ipc.agentHostSetPolicy(v, status.allowWrite))
-              }
-            />
-            <PolicyToggle
-              label="Write files (upload, delete, rename)"
-              help="Allow paired controllers to modify this machine's filesystem. Reads and directory listings are always allowed once paired."
-              checked={status.allowWrite}
-              disabled={busy}
-              onChange={(v) =>
-                run(() => ipc.agentHostSetPolicy(status.allowExec, v))
-              }
-            />
-            {status.allowExec && (
-              <div className="flex items-start gap-1.5 text-[11px] text-warning">
-                <ShieldAlert size={12} className="mt-0.5 shrink-0" />
-                Paired machines can run commands here. Only pair devices you trust,
-                and revoke any you no longer use below.
-              </div>
-            )}
-          </div>
-
-          {/* Paired controllers */}
-          <div className="space-y-1.5">
-            <div className="text-xs font-medium text-text">
-              Paired machines ({status.peers.length})
-            </div>
-            {status.peers.length === 0 ? (
-              <div className="text-[11px] text-text-dim">
-                None yet. Click “Show pairing code” and enter it on another machine.
-              </div>
-            ) : (
-              status.peers.map((p) => (
-                <div
-                  key={p.publicKey}
-                  className="flex items-center justify-between rounded-md border border-border bg-bg-subtle px-2.5 py-1.5"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-text">
-                      {p.name}
-                    </div>
-                    <div className="truncate font-mono text-[10px] text-text-dim">
-                      {p.fingerprint}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => run(() => ipc.agentHostRevokePeer(p.publicKey))}
-                    className="ml-2 flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-text-dim hover:bg-danger/10 hover:text-danger disabled:opacity-50"
-                    title="Revoke — this machine can no longer connect"
-                  >
-                    <Trash2 size={12} /> Revoke
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="text-[11px] text-text-dim">
-            This machine’s key: <span className="font-mono">{status.fingerprint}</span>
-            {" · "}
-            {status.os}
-            {navigator.platform.startsWith("Win") && (
-              <> · Windows may ask to allow Faro through the firewall the first time.</>
-            )}
-          </div>
-        </>
-      )}
+    <div className="flex flex-wrap items-center gap-2" data-testid="pairing-code">
+      <span
+        aria-label="Pairing code"
+        className="flex h-9 select-all items-center rounded border border-border bg-bg-subtle px-3 font-mono text-xl font-semibold tracking-[0.3em] text-text"
+      >
+        {code}
+      </span>
+      <InfoTip
+        label="How to pair"
+        text={`On your other machine: New Connection › Faro Agent › ${hostname || "this machine"} › enter this code.`}
+      />
+      <Btn size="sm" variant="ghost" onClick={() => void copy()}>
+        {copied ? "Copied" : "Copy"}
+      </Btn>
+      <span className="ml-auto text-xs tabular-nums text-text-dim">
+        Expires in {formatCountdown(remainingSecs)}
+      </span>
+      <Btn size="sm" disabled={busy} onClick={onClose}>
+        Close
+      </Btn>
     </div>
+  );
+}
+
+/** A long value shown mono and truncated, full text on hover, with Copy. */
+function CopyValue({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <>
+      <span className="min-w-0 flex-1 select-all truncate font-mono text-xs text-text" title={value}>
+        {value}
+      </span>
+      <Btn
+        size="sm"
+        variant="ghost"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch {
+            /* clipboard blocked; the value is selectable */
+          }
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </Btn>
+    </>
   );
 }
 
@@ -285,63 +342,4 @@ function formatCountdown(secs: number): string {
   const m = Math.floor(secs / 60);
   const s = secs % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
-
-function PolicyToggle({
-  label,
-  help,
-  checked,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  help: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="min-w-0 flex-1">
-        <div className="text-sm">{label}</div>
-        <div className="text-[11px] text-text-dim">{help}</div>
-      </div>
-      <Toggle checked={checked} disabled={disabled} onChange={onChange} />
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  disabled,
-  onChange,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  const ref = useRef<HTMLButtonElement>(null);
-  return (
-    <button
-      ref={ref}
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors disabled:opacity-50",
-        checked
-          ? "bg-accent border-accent"
-          : "bg-bg-subtle border-border hover:border-text-dim"
-      )}
-    >
-      <span
-        className={cn(
-          "absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-elev-1 transition-transform",
-          checked ? "translate-x-4" : "translate-x-0"
-        )}
-      />
-    </button>
-  );
 }
