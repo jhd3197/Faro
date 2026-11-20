@@ -12,8 +12,6 @@ import { FileUiBridge } from "./components/FileUiBridge";
 import { TerminalDock } from "./components/Terminal";
 import { TransferQueue } from "./components/TransferQueue";
 import { ResizablePanel } from "./components/ResizablePanel";
-import { CliUpdatePrompt } from "./components/CliUpdatePrompt";
-import { UpdatePrompt } from "./components/UpdatePrompt";
 import { Settings } from "./components/Settings";
 import { HostKeyModal } from "./components/HostKeyModal";
 import { AuthPromptModal } from "./components/AuthPromptModal";
@@ -286,8 +284,6 @@ export default function App() {
           <NativeFileDrop />
           <UploadReports />
           <TransferQueue containerRef={columnRef} />
-          <UpdatePrompt />
-          <CliUpdatePrompt />
           {!zen && <TipStrip />}
           {!zen && <StatusBar
             terminalOpen={terminalOpen && supportsTerminal}
@@ -742,9 +738,10 @@ function PillButton({
       {...rest}
       onClick={onClick}
       disabled={disabled}
-      title={title}
+      title={title ?? (typeof children === "string" ? children : undefined)}
+      aria-label={typeof children === "string" ? children : undefined}
       className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-0.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+        "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
         active
           ? "bg-accent-soft text-accent"
           : "text-text-muted hover:bg-bg-hover hover:text-text",
@@ -752,7 +749,8 @@ function PillButton({
       )}
     >
       {icon}
-      {children}
+      {/* A narrow window keeps the icons; the label is in the tooltip. */}
+      {children !== undefined && <span className="max-[960px]:hidden">{children}</span>}
       {badge !== undefined && (
         <span
           className={cn(

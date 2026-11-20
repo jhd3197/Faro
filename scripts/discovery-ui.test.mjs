@@ -178,13 +178,14 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-tip]'));
   await page.evaluate(() => window.__demo.useTips.getState().reset());
 
-  // 7. Update bar: an unmarked release body falls back to the full-notes link.
+  // 7. Update chip: an unmarked release body falls back to the full-notes link.
   await page.evaluate(async () => {
     window.__mockUpdate = { version: '1.4.0', body: '## Faro v1.4.0\n\n### Desktop app\n| File | Size |\n> SmartScreen: click Run anyway' };
     await window.__demo.useUpdater.getState().check(false);
   });
-  await page.waitForSelector('button[aria-expanded]');
+  await page.waitForSelector('[data-update-chip]');
   await page.evaluate(() => { const store = window.__demo.useToasts.getState(); store.toasts.forEach(t => store.dismiss(t.id)); });
+  await page.click('[data-update-chip]');
   await click("What's new");
   await page.waitForSelector('[aria-label="Update release notes"]');
   const updateNotes = await page.$eval('[aria-label="Update release notes"]', e => e.textContent);

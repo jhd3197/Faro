@@ -43,6 +43,7 @@ import { useResolvedCommands } from "@/lib/keybindings";
 import { formatCombo } from "@/lib/shortcuts";
 import { cn } from "@/lib/cn";
 import { openExternal } from "@/lib/openExternal";
+import { UpdateChip } from "./UpdateChip";
 import { DISCORD_URL, REPO_URL, issueUrl, showLogFile } from "@/lib/feedback";
 
 const APP_VERSION = "v1.4";
@@ -305,6 +306,7 @@ export function TitleBar() {
 
       {/* Light/dark now lives in Settings → Appearance (Mode); the View menu
           item + Ctrl+Shift+T still toggle it for quick access. */}
+      <UpdateChip />
       <IconButton onClick={() => openDialog("settings")} title="Settings">
         <SettingsIcon size={13} />
       </IconButton>

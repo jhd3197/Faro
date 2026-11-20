@@ -54,7 +54,7 @@ export function AboutSettings() {
 
 /// In-app updater (Plan 16 Phase 1/2). Manual "Check for updates", the current
 /// status, and the download → restart flow. The launch check + the prompt bar
-/// live in UpdatePrompt; this is the on-demand surface.
+/// live in the title bar UpdateChip; this is the on-demand surface.
 function UpdaterRows() {
   const { status, version, downloaded, total, error, errorDetail, releaseUrl,
     notes, lastChecked, retryAction, check, download, restart, retry } = useUpdater();
