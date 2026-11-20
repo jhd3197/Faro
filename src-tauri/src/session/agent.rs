@@ -231,6 +231,7 @@ impl AgentSession {
                 agent_relay: None,
                 notes: None,
                 credential_ref: None,
+                identity_agent: None,
                 group: None,
                 sort_order: None,
                 icon: None,

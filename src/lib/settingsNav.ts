@@ -9,6 +9,7 @@ export const SETTINGS_SECTIONS = [
   { id: "terminal", label: "Terminal", keywords: "font scrollback shell suggestions" },
   { id: "keyboard", label: "Keyboard", keywords: "shortcuts keybindings hotkeys remap" },
   { id: "connections", label: "Connections", keywords: "port password keychain" },
+  { id: "passwordManagers", label: "Password managers", keywords: "1password bitwarden vault op bw ssh agent master password unlock" },
   { id: "remoteControl", label: "Remote control", keywords: "remote control agent host pairing faro agent" },
   { id: "sync", label: "Folder Sync", keywords: "folder sync mirror watch pair" },
   { id: "bridge", label: "Agent Bridge", keywords: "agent bridge approval policy" },
@@ -30,6 +31,7 @@ export const SETTINGS_FOCUS = {
   keyboardSearch: "settings-keyboard-search",
   themeMode: "settings-theme-mode",
   transferConcurrency: "settings-transfer-concurrency",
+  bitwardenPassword: "settings-bitwarden-password",
 } as const;
 
 export interface SettingsTarget {
@@ -67,6 +69,7 @@ export const SETTINGS_ENTRY_POINTS = {
   pairingRemoteControl: { section: "remoteControl", focus: SETTINGS_FOCUS.showPairingCode },
   themeMenu: { section: "appearance", focus: SETTINGS_FOCUS.themeMode },
   transferPanel: { section: "transfers", focus: SETTINGS_FOCUS.transferConcurrency },
+  vaultLocked: { section: "passwordManagers", focus: SETTINGS_FOCUS.bitwardenPassword },
 } as const satisfies Record<string, SettingsTarget>;
 
 export type SettingsEntryPointId = keyof typeof SETTINGS_ENTRY_POINTS;

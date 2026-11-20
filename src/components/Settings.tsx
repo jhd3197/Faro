@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Cloud, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard, HardDrive, RotateCcw } from "lucide-react";
+import { X, Palette, ArrowDownUp, FolderTree, TerminalSquare, Cloud, Plug, Radio, Ban, Check, Info, MonitorSmartphone, FolderSync, ShieldAlert, Loader2, Keyboard, HardDrive, RotateCcw, KeyRound } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { ACCENTS } from "@/lib/accent";
 import type { UiLanguage } from "@/lib/i18n";
@@ -39,6 +39,7 @@ import { CloudflareSettings } from "./CloudflareSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
 import { Dropdown } from "./ui/Dropdown";
 import { AboutSettings } from "./AboutSettings";
+import { PasswordManagerSettings } from "./PasswordManagerSettings";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
 import {
@@ -58,6 +59,7 @@ const SECTION_ICONS: Record<SettingsSectionId, React.ReactNode> = {
   terminal: <TerminalSquare size={14} />,
   keyboard: <Keyboard size={14} />,
   connections: <Plug size={14} />,
+  passwordManagers: <KeyRound size={14} />,
   remoteControl: <MonitorSmartphone size={14} />,
   sync: <FolderSync size={14} />,
   bridge: <Radio size={14} />,
@@ -675,6 +677,9 @@ export function Settings({ onClose }: Props) {
           </>
         );
 
+      case "passwordManagers":
+        return <PasswordManagerSettings />;
+
       case "remoteControl":
         return <RemoteControlSettings />;
 
@@ -751,7 +756,7 @@ export function Settings({ onClose }: Props) {
         className="anim-modal flex h-[34rem] max-h-[88vh] w-[52rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-bg-panel shadow-elev-3"
       >
         {/* Left navigation — macOS / FileZilla-style section list. */}
-        <nav className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-border bg-bg-subtle/50 p-2">
+        <nav className="flex w-48 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-bg-subtle/50 p-2">
           <div
             id={titleId}
             className="px-2 pb-2 pt-1 text-[15px] font-semibold tracking-tight"

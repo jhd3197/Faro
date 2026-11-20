@@ -478,6 +478,7 @@ pub async fn dropbox_authorize(
         agent_relay: None,
         notes: None,
         credential_ref: None,
+        identity_agent: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -541,6 +542,7 @@ pub async fn onedrive_authorize(
         agent_relay: None,
         notes: None,
         credential_ref: None,
+        identity_agent: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -609,6 +611,7 @@ pub async fn dynamics_authorize(
         agent_relay: None,
         notes: None,
         credential_ref: None,
+        identity_agent: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -667,6 +670,7 @@ pub async fn gdrive_authorize(
         agent_relay: None,
         notes: None,
         credential_ref: None,
+        identity_agent: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -725,6 +729,7 @@ pub async fn box_authorize(
         agent_relay: None,
         notes: None,
         credential_ref: None,
+        identity_agent: None,
         group: None,
         sort_order: None,
         icon: None,
@@ -2925,7 +2930,37 @@ pub fn group_gateways(state: State<'_, AppState>) -> Result<std::collections::BT
 pub async fn set_group_gateway(group: String, gateway: Option<String>, state: State<'_, AppState>) -> Result<(), String> { state.profiles.set_group_gateway(group, gateway).await.map_err(err) }
 
 #[tauri::command]
-pub fn credential_providers() -> Result<Vec<String>, String> { Ok(crate::credential_refs::providers().map_err(err)?.into_keys().collect()) }
+pub fn ssh_agents() -> Vec<crate::ssh_agents::AgentInfo> { crate::ssh_agents::list() }
+
+#[tauri::command]
+pub fn credential_providers() -> Result<Vec<String>, String> {
+    // The built-in managers first; a configured adapter can't reuse their ids.
+    let mut ids: Vec<String> = [crate::password_managers::ONEPASSWORD, crate::password_managers::BITWARDEN].map(String::from).into();
+    ids.extend(crate::credential_refs::providers().map_err(err)?.into_keys());
+    Ok(ids)
+}
+
+#[tauri::command]
+pub async fn password_managers_status() -> Vec<crate::password_managers::PmStatus> { crate::password_managers::status().await }
+#[tauri::command]
+pub async fn password_manager_unlock(provider: String, password: String) -> Result<(), String> {
+    crate::password_managers::unlock(&provider, password).await.map_err(err)
+}
+#[tauri::command]
+pub async fn password_manager_lock(provider: String) -> Result<(), String> { crate::password_managers::lock(&provider).await.map_err(err) }
+#[tauri::command]
+pub async fn password_manager_items(provider: String, query: String) -> Result<Vec<crate::password_managers::PmItem>, String> {
+    crate::password_managers::items(&provider, &query).await.map_err(err)
+}
+#[tauri::command]
+pub async fn password_manager_fields(provider: String, item_id: String) -> Result<Vec<crate::password_managers::PmField>, String> {
+    crate::password_managers::fields(&provider, &item_id).await.map_err(err)
+}
+/// Resolve a reference and throw the value away: the editor's Test button.
+#[tauri::command]
+pub async fn credential_ref_test(reference: crate::credential_refs::CredentialRef) -> Result<(), String> {
+    crate::credential_refs::resolve(&reference).await.map(|_| ()).map_err(err)
+}
 
 #[tauri::command]
 pub async fn sync_recovery_purge(session_id: String, root: String, local: bool, staging: bool, days: u32, entries: Vec<crate::sync::recovery::RecoveryEntry>, state: State<'_, AppState>) -> Result<usize, String> {

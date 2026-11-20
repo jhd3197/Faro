@@ -14,6 +14,56 @@ export type AuthMethod =
   // `keyRef`; it never crosses IPC. Not user-selectable in the editor.
   | { kind: "keyref"; keyRef: string };
 
+// ---- Password managers (Plan 33, mirrors src-tauri/src/password_managers.rs) ----
+
+/** A secret held outside Faro. 1Password: item = "op://vault/item/field";
+ *  Bitwarden: item = "<itemId>/<field>". */
+export interface CredentialRef {
+  provider: string;
+  item: string;
+}
+
+export type PasswordManagerId = "1password" | "bitwarden";
+
+export type PmState = "missing" | "signedOut" | "locked" | "ready";
+
+export interface PmStatus {
+  id: PasswordManagerId;
+  name: string;
+  cliPath?: string;
+  state: PmState;
+  account?: string;
+  detail?: string;
+}
+
+export interface PmItem {
+  id: string;
+  title: string;
+  subtitle?: string;
+  category: string;
+  vault?: string;
+  url?: string;
+  username?: string;
+}
+
+export type PmFieldKind = "password" | "username" | "otp" | "text" | "note";
+
+export interface PmField {
+  label: string;
+  reference: string;
+  kind: PmFieldKind;
+  concealed: boolean;
+}
+
+export type SshAgentId = "system" | "1password" | "bitwarden";
+
+export interface AgentInfo {
+  id: SshAgentId;
+  label: string;
+  path: string;
+  available: boolean;
+}
+
 // ---- In-app SSH key generation (mirrors src-tauri/src/keys.rs) ----
 
 export type SshKeyType = "ed25519" | "rsa";
@@ -94,7 +144,10 @@ export interface ConnectionProfile {
   // key (base64). Present === paired; absent === still needs a pairing code.
   agentKey?: string;
   notes?: string;
-  credentialRef?: { provider: string; item: string };
+  credentialRef?: CredentialRef;
+  /** SSH agent for `auth.kind === "agent"`. Absent = automatic; otherwise
+   *  "system", "1password", "bitwarden" or an absolute socket/pipe path. */
+  identityAgent?: string;
   agentRelay?: { address: string; publicKey: string };
   /** Rail folder this server lives in. Absent = ungrouped (top of the rail). */
   group?: string;

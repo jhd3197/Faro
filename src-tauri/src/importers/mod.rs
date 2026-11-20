@@ -58,6 +58,9 @@ pub struct ProfilePreview {
     /// Log in with the SSH agent (OpenSSH `IdentityAgent`, no `IdentityFile`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent: bool,
+    /// Which agent (`ssh_agents`), from OpenSSH `IdentityAgent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_agent: Option<String>,
     /// Log in with a Cloudflare short-lived certificate (cloudflared's
     /// `%h-cf_key` behind `cloudflared access ssh`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -141,6 +144,7 @@ impl ProfilePreview {
             jump_preview_id: None,
             jump_name: None,
             agent: false,
+            identity_agent: None,
             cloudflare_cert: false,
             profile: None,
             key_material: None,
@@ -198,6 +202,7 @@ impl ProfilePreview {
             agent_relay: None,
             notes: None,
             credential_ref: None,
+            identity_agent: self.identity_agent,
             group: None,
             sort_order: None,
             icon: None,

@@ -126,6 +126,12 @@ import type {
   SearchHitBatch,
   BackupSummary,
   ProxyConfig,
+  AgentInfo,
+  CredentialRef,
+  PasswordManagerId,
+  PmField,
+  PmItem,
+  PmStatus,
 } from "./types";
 
 // Typed wrappers around the Tauri command surface. The string names must match
@@ -152,6 +158,21 @@ export const ipc = {
 
   /** Persist a manual rail order: every profile id, in display order. */
   credentialProviders: () => invoke<string[]>("credential_providers"),
+
+  // ---- Password managers (Plan 33). No command returns a secret value. ----
+  passwordManagersStatus: () => invoke<PmStatus[]>("password_managers_status"),
+  passwordManagerUnlock: (provider: PasswordManagerId, password: string) =>
+    invoke<void>("password_manager_unlock", { provider, password }),
+  passwordManagerLock: (provider: PasswordManagerId) =>
+    invoke<void>("password_manager_lock", { provider }),
+  passwordManagerItems: (provider: PasswordManagerId, query: string) =>
+    invoke<PmItem[]>("password_manager_items", { provider, query }),
+  passwordManagerFields: (provider: PasswordManagerId, itemId: string) =>
+    invoke<PmField[]>("password_manager_fields", { provider, itemId }),
+  /** Resolves the reference and discards the value: OK or a plain error. */
+  credentialRefTest: (reference: CredentialRef) =>
+    invoke<void>("credential_ref_test", { reference }),
+  sshAgents: () => invoke<AgentInfo[]>("ssh_agents"),
   groupGateways: () => invoke<Record<string, string>>("group_gateways"),
   setGroupGateway: (group: string, gateway: string | null) => invoke<void>("set_group_gateway", { group, gateway }),
   organizeProfiles: (changes: import("./types").ProfileOrganization[], expected?: import("./types").ProfileOrganization[]) => invoke<import("./types").ProfileOrganization[]>("organize_profiles", { changes, expected }),
