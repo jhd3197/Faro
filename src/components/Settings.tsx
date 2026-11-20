@@ -702,35 +702,47 @@ export function Settings({ onClose }: Props) {
 
       case "bridge":
         return (
-          <>
-            <CheckRow
-              label="Allow all"
-              keywords="no prompts approve everything"
-              help="Agents run every request on enabled sessions without asking: commands, reads and transfers."
-              checked={policy.allowAll}
-              onChange={(v) => setPolicy({ ...policy, allowAll: v })}
-            />
+          <Group
+            title="When an agent asks"
+            help="Applies to every agent-enabled session. Same setting as the Agent Bridge panel."
+          >
+            <Row
+              label="Approval"
+              keywords="allow all no prompts approve everything ask"
+              help="Ask: each request waits for you. Allow all: agents run commands, reads and transfers without asking."
+            >
+              <Segmented<"ask" | "all">
+                label="Approval"
+                value={policy.allowAll ? "all" : "ask"}
+                onChange={(v) => setPolicy({ ...policy, allowAll: v === "all" })}
+                options={[
+                  { value: "ask", label: "Ask" },
+                  { value: "all", label: "Allow all" },
+                ]}
+              />
+            </Row>
             <div data-settings-dependent={policy.allowAll ? "off" : "on"} aria-disabled={policy.allowAll}>
               <CheckRow
-                label="Auto-approve reads"
-                keywords="read-only list search"
-                help="Listing, reading and searching run without asking. Downloads and uploads still ask."
+                group="Don't ask for"
+                label="Reads"
+                keywords="auto-approve read-only list search"
+                help="Listing, reading and searching. Downloads and uploads still ask."
                 checked={policy.allowAll || policy.autoRead}
                 disabled={policy.allowAll}
                 disabledReason="Allow all already approves these."
                 onChange={(v) => setPolicy({ ...policy, autoRead: v })}
               />
               <CheckRow
-                label="Auto-approve safe commands"
-                keywords="shell ls cat grep"
-                help="Read-only commands like ls, cat, df and grep run without asking. Best effort."
+                label="Safe commands"
+                keywords="auto-approve shell ls cat grep"
+                help="Read-only commands like ls, cat, df and grep. Best effort."
                 checked={policy.allowAll || policy.autoSafeExec}
                 disabled={policy.allowAll}
                 disabledReason="Allow all already approves these."
                 onChange={(v) => setPolicy({ ...policy, autoSafeExec: v })}
               />
             </div>
-          </>
+          </Group>
         );
 
       case "keyboard":
@@ -907,7 +919,7 @@ const SECTION_HELP: Partial<Record<SettingsSectionId, string>> = {
   passwordManagers: "Fill connection passwords and keys from 1Password or Bitwarden instead of saving them in Faro.",
   cloudflare: "Reach servers behind Cloudflare Access. Faro runs cloudflared for you.",
   remoteControl: "Let another Faro on your network browse, transfer and (if you allow it) run commands on this computer.",
-  bridge: "What connected AI agents may do without asking. Same setting as the Agent Bridge panel; applies to every agent-enabled session.",
+  bridge: "What connected AI agents may do without asking.",
   sync: "Folders kept in step with a remote folder while Faro runs.",
   cli: "faro-cli drives Faro from a terminal or script.",
   backup: "One password-protected file with your profiles, saved secrets, settings and sync pairs.",
