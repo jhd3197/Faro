@@ -470,6 +470,7 @@ const ZH: Record<string, string> = {
   "Report a bug": "报告错误",
   "Suggest a feature": "建议新功能",
   "Join the Discord": "加入 Discord",
+  "Show log file": "显示日志文件",
   Connection: "连接",
   Snippets: "代码片段",
   "Theme: ": "主题：",

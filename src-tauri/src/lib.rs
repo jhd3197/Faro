@@ -11,6 +11,7 @@ use tauri::Manager;
 // crate, so they need to be `pub` rather than `mod`. None of them expose
 // secrets directly — credentials live in profiles::ConnectionProfile, which
 // the CLI deliberately redacts in `profiles show`.
+pub mod applog;
 pub mod backup;
 pub mod diagnostics;
 pub mod credential_refs;
@@ -166,12 +167,19 @@ fn saved_ui_zoom(db: &db::Db) -> Option<f64> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "faro_lib=info,warn".into()),
-        )
-        .init();
+    // Console as before, plus the local crash log (applog) once setup opens it.
+    {
+        use tracing_subscriber::prelude::*;
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "faro_lib=info,frontend=info,warn".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(applog::FileWriter))
+            .init();
+    }
+    applog::install_panic_hook();
 
     tauri::Builder::default()
         // single-instance MUST be the first plugin: on Windows/Linux a
@@ -192,6 +200,15 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Local crash log: <app data>/logs/faro.log (+ two older sessions).
+            match app.path().app_data_dir() {
+                Ok(dir) => match applog::open(&dir) {
+                    Ok(path) => tracing::info!("logging to {}", path.display()),
+                    Err(e) => tracing::warn!("couldn't open the log file: {e}"),
+                },
+                Err(e) => tracing::warn!("no app data dir for the log file: {e}"),
+            }
 
             // A Cloudflare Access sign-in opened by a silent reconnect (sync,
             // Agent Bridge, a long transfer) still reaches the UI.
@@ -647,6 +664,8 @@ pub fn run() {
             commands::create_directory,
             commands::chmod_path,
             commands::reveal_local_path,
+            applog::app_log_path,
+            applog::app_log_write,
             commands::duplicate_path,
             commands::copy_path,
             commands::start_archive_download,

@@ -4,6 +4,9 @@
 // secrets: only the app version, OS and WebView.
 import { getVersion } from "@tauri-apps/api/app";
 import { useSettings } from "@/stores/settingsStore";
+import { ipc } from "@/lib/ipc";
+import { toast } from "@/stores/toastStore";
+import { toastError } from "@/lib/errors";
 
 export const REPO_URL = "https://github.com/jhd3197/faro";
 export const DISCORD_URL = "https://discord.gg/ZKk6tkCQfG";
@@ -69,4 +72,18 @@ export async function issueUrl(kind: FeedbackKind): Promise<string> {
   const body = `${t.body}---\n<details><summary>System info</summary>\n\n\`\`\`\n${await systemInfo()}\n\`\`\`\n</details>\n`;
   const q = new URLSearchParams({ labels: t.labels, body });
   return `${REPO_URL}/issues/new?${q.toString()}`;
+}
+
+/** Reveal the local crash log in the file manager. */
+export async function showLogFile(): Promise<void> {
+  try {
+    const path = await ipc.appLogPath();
+    if (!path) {
+      toast.warning("No log file yet", "Faro couldn't open its log file this session.");
+      return;
+    }
+    await ipc.revealLocalPath(path);
+  } catch (e) {
+    toastError(e, "Couldn't show the log file");
+  }
 }

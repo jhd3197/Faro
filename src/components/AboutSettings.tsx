@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { openExternal } from "@/lib/openExternal";
-import { DISCORD_URL, issueUrl, systemInfo } from "@/lib/feedback";
+import { DISCORD_URL, issueUrl, showLogFile, systemInfo } from "@/lib/feedback";
 import { useSettings } from "@/stores/settingsStore";
 import { useLayout } from "@/stores/layoutStore";
 import { useUpdater } from "@/stores/updaterStore";
@@ -225,6 +225,11 @@ function FeedbackGroup() {
       <Row label="An idea" keywords="feature request suggestion enhancement feedback">
         <Btn size="sm" data-feedback="idea" onClick={() => void issueUrl("idea").then(openExternal)}>
           Suggest a feature
+        </Btn>
+      </Row>
+      <Row label="Log file" keywords="log crash logs diagnostics faro.log" help="Faro writes errors and crashes to a local file, keeping the last three sessions. Nothing is uploaded. Attach it to a bug report if it helps; check it first, it can name your servers and paths.">
+        <Btn size="sm" data-feedback="log" onClick={() => void showLogFile()}>
+          Show log file
         </Btn>
       </Row>
       <Row label="Community" keywords="discord chat help support">

@@ -30,6 +30,7 @@ import {
   LogOut,
   Bug,
   Lightbulb,
+  FileText,
   MessageCircle,
   Palette,
 } from "lucide-react";
@@ -42,7 +43,7 @@ import { useResolvedCommands } from "@/lib/keybindings";
 import { formatCombo } from "@/lib/shortcuts";
 import { cn } from "@/lib/cn";
 import { openExternal } from "@/lib/openExternal";
-import { DISCORD_URL, REPO_URL, issueUrl } from "@/lib/feedback";
+import { DISCORD_URL, REPO_URL, issueUrl, showLogFile } from "@/lib/feedback";
 
 const APP_VERSION = "v1.4";
 
@@ -247,6 +248,11 @@ export function TitleBar() {
           icon: <Lightbulb size={11} />,
           onClick: () => void issueUrl("idea").then(openExternal),
           rightIcon: <ExternalLink size={9} />,
+        },
+        {
+          label: "Show log file",
+          icon: <FileText size={11} />,
+          onClick: () => void showLogFile(),
         },
         {
           label: "Join the Discord",
