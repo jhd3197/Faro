@@ -13,6 +13,8 @@ interface PasswordManagersState {
   refreshAgents: () => Promise<void>;
   /** Rejects with the backend's plain message. */
   unlock: (provider: PasswordManagerId, password: string) => Promise<void>;
+  /** 1Password without the app: add the account to the CLI and sign in. */
+  addOpAccount: (address: string, email: string, secretKey: string, password: string) => Promise<void>;
   lock: (provider: PasswordManagerId) => Promise<void>;
 }
 
@@ -34,6 +36,14 @@ export const usePasswordManagers = create<PasswordManagersState>((set, get) => (
       set({ agents: await ipc.sshAgents() });
     } catch {
       /* no agent info: the select just shows no found/not running */
+    }
+  },
+
+  addOpAccount: async (address, email, secretKey, password) => {
+    try {
+      await ipc.passwordManagerOpAddAccount(address, email, secretKey, password);
+    } finally {
+      await get().refresh();
     }
   },
 

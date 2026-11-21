@@ -90,6 +90,7 @@ function ManagerSection({
   const cli = useManagedTool(toolOps(toolId), cliName, toolId, () => void refresh());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [usePassword, setUsePassword] = useState(false);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -120,9 +121,14 @@ function ManagerSection({
             <span data-pm-state-label className="mr-1.5">
               <Status tone={STATE_TONE[pm.state]}>{STATE_LABEL[pm.state]}</Status>
             </span>
-            {isOp && (pm.state === "locked" || pm.state === "signedOut") && (
-              <Btn size="sm" busy={busy} onClick={() => void run(() => unlock("1password", ""))}>
+            {isOp && pm.signIn === "app" && (
+              <Btn size="sm" data-pm-op-app busy={busy} onClick={() => void run(() => unlock("1password", ""))}>
                 Sign in
+              </Btn>
+            )}
+            {isOp && pm.state === "ready" && (
+              <Btn size="sm" data-pm-op-signout disabled={busy} onClick={() => void run(() => lock("1password"))}>
+                Sign out
               </Btn>
             )}
             {!isOp && pm.state === "ready" && (
@@ -159,6 +165,19 @@ function ManagerSection({
         </Row>
       )}
       {bwSignedOut && <BwLogin cliPath={pm.cliPath} />}
+      {isOp && pm.signIn === "add" && <OpAddAccountForm />}
+      {isOp && (pm.signIn === "password" || (pm.signIn === "app" && usePassword)) && (
+        <Row label="Password" help="Your 1Password account password. Faro passes it to the 1Password CLI once and keeps only the session it returns, in memory.">
+          <div className="w-full max-w-sm">
+            <UnlockForm provider="1password" />
+          </div>
+        </Row>
+      )}
+      {isOp && pm.signIn === "app" && !usePassword && (
+        <button type="button" data-pm-op-use-password className="self-start text-xs text-accent hover:underline" onClick={() => setUsePassword(true)}>
+          Sign in with your account password instead
+        </button>
+      )}
       {!isOp && pm.state === "locked" && (
         <Row label="Master password">
           <div className="w-full max-w-sm">
@@ -182,9 +201,13 @@ function ManagerSection({
       {isOp && (
         <Advanced title="How to connect" open={pm.state !== "ready"}>
           <ol className="list-decimal space-y-0.5 pl-9 text-xs leading-relaxed text-text-muted">
-            <li>Install the 1Password CLI above, or use your own.</li>
-            <li>In 1Password, Settings › Developer: turn on Integrate with 1Password CLI.</li>
-            <li>For SSH keys, turn on Use the SSH agent on the same page.</li>
+            <li>Faro installs the 1Password CLI for you (above), or use your own.</li>
+            <li>Sign in above with your 1Password account. No 1Password app needed.</li>
+            <li>
+              Or, with the 1Password app on this computer: Settings › Developer › Integrate with 1Password CLI, then Sign
+              in approves with Windows Hello or Touch ID.
+            </li>
+            <li>For SSH keys, turn on Use the SSH agent on the same page of the app.</li>
           </ol>
         </Advanced>
       )}
@@ -243,7 +266,18 @@ function AgentRow({ agent }: { agent?: AgentInfo }) {
 
 /** Bitwarden master-password field. The password goes to the backend once
  *  and is cleared from the field right after, whatever the result. */
-export function UnlockForm({ focusId, onUnlocked, autoFocus }: { focusId?: string; onUnlocked?: () => void; autoFocus?: boolean }) {
+export function UnlockForm({
+  focusId,
+  onUnlocked,
+  autoFocus,
+  provider = "bitwarden",
+}: {
+  focusId?: string;
+  onUnlocked?: () => void;
+  autoFocus?: boolean;
+  provider?: "bitwarden" | "1password";
+}) {
+  const isOp = provider === "1password";
   const unlock = usePasswordManagers((s) => s.unlock);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -255,12 +289,12 @@ export function UnlockForm({ focusId, onUnlocked, autoFocus }: { focusId?: strin
     setPassword("");
     setError("");
     if (!pw) {
-      setError("Enter your master password.");
+      setError(isOp ? "Enter your 1Password account password." : "Enter your master password.");
       return;
     }
     setBusy(true);
     try {
-      await unlock("bitwarden", pw);
+      await unlock(provider, pw);
       onUnlocked?.();
     } catch (e) {
       setError(messageOf(e));
@@ -274,8 +308,8 @@ export function UnlockForm({ focusId, onUnlocked, autoFocus }: { focusId?: strin
       <div className="flex items-center gap-2">
         <TextInput
           type="password"
-          aria-label="Bitwarden master password"
-          placeholder="Master password"
+          aria-label={isOp ? "1Password account password" : "Bitwarden master password"}
+          placeholder={isOp ? "Account password" : "Master password"}
           autoComplete="off"
           autoFocus={autoFocus}
           value={password}
@@ -290,10 +324,77 @@ export function UnlockForm({ focusId, onUnlocked, autoFocus }: { focusId?: strin
           className="flex-1"
         />
         <Btn variant="primary" data-pm-unlock-button busy={busy} onClick={() => void submit()}>
-          Unlock
+          {isOp ? "Sign in" : "Unlock"}
         </Btn>
       </div>
       {error && <p role="alert" data-pm-unlock-error className="mt-1.5 text-xs text-danger">{error}</p>}
+    </div>
+  );
+}
+
+/** 1Password with no account in the CLI yet: the four things 1Password asks
+ *  for on a new device. Faro hands them to `op account add` (password on
+ *  stdin, Secret Key in that one process's environment) and keeps only the
+ *  session. The password and Secret Key fields clear right after. */
+function OpAddAccountForm() {
+  const addOpAccount = usePasswordManagers((s) => s.addOpAccount);
+  const [address, setAddress] = useState("my.1password.com");
+  const [email, setEmail] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    if (busy) return;
+    const [key, pw] = [secretKey, password];
+    setError("");
+    if (!email.trim() || !key.trim() || !pw) {
+      setError("Fill in your email, Secret Key and password.");
+      return;
+    }
+    setPassword("");
+    setBusy(true);
+    try {
+      await addOpAccount(address, email, key, pw);
+      setSecretKey("");
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onEnter = (e: React.KeyboardEvent) => {
+    if (e.key !== "Enter" || isComposing(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void submit();
+  };
+
+  return (
+    <div data-pm-op-add className="flex flex-col gap-0.5">
+      <Row label="Sign-in address" help="Where you sign in to 1Password on the web: my.1password.com, or your team's address.">
+        <TextInput aria-label="1Password sign-in address" value={address} disabled={busy} onChange={(e) => setAddress(e.target.value)} onKeyDown={onEnter} className="w-full max-w-sm" />
+      </Row>
+      <Row label="Email">
+        <TextInput aria-label="1Password email" type="email" autoComplete="off" value={email} disabled={busy} onChange={(e) => setEmail(e.target.value)} onKeyDown={onEnter} className="w-full max-w-sm" />
+      </Row>
+      <Row label="Secret Key" help="Starts with A3-. It's in your Emergency Kit, or in the 1Password app under your account settings.">
+        <TextInput aria-label="1Password Secret Key" type="password" autoComplete="off" placeholder="A3-XXXXXX-…" value={secretKey} disabled={busy} onChange={(e) => setSecretKey(e.target.value)} onKeyDown={onEnter} className="w-full max-w-sm" />
+      </Row>
+      <Row label="Password">
+        <div className="flex w-full max-w-sm items-center gap-2">
+          <TextInput aria-label="1Password account password" type="password" autoComplete="off" value={password} disabled={busy} onChange={(e) => setPassword(e.target.value)} onKeyDown={onEnter} className="flex-1" />
+          <Btn variant="primary" data-pm-op-add-button busy={busy} onClick={() => void submit()}>
+            Sign in
+          </Btn>
+        </div>
+      </Row>
+      {error && (
+        <p role="alert" data-pm-op-add-error className="text-xs text-danger">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

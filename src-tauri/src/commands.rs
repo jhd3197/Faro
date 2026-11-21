@@ -2956,6 +2956,11 @@ pub async fn password_managers_status() -> Vec<crate::password_managers::PmStatu
 pub async fn password_manager_unlock(provider: String, password: String) -> Result<(), String> {
     crate::password_managers::unlock(&provider, password).await.map_err(err)
 }
+/// 1Password without the desktop app: add the account to the CLI and sign in.
+#[tauri::command]
+pub async fn password_manager_op_add_account(address: String, email: String, secret_key: String, password: String) -> Result<(), String> {
+    crate::password_managers::op_add_account(&address, &email, &secret_key, password).await.map_err(err)
+}
 #[tauri::command]
 pub async fn password_manager_lock(provider: String) -> Result<(), String> { crate::password_managers::lock(&provider).await.map_err(err) }
 #[tauri::command]

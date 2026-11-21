@@ -34,6 +34,12 @@ export interface PmStatus {
   state: PmState;
   account?: string;
   detail?: string;
+  /** 1Password: how to sign in from here. `add` = no account in the CLI yet,
+   *  `password` = sign in with the account password, `app` = approve in the
+   *  1Password app. */
+  signIn?: "add" | "password" | "app";
+  /** 1Password: the desktop app is on this computer. */
+  appInstalled?: boolean;
 }
 
 export interface PmItem {

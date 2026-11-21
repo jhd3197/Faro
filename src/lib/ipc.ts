@@ -185,6 +185,9 @@ export const ipc = {
 
   // ---- Password managers (Plan 33). No command returns a secret value. ----
   passwordManagersStatus: () => invoke<PmStatus[]>("password_managers_status"),
+  /** 1Password without the app: add the account to the CLI and sign in. */
+  passwordManagerOpAddAccount: (address: string, email: string, secretKey: string, password: string) =>
+    invoke<void>("password_manager_op_add_account", { address, email, secretKey, password }),
   passwordManagerUnlock: (provider: PasswordManagerId, password: string) =>
     invoke<void>("password_manager_unlock", { provider, password }),
   passwordManagerLock: (provider: PasswordManagerId) =>

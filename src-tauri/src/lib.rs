@@ -503,6 +503,7 @@ pub fn run() {
             commands::ssh_agents,
             commands::password_managers_status,
             commands::password_manager_unlock,
+            commands::password_manager_op_add_account,
             commands::password_manager_lock,
             commands::password_manager_items,
             commands::password_manager_fields,
