@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Download, Plus, ServerOff } from "lucide-react";
 import { useDiscovery } from "@/stores/discoveryStore";
 import { useLayout } from "@/stores/layoutStore";
@@ -15,7 +15,10 @@ const secondary = "inline-flex items-center gap-1.5 rounded-md border border-bor
  *  remote side of the split view; `strip` sits above the single-pane local
  *  listing, which stays usable underneath. */
 export function NoConnections({ variant = "pane" }: { variant?: "pane" | "strip" }) {
-  const found = useDiscovery((s) => s.found);
+  const all = useDiscovery((s) => s.found);
+  // Files and registries hold connections; the CLIs row counts CLIs, which
+  // list connections only when asked (the welcome screen offers them).
+  const found = useMemo(() => all?.filter((f) => f.kind !== "cli") ?? null, [all]);
   useEffect(() => { void useDiscovery.getState().scanImports(); }, []);
   const total = found?.reduce((n, f) => n + f.count, 0) ?? 0;
   const first = found?.[0];

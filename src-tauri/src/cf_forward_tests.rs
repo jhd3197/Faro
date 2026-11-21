@@ -309,6 +309,10 @@ fn hostname_falls_back_to_the_connection() {
         hostname: None,
         service_token_id: None,
         service_token_secret: None,
+        target: None,
+        cli_account: None,
+        region: None,
+        project: None,
     });
     assert_eq!(
         access_hostname(&p, &p.cf_forwards[0]).unwrap(),

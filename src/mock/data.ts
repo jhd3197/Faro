@@ -81,6 +81,8 @@ export let profiles: ConnectionProfile[] = [
     bucket: "media-cdn",
     region: "us-west-2",
     color: "#a78bfa",
+    // Signs in with the AWS CLI's client-a profile (Plan 35).
+    cliAuth: { tool: "aws", account: "client-a" },
   },
   {
     id: "p-cf",

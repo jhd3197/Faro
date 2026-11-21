@@ -4831,6 +4831,44 @@ pub(crate) async fn op_search(
 
 /// Status of a transfer the agent previously started. No gate — the agent owns
 /// the (random) transfer id, and this is local metadata about its own action.
+/// The CLIs Faro uses, for agents (Plan 35). Never a credential: the status
+/// carries labels and states only.
+async fn op_tools_status(app: &AppHandle, check: bool, only: Option<&str>) -> (u16, Value) {
+    let st = app.state::<AppState>();
+    if let Some(id) = only {
+        if crate::managed_tools::spec(id).is_err() {
+            return (400, json!({ "error": format!("Unknown tool: {id}") }));
+        }
+    }
+    let profiles = st.profiles.list().await.unwrap_or_default();
+    let counts = crate::cli_integrations::usage::counts(&profiles);
+    let wanted = crate::cli_integrations::usage::accounts_by_tool(&profiles);
+    let mut out = Vec::new();
+    for id in crate::cli_integrations::specs::all_cli_ids() {
+        if only.is_some_and(|o| o != id) {
+            continue;
+        }
+        let status = if check {
+            st.clis.check(id, &st.tools, &wanted.get(id).cloned().unwrap_or_default()).await
+        } else {
+            st.clis.status(id, &st.tools).await
+        };
+        let Ok(s) = status else { continue };
+        out.push(json!({
+            "id": s.id,
+            "name": s.name,
+            "installed": s.installed,
+            "version": s.version,
+            "state": s.state,
+            "accounts": s.accounts.iter().map(|a| json!({ "id": a.id, "label": a.label, "state": a.state, "default": a.active })).collect::<Vec<_>>(),
+            "detail": s.detail,
+            "checkedAt": s.checked_at,
+            "usedBy": counts.get(id).copied().unwrap_or(0),
+        }));
+    }
+    (200, json!({ "tools": out }))
+}
+
 async fn op_transfer_status(app: &AppHandle, transfer_id: &str) -> (u16, Value) {
     let transfers = app.state::<AppState>().transfers.clone();
     match transfers.snapshot(transfer_id).await {
@@ -5910,6 +5948,18 @@ async fn mcp_tools_list(state: &Arc<BridgeState>) -> Value {
                 }
             },
             {
+                "name": "faro_tools_status",
+                "description": "Which command-line tools Faro uses for the user's connections (aws, gcloud, az, gh, tailscale, doctl, hcloud, render, hs, shopify, cloudflared, 1Password, Bitwarden): installed or not, version, whether the user is signed in (per account), and how many connections depend on each. Use it to explain a failed connect (\"your AWS SSO login for client-a expired\") instead of retrying. Read-only; it never returns a token or password. Signing in again is the user's job: tell them to use Sign in on Faro's CLIs page. By default it reports the last check; check=true runs each installed CLI's own account check first (a few seconds).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "check": { "type": "boolean", "description": "Run each CLI's account check now. Default false (last known state)." },
+                        "tool": { "type": "string", "description": "Only this tool (e.g. \"aws\")." }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "faro_transfer_status",
                 "description": "Check whether a transfer (started via faro_download, faro_upload or faro_upload_dir) has finished. Returns status (queued|transferring|done|skipped|error|canceled), bytes transferred, and any error. Poll this after starting a transfer to confirm success.",
                 "inputSchema": {
@@ -6451,6 +6501,10 @@ async fn mcp_tools_call(app: &AppHandle, state: &Arc<BridgeState>, params: &Valu
             };
             let hash = args.get("hash").and_then(|v| v.as_bool()).unwrap_or(false);
             mcp_wrap(op_dedupe(app, state, session_arg, &path, hash).await)
+        }
+        "faro_tools_status" => {
+            let check = args.get("check").and_then(|v| v.as_bool()).unwrap_or(false);
+            mcp_wrap(op_tools_status(app, check, arg_str(&args, "tool").as_deref()).await)
         }
         "faro_transfer_status" => {
             let Some(transfer_id) = arg_str(&args, "transferId") else {

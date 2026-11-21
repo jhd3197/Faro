@@ -26,7 +26,12 @@ import {
   type AccessStatus,
   type DiagnosticReport,
   type CfForward,
+  type CliAuth,
+  type ManagedToolId,
 } from "@/lib/types";
+import { useClis } from "@/stores/cliStore";
+import { profileTools, stateForUse, isProblem, HOW_LABEL } from "@/lib/cliUsage";
+import { CliIcon, stateTone } from "./CliHub";
 import {
   ShieldOff,
   Cloud,
@@ -209,6 +214,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   const [groupGateways, setGroupGateways] = useState<Record<string, string>>({});
   useEffect(() => { void ipc.groupGateways().then(setGroupGateways).catch(() => {}); }, []);
   const [credentialProvider, setCredentialProvider] = useState(seed?.credentialRef?.provider ?? "");
+  // Sign in with a CLI's login instead of saved keys (Plan 35).
+  const [cliTool, setCliTool] = useState<"" | CliAuth["tool"]>(seed?.cliAuth?.tool ?? "");
+  const [cliAccount, setCliAccount] = useState(seed?.cliAuth?.account ?? "");
   const [credentialItem, setCredentialItem] = useState(seed?.credentialRef?.item ?? "");
   const [credentialProviders, setCredentialProviders] = useState<string[]>([]);
   useEffect(() => { void ipc.credentialProviders().then(setCredentialProviders).catch(() => {}); }, []);
@@ -285,7 +293,15 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
   // "How do you reach this server?" (SFTP). A layout over the same data:
   // `jumpProfile` for a jump host, a Cloudflare `proxyCommand` for Cloudflare.
   const [reach, setReach] = useState<Reach>(() =>
-    seed?.jumpProfile ? "jump" : seed?.proxyCommand?.kind === "cloudflare" ? "cloudflare" : "direct"
+    seed?.jumpProfile
+      ? "jump"
+      : seed?.proxyCommand?.kind === "cloudflare"
+        ? "cloudflare"
+        : seed?.proxyCommand?.kind === "awsSsm"
+          ? "aws"
+          : seed?.proxyCommand?.kind === "gcpIap"
+            ? "gcp"
+            : "direct"
   );
   // Through Cloudflare, the host is an optional detail: absent = the server.
   const sshHost =
@@ -619,7 +635,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             ? dynamicsAccount || undefined
             : undefined,
       notes: notes.trim() || undefined,
-      credentialRef: useCredentialRef ? { provider: credentialProvider, item: credentialItem.trim() } : undefined,
+      credentialRef: useCredentialRef && !cliAuthFor() ? { provider: credentialProvider, item: credentialItem.trim() } : undefined,
+      cliAuth: cliAuthFor(),
+      cliSource: seed?.cliSource,
       identityAgent:
         protocol === "sftp" && authKind === "agent"
           ? agentChoice === "custom"
@@ -640,7 +658,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       ftpMaxConnections: isFtp && ftpMaxConnections !== 2 ? ftpMaxConnections : undefined,
       ftpSegments: isFtp && ftpSegments !== 1 ? ftpSegments : undefined,
       // A jump host brings its own proxy settings.
-      proxy: protocol === "sftp" && (jumpProfile || reach === "cloudflare") ? undefined : buildProxy(),
+      proxy: protocol === "sftp" && (jumpProfile || reach === "cloudflare" || reach === "aws" || reach === "gcp") ? undefined : buildProxy(),
       proxyCommand: buildProxyCommand(),
       cfForwards:
         protocol === "sftp" && reach === "cloudflare" ? cleanForwards(forwards) : undefined,
@@ -649,12 +667,29 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
     };
   };
 
+  /** The CLI sign-in when this kind of connection has one chosen. */
+  function cliAuthFor(): CliAuth | undefined {
+    const tool = cliToolFor(protocol);
+    if (!tool || cliTool !== tool) return undefined;
+    return { tool, account: cliAccount.trim() };
+  }
+
   function buildProxyCommand(): ProxyCommandConfig | undefined {
     // SSH only, and a jump host brings its own way in.
     if (protocol !== "sftp" || jumpProfile) return undefined;
     if (proxyCmd.kind === "command") {
       const command = proxyCmd.command.trim();
       return command ? { kind: "command", command } : undefined;
+    }
+    if (proxyCmd.kind === "awsSsm" || proxyCmd.kind === "gcpIap") {
+      const t = (v: string) => v.trim() || undefined;
+      return {
+        kind: proxyCmd.kind,
+        target: t(proxyCmd.target),
+        cliAccount: t(proxyCmd.cliAccount),
+        region: t(proxyCmd.region),
+        project: proxyCmd.kind === "gcpIap" ? t(proxyCmd.project) : undefined,
+      };
     }
     if (proxyCmd.kind === "cloudflare") {
       const tokenId = proxyCmd.serviceTokenId.trim();
@@ -753,7 +788,11 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
 
   const save = async () => {
     await persistSecrets();
-    await saveProfile(buildProfile());
+    const built = buildProfile();
+    await saveProfile(built);
+    if (built.cliAuth) {
+      await useClis.getState().setAllowed(built.cliAuth.tool, built.cliAuth.account.trim() || "default", true);
+    }
     onClose();
     // Skip when it's already open; connect errors toast from the store.
     if (connectAfterSave && !sessions.some((s) => s.profileId === id)) {
@@ -804,25 +843,41 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
       setProxyCmd({ ...proxyCmd, kind: "cloudflare", hostname: proxyCmd.hostname || host.trim() });
       // Cloudflare identity is the login to have here; keep a chosen one.
       if (authKind === "password" && !password) setAuthKind("cloudflarecert");
+    } else if (r === "aws" || r === "gcp") {
+      setJumpProfile("");
+      setProxyKind("");
+      if (authKind === "cloudflarecert") setAuthKind("password");
+      setProxyCmd({ ...proxyCmd, kind: r === "aws" ? "awsSsm" : "gcpIap" });
     } else {
       if (r === "direct") setJumpProfile("");
       // The Cloudflare login only exists through Cloudflare.
       if (authKind === "cloudflarecert") setAuthKind("password");
-      if (proxyCmd.kind === "cloudflare") setProxyCmd({ ...proxyCmd, kind: "" });
+      if (proxyCmd.kind === "cloudflare" || proxyCmd.kind === "awsSsm" || proxyCmd.kind === "gcpIap") setProxyCmd({ ...proxyCmd, kind: "" });
     }
   };
+  const cliSignInTool = cliToolFor(protocol);
+  const cliSignInField = cliSignInTool ? (
+    <CliSignInField
+      tool={cliSignInTool}
+      chosen={cliTool === cliSignInTool}
+      setChosen={(v) => setCliTool(v ? cliSignInTool : "")}
+      account={cliAccount}
+      setAccount={setCliAccount}
+    />
+  ) : null;
   const cfRoute = protocol === "sftp" && reach === "cloudflare" && proxyCmd.kind === "cloudflare";
   const jumpMissing = protocol === "sftp" && reach === "jump" && !jumpProfile;
   const cfServiceToken = cfRoute && !!proxyCmd.serviceTokenId.trim();
   const cfCertLogin = cfRoute && authKind === "cloudflarecert";
   const cfCertBlocked =
     protocol === "sftp" && authKind === "cloudflarecert" && (!cfRoute || cfServiceToken);
+  const usingCli = !!cliTool && cliToolFor(protocol) === cliTool;
   const canSave = isS3
-    ? !!bucket && !!username && !!password
+    ? !!bucket && (usingCli || (!!username && !!password))
     : isAzure
-      ? !!azureAccount && !!bucket && !!password
+      ? !!azureAccount && !!bucket && (usingCli || !!password)
       : isGcs
-        ? !!bucket && gcsCredOk
+        ? !!bucket && (usingCli || gcsCredOk)
         : isWebdav
           ? !!endpoint && !!password
           : isHttp
@@ -1038,6 +1093,16 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </div>
 
           <div className="flex-1 overflow-y-auto px-5 py-4">
+        {profile && (
+          <CliUsesLine
+            profile={profile}
+            profiles={profiles}
+            onOpen={(tool) => {
+              onClose();
+              useLayout.getState().openClis(tool);
+            }}
+          />
+        )}
         <div className="flex gap-2">
           <Field label="Name" className="flex-1">
             <input
@@ -1064,6 +1129,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             setAccessKey={setUsername}
             secretKey={password}
             setSecretKey={setPassword}
+            cliSignIn={cliSignInField}
+            useCli={!!cliTool}
           />
         ) : isAzure ? (
           <AzureSection
@@ -1075,6 +1142,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             setAccessKey={setPassword}
             endpoint={endpoint}
             setEndpoint={setEndpoint}
+            cliSignIn={cliSignInField}
+            useCli={!!cliTool}
           />
         ) : isGcs ? (
           <GcsSection
@@ -1086,6 +1155,8 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
             setKeyPath={setKeyPath}
             keyJson={password}
             setKeyJson={setPassword}
+            cliSignIn={cliSignInField}
+            useCli={!!cliTool}
           />
         ) : isWebdav ? (
           <WebdavSection
@@ -1226,6 +1297,9 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
                 value={reach}
                 onChange={changeReach}
               />
+            )}
+            {protocol === "sftp" && (reach === "aws" || reach === "gcp") && (
+              <CloudTunnelFields kind={reach} draft={proxyCmd} setDraft={setProxyCmd} host={host} />
             )}
             {protocol === "sftp" && reach === "jump" && (
               <JumpHostField
@@ -1399,7 +1473,7 @@ export function ProfileEditor({ profile, prefill, onClose }: Props) {
           </select>
 
         </Field>}
-        {(authKind === "password" || authKind === "key") && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && (
+        {(authKind === "password" || authKind === "key") && !usingCli && ["sftp", "ftp", "ftps", "s3", "azure", "webdav", "http"].includes(protocol) && (
           <CredentialSourceFields
             provider={credentialProvider}
             setProvider={setCredentialProvider}
@@ -2568,7 +2642,11 @@ function AzureSection({
   setAccessKey,
   endpoint,
   setEndpoint,
+  cliSignIn,
+  useCli,
 }: {
+  cliSignIn?: ReactNode;
+  useCli?: boolean;
   account: string;
   setAccount: (v: string) => void;
   container: string;
@@ -2605,6 +2683,8 @@ function AzureSection({
         </Field>
       </div>
 
+      {cliSignIn}
+      {!useCli && (
       <Field label="Access key">
         <input
           type="password"
@@ -2613,6 +2693,7 @@ function AzureSection({
           className={inputCls}
         />
       </Field>
+      )}
 
       <Field label="Endpoint (optional)">
         <input
@@ -3382,7 +3463,11 @@ function GcsSection({
   setKeyPath,
   keyJson,
   setKeyJson,
+  cliSignIn,
+  useCli,
 }: {
+  cliSignIn?: ReactNode;
+  useCli?: boolean;
   bucket: string;
   setBucket: (v: string) => void;
   keyMode: "file" | "paste";
@@ -3409,6 +3494,9 @@ function GcsSection({
         />
       </Field>
 
+      {cliSignIn}
+      {!useCli && (
+        <>
       <Field group label="Service account key">
         <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-bg-subtle p-1">
           {(["file", "paste"] as const).map((m) => (
@@ -3450,6 +3538,8 @@ function GcsSection({
           />
         </Field>
       )}
+        </>
+      )}
     </>
   );
 }
@@ -3467,7 +3557,11 @@ function S3Section({
   setAccessKey,
   secretKey,
   setSecretKey,
+  cliSignIn,
+  useCli,
 }: {
+  cliSignIn?: ReactNode;
+  useCli?: boolean;
   provider: S3Provider;
   onProviderChange: (p: S3Provider) => void;
   bucket: string;
@@ -3551,6 +3645,9 @@ function S3Section({
         </Field>
       </div>
 
+      {cliSignIn}
+      {!useCli && (
+        <>
       <Field label="Access key ID">
         <input
           value={accessKey}
@@ -3567,6 +3664,8 @@ function S3Section({
           className={inputCls}
         />
       </Field>
+        </>
+      )}
     </>
   );
 }
@@ -3670,6 +3769,10 @@ interface ProxyCmdDraft {
   hostname: string;
   serviceTokenId: string;
   serviceTokenSecret: string;
+  target: string;
+  cliAccount: string;
+  region: string;
+  project: string;
 }
 
 function proxyCmdDraft(c?: ProxyCommandConfig, host?: string): ProxyCmdDraft {
@@ -3680,15 +3783,21 @@ function proxyCmdDraft(c?: ProxyCommandConfig, host?: string): ProxyCmdDraft {
     hostname: c?.hostname || (c?.kind === "cloudflare" ? host ?? "" : ""),
     serviceTokenId: c?.serviceTokenId ?? "",
     serviceTokenSecret: c?.serviceTokenSecret ?? "",
+    target: c?.target ?? "",
+    cliAccount: c?.cliAccount ?? "",
+    region: c?.region ?? "",
+    project: c?.project ?? "",
   };
 }
 
-type Reach = "direct" | "cloudflare" | "jump";
+type Reach = "direct" | "cloudflare" | "jump" | "aws" | "gcp";
 
 const REACH_OPTIONS = [
   { id: "direct", label: "Direct", hint: "SSH port is open to you", Icon: Globe },
   { id: "cloudflare", label: "Cloudflare", hint: "Access protects this server", Icon: Cloud },
   { id: "jump", label: "Jump host", hint: "Via another SSH server", Icon: Link2 },
+  { id: "aws", label: "AWS SSM", hint: "An EC2 instance through AWS Session Manager, no open port 22 (needs the AWS CLI)", Icon: Cloud },
+  { id: "gcp", label: "Google IAP", hint: "A Compute Engine VM through Identity-Aware Proxy, no external address (needs the Google Cloud CLI)", Icon: Cloud },
 ] as const;
 
 function ReachPicker({ value, onChange }: { value: Reach; onChange: (r: Reach) => void }) {
@@ -4400,6 +4509,224 @@ function PasswordInput({
         </button>
       )}
       </div>
+    </div>
+  );
+}
+
+
+/** The CLI that signs in to a connection kind, if any (Plan 35). */
+function cliToolFor(protocol: Protocol): CliAuth["tool"] | undefined {
+  return protocol === "s3" ? "aws" : protocol === "azure" ? "az" : protocol === "gcs" ? "gcloud" : undefined;
+}
+
+const CLI_SIGNIN_LABEL: Record<CliAuth["tool"], { name: string; account: string; keys: string }> = {
+  aws: { name: "AWS CLI login", account: "AWS profile", keys: "Access keys saved here" },
+  az: { name: "Azure CLI login", account: "Subscription", keys: "Account key saved here" },
+  gcloud: { name: "Google Cloud CLI login", account: "gcloud account", keys: "Service account key" },
+};
+
+/// "Sign in with": keys saved in Faro, or the CLI's own login. The account
+/// list comes from the CLIs page; Test fetches a credential and drops it.
+function CliSignInField({
+  tool,
+  chosen,
+  setChosen,
+  account,
+  setAccount,
+}: {
+  tool: CliAuth["tool"];
+  chosen: boolean;
+  setChosen: (v: boolean) => void;
+  account: string;
+  setAccount: (v: string) => void;
+}) {
+  const status = useClis((s) => s.statuses[tool]);
+  const openClis = useLayout((s) => s.openClis);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const labels = CLI_SIGNIN_LABEL[tool];
+  const listId = useId();
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      // Testing from the editor is the person's OK to use this login.
+      await useClis.getState().setAllowed(tool, account.trim() || "default", true);
+      setResult({ ok: true, text: await ipc.cliAuthTest({ tool, account: account.trim() }) });
+    } catch (e) {
+      setResult({ ok: false, text: messageOf(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+  return (
+    <div className="mb-3" data-testid="cli-signin">
+      <Field label="Sign in with">
+        <select
+          aria-label="Sign in with"
+          className={inputCls}
+          value={chosen ? "cli" : "keys"}
+          onChange={(e) => {
+            setChosen(e.target.value === "cli");
+            setResult(null);
+          }}
+        >
+          <option value="keys">{labels.keys}</option>
+          <option value="cli">{labels.name}{status && !status.installed ? " (not installed)" : ""}</option>
+        </select>
+      </Field>
+      {chosen && (
+        <>
+          <div className="flex items-end gap-2">
+            <Field label={labels.account} className="flex-1">
+              <input
+                aria-label={labels.account}
+                value={account}
+                onChange={(e) => {
+                  setAccount(e.target.value);
+                  setResult(null);
+                }}
+                list={listId}
+                placeholder="default"
+                spellCheck={false}
+                className={inputCls}
+              />
+              <datalist id={listId}>
+                {(status?.accounts ?? []).map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                  </option>
+                ))}
+              </datalist>
+            </Field>
+            <button
+              type="button"
+              onClick={() => void test()}
+              disabled={testing}
+              className="mb-3 rounded-md border border-border bg-bg-subtle px-3 py-1.5 text-xs hover:bg-bg-hover disabled:opacity-50"
+            >
+              {testing ? "Testing…" : "Test"}
+            </button>
+          </div>
+          {result && (
+            <p role="status" data-testid="cli-signin-result" className={cn("-mt-1 mb-2 text-[11.5px]", result.ok ? "text-success" : "text-danger")}>
+              {result.text}
+            </p>
+          )}
+          <Hint label="CLI sign-in help">
+            Faro asks the {labels.name.replace(" login", "")} for a short-lived credential each time it connects and keeps it in memory only;
+            nothing is saved in Faro. Sign-ins are managed on the{" "}
+            <button type="button" className="text-accent hover:underline" onClick={() => openClis(tool)}>
+              CLIs page
+            </button>
+            .
+          </Hint>
+        </>
+      )}
+    </div>
+  );
+}
+
+/// AWS SSM / Google IAP: which instance, as whom, where. Faro builds the
+/// command from these; nothing is typed as a command line.
+function CloudTunnelFields({
+  kind,
+  draft,
+  setDraft,
+  host,
+}: {
+  kind: "aws" | "gcp";
+  draft: ProxyCmdDraft;
+  setDraft: (d: ProxyCmdDraft) => void;
+  host: string;
+}) {
+  const tool = kind === "aws" ? "aws" : "gcloud";
+  const status = useClis((s) => s.statuses[tool]);
+  const openClis = useLayout((s) => s.openClis);
+  const listId = useId();
+  const set = (k: keyof ProxyCmdDraft) => (e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, [k]: e.target.value });
+  return (
+    <div data-testid="cloud-tunnel" className="mb-1">
+      <div className="flex gap-2">
+        <Field label={kind === "aws" ? "Instance id" : "VM name"} className="flex-1">
+          <input value={draft.target} onChange={set("target")} placeholder={host.trim() || (kind === "aws" ? "i-0123456789abcdef0" : "my-vm")} spellCheck={false} className={inputCls} />
+        </Field>
+        <Field label={kind === "aws" ? "Region" : "Zone"} className="w-40">
+          <input value={draft.region} onChange={set("region")} placeholder={kind === "aws" ? "profile's region" : "us-central1-a"} spellCheck={false} className={inputCls} />
+        </Field>
+      </div>
+      <div className="flex gap-2">
+        <Field label={kind === "aws" ? "AWS profile" : "gcloud account"} className="flex-1">
+          <input value={draft.cliAccount} onChange={set("cliAccount")} placeholder="default" list={listId} spellCheck={false} className={inputCls} />
+          <datalist id={listId}>
+            {(status?.accounts ?? []).map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+              </option>
+            ))}
+          </datalist>
+        </Field>
+        {kind === "gcp" && (
+          <Field label="Project" className="w-40">
+            <input value={draft.project} onChange={set("project")} placeholder="default project" spellCheck={false} className={inputCls} />
+          </Field>
+        )}
+      </div>
+      {status && !status.installed ? (
+        <Hint tone="warn">
+          {kind === "aws" ? "AWS SSM needs the AWS CLI and its Session Manager plugin." : "Google IAP needs the Google Cloud CLI."}{" "}
+          <button type="button" className="text-accent hover:underline" onClick={() => openClis(tool)}>
+            Open CLIs
+          </button>
+        </Hint>
+      ) : (
+        <Hint label="Tunnel help">
+          {kind === "aws"
+            ? "Faro runs aws ssm start-session for this instance and speaks SSH through it, so port 22 can stay closed. The instance needs the SSM agent; your machine needs the Session Manager plugin."
+            : "Faro runs gcloud compute start-iap-tunnel for this VM and speaks SSH through it, so the VM needs no external address. Your account needs the IAP-secured Tunnel User role."}{" "}
+          The SSH login below is still the server's own.
+        </Hint>
+      )}
+    </div>
+  );
+}
+
+/// "Uses": the CLIs this connection depends on, each opening the CLIs page.
+function CliUsesLine({ profile, profiles, onOpen }: { profile: ConnectionProfile; profiles: ConnectionProfile[]; onOpen: (tool: ManagedToolId) => void }) {
+  const statuses = useClis((s) => s.statuses);
+  // One chip per CLI: the use that matters most (a problem, else the first).
+  const byTool = new Map<string, ReturnType<typeof profileTools>>();
+  for (const u of profileTools(profile, profiles)) byTool.set(u.tool, [...(byTool.get(u.tool) ?? []), u]);
+  const uses = [...byTool.values()].map(
+    (list) => list.find((u) => isProblem(stateForUse(statuses[u.tool], u))) ?? list.find((u) => u.how !== "imported") ?? list[0]
+  );
+  if (uses.length === 0) return null;
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11.5px] text-text-muted" data-testid="cli-uses">
+      <span>Uses</span>
+      {uses.map((u, i) => {
+        const st = stateForUse(statuses[u.tool], u);
+        const tone = stateTone(st);
+        return (
+          <button
+            key={`${u.tool}-${u.how}-${i}`}
+            type="button"
+            data-cli-chip={u.tool}
+            data-cli-chip-state={st ?? "unknown"}
+            onClick={() => onOpen(u.tool)}
+            title={`${HOW_LABEL[u.how]}${u.via ? ` via ${u.via}` : ""}${st ? ` · ${st}` : ""} · open on the CLIs page`}
+            className={cn(
+              "flex items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-bg-hover",
+              isProblem(st) ? "border-warning/50 text-text" : "border-border"
+            )}
+          >
+            <CliIcon id={u.tool} size={11} />
+            {statuses[u.tool]?.name ?? u.tool}
+            {u.account && u.account !== "default" && <span className="text-text-dim">· {u.account}</span>}
+            <span className={cn("h-1.5 w-1.5 rounded-full", tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : tone === "bad" ? "bg-danger" : "bg-text-dim")} />
+          </button>
+        );
+      })}
     </div>
   );
 }

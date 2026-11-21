@@ -94,6 +94,14 @@ pub enum ProxyCommandKind {
     Command,
     /// `cloudflared access ssh`, built from the Access hostname.
     Cloudflare,
+    /// `aws ssm start-session --document-name AWS-StartSSHSession`: an EC2
+    /// instance with no open port 22 (Plan 35).
+    #[serde(rename = "awsSsm")]
+    AwsSsm,
+    /// `gcloud compute start-iap-tunnel --listen-on-stdin`: a Compute Engine
+    /// VM with no external address (Plan 35).
+    #[serde(rename = "gcpIap")]
+    GcpIap,
 }
 
 /// SSH over a local process's stdin/stdout (OpenSSH `ProxyCommand`), for
@@ -114,6 +122,46 @@ pub struct ProxyCommandConfig {
     // Kept in the keychain (and blanked from profiles.json) in keychain mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_token_secret: Option<String>,
+    /// The instance (`kind = awsSsm`: `i-…`; `kind = gcpIap`: the VM name).
+    /// Absent = the profile's host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// The AWS profile or gcloud account the tunnel runs as. Absent = the
+    /// CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_account: Option<String>,
+    /// AWS region, or the VM's Google Cloud zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// Google Cloud project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// Sign in with a CLI's own login instead of a saved key (Plan 35): short-
+/// lived credentials from `aws`, `az` or `gcloud`, fetched at connect time and
+/// kept in memory only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliAuth {
+    /// `aws`, `az` or `gcloud`.
+    pub tool: String,
+    /// AWS profile, Azure subscription id or gcloud account. Empty = the
+    /// CLI's default.
+    #[serde(default)]
+    pub account: String,
+}
+
+/// Where an imported connection came from, so a later import from the same
+/// CLI updates it instead of adding a copy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliSource {
+    pub tool: String,
+    #[serde(default)]
+    pub account: String,
+    /// The CLI's id for it: `ec2:i-0abc`, `s3:my-bucket`, `droplet:123`.
+    pub remote_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +278,12 @@ pub struct ConnectionProfile {
     /// this field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cf_forwards: Vec<CfForward>,
+    /// Sign in with a CLI's login (Plan 35). Exclusive with `credential_ref`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_auth: Option<CliAuth>,
+    /// The CLI this connection was imported from (Plan 35).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_source: Option<CliSource>,
 }
 
 /// One Access-protected service a connection exposes on a local port.
@@ -771,6 +825,10 @@ mod tests {
             hostname: Some("ssh.example.com".into()),
             service_token_id: Some("tok.access".into()),
             service_token_secret: Some("cf-secret".into()),
+            target: None,
+            cli_account: None,
+            region: None,
+            project: None,
         });
         let on = serde_json::to_string(&for_disk(&[p.clone()], true)).unwrap();
         assert!(!on.contains("cf-secret"), "{on}");

@@ -12,6 +12,8 @@ export interface ToastAction {
   settings?: { section: string; focus?: string };
   /** Connect a saved server and open a folder or site on it (a deep link's target). */
   connect?: { profileId: string; siteId?: string; path?: string };
+  /** Open the CLIs page on a tool, or run its sign-in (Plan 35). */
+  clis?: { tool: string; signIn?: boolean; account?: string };
 }
 
 export interface Toast {
@@ -188,6 +190,15 @@ export function followToastAction(action: ToastAction): void {
     // Loaded on demand: the connection stores import this one.
     const target = action.connect;
     void import("@/lib/linkTarget").then((m) => m.connectLinkTarget(target));
+    return;
+  }
+  if (action.clis) {
+    const target = action.clis;
+    if (target.signIn) {
+      void import("@/stores/cliStore").then((m) => m.useClis.getState().signIn(target.tool as never, target.account));
+    } else {
+      useLayout.getState().openClis(target.tool as never);
+    }
     return;
   }
   if (action.url) void ipc.openExternalUrl(action.url);

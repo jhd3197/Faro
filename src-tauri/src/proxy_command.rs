@@ -119,7 +119,65 @@ pub fn build(cfg: &ProxyCommandConfig, host: &str, port: u16, user: &str) -> Res
                 cloudflared: true,
             })
         }
+        ProxyCommandKind::AwsSsm => {
+            let target = cloud_field(cfg.target.as_deref().or(Some(host)), "EC2 instance id")?
+                .ok_or_else(|| anyhow::anyhow!("AWS SSM needs the EC2 instance id"))?;
+            let mut args = vec![
+                "ssm".to_string(),
+                "start-session".into(),
+                "--target".into(),
+                target,
+                "--document-name".into(),
+                "AWS-StartSSHSession".into(),
+                "--parameters".into(),
+                format!("portNumber={port}"),
+            ];
+            if let Some(p) = cloud_field(cfg.cli_account.as_deref(), "AWS profile")? {
+                args.extend(["--profile".into(), p]);
+            }
+            if let Some(r) = cloud_field(cfg.region.as_deref(), "AWS region")? {
+                args.extend(["--region".into(), r]);
+            }
+            Ok(CommandSpec { program: cli_program("aws"), args, env: Vec::new(), cloudflared: false })
+        }
+        ProxyCommandKind::GcpIap => {
+            let target = cloud_field(cfg.target.as_deref().or(Some(host)), "VM name")?
+                .ok_or_else(|| anyhow::anyhow!("Google IAP needs the VM name"))?;
+            let zone = cloud_field(cfg.region.as_deref(), "zone")?.ok_or_else(|| anyhow::anyhow!("Google IAP needs the VM's zone"))?;
+            let mut args = vec![
+                "compute".to_string(),
+                "start-iap-tunnel".into(),
+                target,
+                port.to_string(),
+                "--listen-on-stdin".into(),
+                format!("--zone={zone}"),
+                "--verbosity=warning".into(),
+            ];
+            if let Some(p) = cloud_field(cfg.project.as_deref(), "project")? {
+                args.push(format!("--project={p}"));
+            }
+            if let Some(a) = cloud_field(cfg.cli_account.as_deref(), "gcloud account")? {
+                args.push(format!("--account={a}"));
+            }
+            Ok(CommandSpec { program: cli_program("gcloud"), args, env: Vec::new(), cloudflared: false })
+        }
     }
+}
+
+/// A value for an AWS or Google Cloud argument: trimmed, and plain (gcloud
+/// and az are `.cmd` files on Windows, run by `cmd.exe`). Empty = absent.
+fn cloud_field(v: Option<&str>, what: &str) -> Result<Option<String>> {
+    match v.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(v) if crate::cli_integrations::plain_arg(v) && !v.starts_with('-') => Ok(Some(v.to_string())),
+        Some(_) => bail!("The {what} can only use letters, digits and - _ . : / = @ , +"),
+    }
+}
+
+/// The CLI the CLIs page found (or the user picked), else its bare name for
+/// a PATH search.
+fn cli_program(id: &str) -> String {
+    crate::cli_integrations::locate(id).map(|p| p.display().to_string()).unwrap_or_else(|| id.to_string())
 }
 
 /// The `cloudflared` and Access hostname for issuing a short-lived SSH
@@ -738,6 +796,10 @@ mod tests {
             hostname: None,
             service_token_id: None,
             service_token_secret: None,
+            target: None,
+            cli_account: None,
+            region: None,
+            project: None,
         }
     }
 
@@ -748,6 +810,10 @@ mod tests {
             hostname: hostname.map(Into::into),
             service_token_id: id.map(Into::into),
             service_token_secret: secret.map(Into::into),
+            target: None,
+            cli_account: None,
+            region: None,
+            project: None,
         }
     }
 

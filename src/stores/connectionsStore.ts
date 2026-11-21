@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { blockingProblems } from "@/lib/cliUsage";
+import { useClis } from "./cliStore";
 import { ipc } from "@/lib/ipc";
 import { toast } from "./toastStore";
 import { toastError, messageOf, kindOf } from "@/lib/errors";
@@ -141,6 +143,29 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
 
     let pending = pendingConnections.get(profileId);
     if (!pending) {
+      // A CLI this connection needs is known to be signed out, expired or
+      // missing (Plan 35): say so with the fix instead of a failed connect.
+      const needed = get().profiles.find((p) => p.id === profileId);
+      const blocked = needed ? blockingProblems(needed, get().profiles, useClis.getState().statuses)[0] : undefined;
+      if (needed && blocked) {
+        const who = blocked.use.account && blocked.use.account !== "default" ? ` for ${blocked.use.account}` : "";
+        const message =
+          blocked.state === "missing"
+            ? `It needs ${blocked.status.name}, which isn't installed.`
+            : blocked.state === "expired"
+              ? `Your ${blocked.status.name} login${who} expired.`
+              : `Nobody is signed in to ${blocked.status.name}${who}.`;
+        set((s) => ({ connectFailures: { ...s.connectFailures, [profileId]: { kind: "auth", message } } }));
+        toast.warning(
+          `${needed.name} needs ${blocked.status.name}`,
+          message,
+          blocked.state === "missing" || !blocked.status.signIn
+            ? { label: "Open CLIs", clis: { tool: blocked.status.id } }
+            : { label: "Sign in", clis: { tool: blocked.status.id, signIn: true, account: blocked.use.account !== "default" ? blocked.use.account : undefined } },
+          { id: `connect:${profileId}` }
+        );
+        throw new Error(message);
+      }
       set({ connecting: true, error: null });
       const profile = get().profiles.find(p => p.id === profileId);
       pending = (async () => {

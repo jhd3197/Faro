@@ -141,6 +141,41 @@ test("password managers", { timeout: 180000 }, async () => {
     await clickEnabled("[data-pm-card='1password'] [data-pm-check]");
     await page.waitForSelector("[data-pm-card='1password'][data-pm-state='ready']");
 
+    // --- 1Password without the desktop app: Faro signs in itself.
+    await page.evaluate(() => window.__demo.setPasswordManagers({ "1password": "signedOut", opApp: false }));
+    await clickEnabled("[data-pm-card='1password'] [data-pm-check]");
+    await page.waitForSelector("[data-pm-card='1password'] [data-pm-op-add]");
+    assert.equal(await page.$("[data-pm-card='1password'] [data-pm-op-app]"), null, "no app sign-in button without the app");
+    assert.match(await text("[data-pm-card='1password']"), /has no account yet/);
+    assert.equal(await value("[aria-label='1Password sign-in address']"), "my.1password.com");
+    // Empty fields are refused without calling the CLI.
+    await click("[data-pm-op-add-button]");
+    await page.waitForSelector("[data-pm-op-add-error]");
+    assert.equal((await calls()).filter((c) => c.cmd === "password_manager_op_add_account").length, 0);
+    await page.type("[aria-label='1Password email']", "demo@example.com");
+    await page.type("[aria-label='1Password Secret Key']", "A3-ABCDEF-GHIJKL-MNOPQR-STUVWX-YZ2345-67890");
+    await page.type("[aria-label='1Password account password']", "wrong");
+    await click("[data-pm-op-add-button]");
+    await page.waitForFunction(() => document.querySelector("[data-pm-op-add-error]")?.textContent.includes("didn't accept"));
+    assert.equal(await value("[aria-label='1Password account password']"), "", "the password field clears after a try");
+    await page.type("[aria-label='1Password account password']", "correct horse");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("[data-pm-card='1password'][data-pm-state='ready']");
+    assert.match(await text("[data-pm-card='1password']"), /demo@example\.com/);
+    const adds = (await calls()).filter((c) => c.cmd === "password_manager_op_add_account");
+    assert.deepEqual(adds.at(-1).args, { address: "my.1password.com", email: "demo@example.com" }, "no secret in the call log");
+    // Sign out, then back in with just the password.
+    await click("[data-pm-op-signout]");
+    await page.waitForSelector("[data-pm-card='1password'][data-pm-state='locked']");
+    await page.waitForSelector("[data-pm-card='1password'] [aria-label='1Password account password']");
+    await page.type("[data-pm-card='1password'] [aria-label='1Password account password']", "correct horse");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("[data-pm-card='1password'][data-pm-state='ready']");
+    await shot("op-signed-in-without-app");
+    await page.evaluate(() => window.__demo.setPasswordManagers({ opApp: true }));
+    await clickEnabled("[data-pm-card='1password'] [data-pm-check]");
+    await page.waitForSelector("[data-pm-card='1password'][data-pm-state='ready']");
+
     // --- The CLIs: version, Check for updates, and Faro's own copy.
     const opCli = "[data-pm-card='1password'] [data-pm-cli='op']";
     await page.waitForSelector(`${opCli} [data-tool-source='path']`);

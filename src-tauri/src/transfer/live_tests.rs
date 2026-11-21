@@ -75,6 +75,8 @@ fn profile(protocol: &str, host: &str, port: u16, user: &str, pass: &str) -> Con
         proxy_command: None,
         oauth_client_id: None,
         cf_forwards: Vec::new(),
+        cli_auth: None,
+        cli_source: None,
     }
 }
 
@@ -999,6 +1001,10 @@ async fn live_cloudflare_access_round_trip() {
         hostname: None,
         service_token_id: None,
         service_token_secret: None,
+        target: None,
+        cli_account: None,
+        region: None,
+        project: None,
     });
 
     let ssh = crate::session::ssh_session_for_tests(&p, Arc::new(AcceptAll)).await.expect("connect via Cloudflare");

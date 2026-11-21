@@ -220,6 +220,10 @@ fn parse_proxy_command(value: &str) -> Option<Via> {
                 hostname: None,
                 service_token_id: None,
                 service_token_secret: None,
+                target: None,
+                cli_account: None,
+                region: None,
+                project: None,
             }))
         })
 }
@@ -246,6 +250,10 @@ fn cloudflare_access(value: &str) -> Option<Via> {
         hostname: (hostname != "%h").then(|| hostname.to_string()),
         service_token_id: None,
         service_token_secret: None,
+        target: None,
+        cli_account: None,
+        region: None,
+        project: None,
     }))
 }
 
@@ -567,6 +575,10 @@ Host cache
             hostname: hostname.map(Into::into),
             service_token_id: None,
             service_token_secret: None,
+            target: None,
+            cli_account: None,
+            region: None,
+            project: None,
         }))
     }
 
@@ -577,6 +589,10 @@ Host cache
             hostname: None,
             service_token_id: None,
             service_token_secret: None,
+            target: None,
+            cli_account: None,
+            region: None,
+            project: None,
         }))
     }
 

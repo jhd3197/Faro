@@ -151,11 +151,17 @@ function setManagerState(id: ToolId, state: PmState) {
   else bwState = state;
 }
 
+/** 1Password: whether this demo machine has the desktop app (tests flip it). */
+let opApp = true;
+/** 1Password: an account was added to the CLI by signing in with a password. */
+let opAdded = false;
+
 /** Every password-manager command the UI sent, newest last (tests only). */
 export const calls: { cmd: string; args: Args }[] = [];
 
 /** Put a manager into a state (tests only). */
-export function setState(next: { "1password"?: PmState; bitwarden?: PmState }) {
+export function setState(next: { "1password"?: PmState; bitwarden?: PmState; opApp?: boolean }) {
+  if (next.opApp !== undefined) opApp = next.opApp;
   if (next["1password"]) opState = next["1password"];
   if (next.bitwarden) bwState = next.bitwarden;
   for (const id of ["op", "bw"] as ToolId[]) {
@@ -171,6 +177,8 @@ export function setAgents(next: Record<string, boolean>) {
 }
 
 export function reset() {
+  opApp = true;
+  opAdded = false;
   opState = "ready";
   bwState = "locked";
   agents = { system: true, "1password": true, bitwarden: false };
@@ -188,13 +196,22 @@ function status(): PmStatus[] {
       name: "1Password",
       cliPath: cliPath("op"),
       state: opState,
-      account: opState === "ready" ? "demo@example.com (my.1password.com)" : undefined,
+      account: opState === "ready" || (opState === "locked" && opAdded) ? "demo@example.com (my.1password.com)" : undefined,
       detail:
         opState === "missing"
           ? "The 1Password CLI isn't installed."
-          : opState === "locked"
-            ? "1Password didn't unlock. Approve the prompt in the 1Password app."
-            : undefined,
+          : opState === "signedOut"
+            ? opApp
+              ? "The 1Password CLI has no account yet. Sign in below with your 1Password account, or in the 1Password app turn on Settings › Developer › Integrate with 1Password CLI."
+              : "The 1Password CLI is installed but has no account yet. Sign in below with your 1Password account; Faro adds it to the CLI."
+            : opState === "locked"
+              ? opApp && !opAdded
+                ? "Click Sign in, then approve Faro in the 1Password app."
+                : "Enter your 1Password account password to sign in."
+              : undefined,
+      signIn:
+        opState === "signedOut" ? "add" : opState === "locked" ? (opApp && !opAdded ? "app" : "password") : undefined,
+      appInstalled: opApp || undefined,
     },
     {
       id: "bitwarden",
@@ -229,13 +246,25 @@ function strip({ fields: _fields, ...item }: MockItem): PmItem {
 }
 
 export function handle(cmd: string, a: Args): unknown {
-  calls.push({ cmd, args: cmd === "password_manager_unlock" ? { provider: a.provider } : a });
+  // Never keep a password or Secret Key in the call log.
+  calls.push({
+    cmd,
+    args:
+      cmd === "password_manager_unlock"
+        ? { provider: a.provider }
+        : cmd === "password_manager_op_add_account"
+          ? { address: a.address, email: a.email }
+          : a,
+  });
   switch (cmd) {
     case "password_managers_status":
       return status();
     case "password_manager_unlock": {
       if (a.provider === "1password") {
         if (opState === "missing") throw "The 1Password CLI isn't installed.";
+        const pw = String(a.password ?? "");
+        if (!pw && !opApp) throw "This computer doesn't have the 1Password app, so sign in with your account password instead.";
+        if (pw && pw !== "correct horse") throw "1Password didn't accept that email and password.";
         opState = "ready";
         return null;
       }
@@ -247,7 +276,16 @@ export function handle(cmd: string, a: Args): unknown {
     }
     case "password_manager_lock":
       if (a.provider === "bitwarden" && bwState === "ready") bwState = "locked";
+      if (a.provider === "1password" && opState === "ready" && opAdded) opState = "locked";
       return null;
+    case "password_manager_op_add_account": {
+      if (opState === "missing") throw "The 1Password CLI isn't installed.";
+      if (!/^A3-[A-Z0-9-]{27,}$/i.test(String(a.secretKey ?? "").trim())) throw "Enter your Secret Key. It starts with A3- and is in your Emergency Kit or the 1Password app's account settings.";
+      if (String(a.password) !== "correct horse") throw "1Password didn't accept that email and password.";
+      opAdded = true;
+      opState = "ready";
+      return null;
+    }
     case "password_manager_items": {
       const q = String(a.query ?? "").trim().toLowerCase();
       return vault(a.provider)
@@ -306,6 +344,7 @@ export function handle(cmd: string, a: Args): unknown {
 export const COMMANDS = new Set([
   "password_managers_status",
   "password_manager_unlock",
+  "password_manager_op_add_account",
   "password_manager_lock",
   "password_manager_items",
   "password_manager_fields",

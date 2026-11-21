@@ -41,6 +41,8 @@ pub static SPEC: ToolSpec = ToolSpec {
     program: "cloudflared",
     config_file: "cloudflared.json",
     feed: Feed::GitHub { api: RELEASE_API, tag_prefix: "", pick: pick_asset },
+    roles: &[crate::managed_tools::Role::Tunnel],
+    version_args: &["--version"],
     parse_version,
     find_installed: || proxy_command::find_program("cloudflared", true),
     check_custom: |_| Ok(()),

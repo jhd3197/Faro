@@ -219,6 +219,8 @@ impl ProfilePreview {
             proxy_command: self.proxy_command,
             oauth_client_id: None,
             cf_forwards: Vec::new(),
+            cli_auth: None,
+            cli_source: None,
         }
     }
 }
@@ -256,8 +258,16 @@ pub fn into_profiles_with_keys(
             match (conflict, resolution) {
                 (Some(c), Some(Resolution::Replace)) => {
                     if let Some(old) = existing.iter().find(|e| e.id == c.id) {
-                        keep_secrets(&mut profile, old);
-                        profile.sort_order = old.sort_order;
+                        let same_source = matches!((&old.cli_source, &profile.cli_source),
+                            (Some(o), Some(n)) if o.tool == n.tool && o.remote_id == n.remote_id);
+                        if same_source {
+                            // Re-imported from the same CLI: keep what the
+                            // person set, update what the CLI knows (Plan 35).
+                            profile = crate::cli_integrations::discover::refresh_merge(old, &profile);
+                        } else {
+                            keep_secrets(&mut profile, old);
+                            profile.sort_order = old.sort_order;
+                        }
                     }
                     profile.id = c.id;
                 }

@@ -20,6 +20,7 @@ import {
 import { ipc } from "@/lib/ipc";
 import { useConnections } from "@/stores/connectionsStore";
 import { useLayout } from "@/stores/layoutStore";
+import { useClis } from "@/stores/cliStore";
 import { toast } from "@/stores/toastStore";
 import { useDialog } from "@/hooks/useDialog";
 import { SelectAll } from "@/components/ui/SelectAll";
@@ -30,6 +31,7 @@ import type {
   ImportResolution,
   ImporterKind,
   ImporterPaths,
+  ManagedToolId,
   ProfilePreview,
   Protocol,
 } from "@/lib/types";
@@ -45,6 +47,7 @@ const TABS = [
   { id: "openssh", label: "OpenSSH config", icon: TerminalIcon },
   { id: "filezilla", label: "FileZilla", icon: Server },
   { id: "putty", label: "PuTTY", icon: ShieldCheck },
+  { id: "cli", label: "From your CLIs", icon: Cloud },
 ] as const;
 
 // Tabbed import dialog. Each tab auto-loads the importer's default-path
@@ -150,6 +153,26 @@ function ImporterTab({
   const [withSecrets, setWithSecrets] = useState(false);
   // A Faro file picked with Browse (or dropped) is opened right away.
   const [openRequested, setOpenRequested] = useState(!!initialPath);
+  // "From your CLIs": which CLI and account to list (seeded by the CLIs page).
+  const seed = useLayout((s) => s.importCli);
+  const cliStatuses = useClis((s) => s.statuses);
+  const cliOrder = useClis((s) => s.order);
+  const discoverable = cliOrder
+    .map((id) => cliStatuses[id])
+    .filter((c) => c && c.roles.includes("discover") && c.installed);
+  const [cliTool, setCliTool] = useState<ManagedToolId | "">(seed?.tool ?? "");
+  const [cliAccount, setCliAccount] = useState<string>(seed?.account ?? "");
+  const cliPicked = cliTool ? cliStatuses[cliTool] : undefined;
+  useEffect(() => {
+    if (kind !== "cli") return;
+    if (!cliTool && discoverable[0]) setCliTool(discoverable[0].id);
+  }, [kind, cliTool, discoverable]);
+  useEffect(() => {
+    if (kind !== "cli" || !cliPicked) return;
+    if (!cliPicked.accounts.some((a) => a.id === cliAccount)) {
+      setCliAccount((cliPicked.accounts.find((a) => a.active) ?? cliPicked.accounts[0])?.id ?? "");
+    }
+  }, [kind, cliPicked, cliAccount]);
 
   // Pre-populate the path from the auto-detected default the moment paths arrive.
   useEffect(() => {
@@ -176,9 +199,9 @@ function ImporterTab({
     setPreviews(result);
     // Select everything by default — users usually want to bring it all in
     // and then drop the few they don't. Duplicates default to Skip.
-    setSelected(new Set(result.map((p) => p.previewId)));
+    setSelected(new Set(result.filter((p) => !p.needs?.includes("offline")).map((p) => p.previewId)));
     setResolutions(
-      Object.fromEntries(result.filter((p) => p.conflict).map((p) => [p.previewId, "skip" as const]))
+      Object.fromEntries(result.filter((p) => p.conflict).map((p) => [p.previewId, p.resolution ?? ("skip" as const)]))
     );
   };
 
@@ -203,6 +226,9 @@ function ImporterTab({
         show(await ipc.importOpenssh(path || undefined));
       } else if (kind === "filezilla") {
         show(await ipc.importFilezilla(path || undefined));
+      } else if (kind === "cli") {
+        if (!cliTool) return;
+        show(await ipc.cliDiscover(cliTool, cliAccount || undefined));
       } else {
         show(await ipc.importPutty());
       }
@@ -213,14 +239,17 @@ function ImporterTab({
       setLoading(false);
       setAutoScanned(true);
     }
-  }, [kind, path, missingDefault, passphrase]);
+  }, [kind, path, missingDefault, passphrase, cliTool, cliAccount]);
 
   // Auto-scan when the tab opens, but only when the path is autodetected.
   useEffect(() => {
-    if (active && !autoScanned && kind !== "faro" && !pathTouched && (kind === "putty" || path)) {
+    if (active && !autoScanned && kind !== "faro" && kind !== "cli" && !pathTouched && (kind === "putty" || path)) {
       scan();
     }
-  }, [active, autoScanned, kind, path, pathTouched, scan]);
+    if (active && !autoScanned && kind === "cli" && seed && cliTool) {
+      scan();
+    }
+  }, [active, autoScanned, kind, path, pathTouched, scan, seed, cliTool]);
 
   useEffect(() => {
     if (active && openRequested && path) {
@@ -286,6 +315,18 @@ function ImporterTab({
         toImport.map((p) => ({ ...p, resolution: p.conflict ? resolutions[p.previewId] : undefined }))
       );
       setSavedCount(n);
+      if (kind === "cli") {
+        const allow = new Set(
+          toImport
+            .map((p) => p.profile?.cliAuth)
+            .filter((a): a is NonNullable<typeof a> => !!a)
+            .map((a) => `${a.tool}\u0000${a.account || "default"}`)
+        );
+        for (const key of allow) {
+          const [tool, account] = key.split("\u0000");
+          await useClis.getState().setAllowed(tool as ManagedToolId, account, true);
+        }
+      }
       await loadProfiles();
       const unfinished = toImport.filter((p) => p.needs?.length).length;
       if (unfinished) {
@@ -314,6 +355,59 @@ function ImporterTab({
         !active && "hidden"
       )}
     >
+      {kind === "cli" ? (
+        <div className="mb-3 flex items-end gap-2">
+          <label className="flex-1">
+            <div className="mb-1 text-[10px] uppercase tracking-wider text-text-muted">CLI</div>
+            <select
+              aria-label="CLI"
+              value={cliTool}
+              onChange={(e) => {
+                setCliTool(e.target.value as ManagedToolId);
+                setCliAccount("");
+                setPreviews(null);
+              }}
+              className="w-full rounded-md border border-border bg-bg-subtle px-2 py-1.5 text-[12px] outline-none focus:border-accent"
+            >
+              {discoverable.length === 0 && <option value="">No CLI that can list connections is installed</option>}
+              {discoverable.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.state !== "ready" && c.state !== "unknown" ? ` (${c.state === "expired" ? "login expired" : c.state === "signedOut" ? "signed out" : "check failed"})` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {cliPicked && cliPicked.accounts.length > 0 && (
+            <label className="flex-1">
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-text-muted">Account</div>
+              <select
+                aria-label="Account"
+                value={cliAccount}
+                onChange={(e) => {
+                  setCliAccount(e.target.value);
+                  setPreviews(null);
+                }}
+                className="w-full rounded-md border border-border bg-bg-subtle px-2 py-1.5 text-[12px] outline-none focus:border-accent"
+              >
+                {cliPicked.accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button
+            onClick={scan}
+            disabled={loading || !cliTool}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-bg-subtle px-2.5 py-1.5 text-[12px] hover:bg-bg-hover disabled:opacity-40"
+          >
+            {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            Find
+          </button>
+        </div>
+      ) : (
       <div className="mb-3 flex items-end gap-2">
         <label className="flex-1">
           <div className="mb-1 text-[10px] uppercase tracking-wider text-text-muted">
@@ -357,6 +451,12 @@ function ImporterTab({
           {kind === "faro" ? "Open" : "Scan"}
         </button>
       </div>
+      )}
+      {kind === "cli" && (
+        <p className="-mt-1 mb-2 text-[11px] text-text-dim">
+          Faro asks the CLI what this account can reach; nothing connects or changes. Buckets and containers sign in with this login (short-lived, in memory only). A connection imported before is updated, keeping your edits.
+        </p>
+      )}
 
       {kind === "faro" && locked && previews === null && (
         <form
@@ -422,6 +522,10 @@ function ImporterTab({
               <>
                 Choose a <strong>.faro</strong> file exported from Faro, or drop one onto the window.
               </>
+            ) : kind === "cli" ? (
+              <>
+                Pick a CLI and an account, then click <strong>Find</strong>. Sign-ins are managed on the CLIs page.
+              </>
             ) : (
               <>
                 Click <strong>Scan</strong> to read connections from this source.
@@ -438,7 +542,9 @@ function ImporterTab({
                 ? "Try editing the path — or check that ~/.ssh/config exists."
                 : kind === "filezilla"
                   ? "Check that FileZilla has any saved sites."
-                  : "No PuTTY sessions are registered for this user."}
+                  : kind === "cli"
+                    ? "This account has no servers, buckets or portals Faro can import."
+                    : "No PuTTY sessions are registered for this user."}
           </Empty>
         )}
         {previews && previews.length > 0 && (
@@ -524,6 +630,8 @@ const NEED_LABEL: Record<ImportNeed, string> = {
   password: "needs a password",
   "sign-in": "needs sign-in",
   "token secret": "needs token secret",
+  token: "needs a token",
+  offline: "offline",
 };
 
 const NEED_HINT: Record<ImportNeed, string> = {
@@ -531,6 +639,8 @@ const NEED_HINT: Record<ImportNeed, string> = {
   password: "The password didn't come along; you'll be asked for it, or can save it in the editor.",
   "sign-in": "Sign in to this cloud account again after importing.",
   "token secret": "The Access service token secret didn't come along; enter it in the editor.",
+  token: "Paste the access token in the connection editor after importing.",
+  offline: "This device is offline right now, so it isn't selected.",
 };
 
 function PreviewRow({
@@ -647,6 +757,8 @@ function hintFor(kind: ImporterKind): string {
       return "sitemanager.xml";
     case "putty":
       return "(PuTTY registry)";
+    case "cli":
+      return "";
   }
 }
 

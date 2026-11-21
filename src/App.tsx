@@ -7,6 +7,9 @@ import { NativeFileDrop } from "./components/NativeFileDrop";
 import { useEffect, useRef, useState } from "react";
 import { CopyToDialog } from "./components/CopyToDialog";
 import { CopyJobsPill } from "./components/CopyJobsPill";
+import { CliPill } from "./components/CliPill";
+import { CliHub } from "./components/CliHub";
+import { useClis } from "./stores/cliStore";
 import { useCopyJobs } from "./stores/copyStore";
 import { useRules } from "./stores/rulesStore";
 import { useMounts } from "./stores/mountStore";
@@ -118,7 +121,7 @@ export default function App() {
   const dialog = useLayout((s) => s.dialog);
   const diskUsageOpen = useDiskScan((s) => s.open);
   const serverViewCovering = useServerView((s) => s.open);
-  const workAreaCovered = dialog === "agentBridge" || diskUsageOpen || serverViewCovering;
+  const workAreaCovered = dialog === "agentBridge" || dialog === "clis" || diskUsageOpen || serverViewCovering;
   const closeDialog = useLayout((s) => s.closeDialog);
   const connectionPrefill = useLayout((s) => s.connectionPrefill);
   const exportRequest = useLayout((s) => s.exportRequest);
@@ -153,6 +156,12 @@ export default function App() {
       if (cancelled) u();
       else unIndex = u;
     });
+    // The CLIs page and pill (Plan 35).
+    let unClis: (() => void) | undefined;
+    void useClis.getState().init().then((u) => {
+      if (cancelled) u();
+      else unClis = u;
+    });
     let unMounts: (() => void) | undefined;
     void useMounts.getState().init().then((u) => {
       if (cancelled) u();
@@ -162,6 +171,7 @@ export default function App() {
       cancelled = true;
       cleanup?.();
       unMounts?.();
+      unClis?.();
       unIndex?.();
     };
   }, []);
@@ -270,6 +280,11 @@ export default function App() {
             {/* The Agent Bridge page covers the work area (panes stay mounted
                 underneath so their paths survive opening it). */}
             {dialog === "agentBridge" && <AgentBridgePage onClose={closeDialog} />}
+            {dialog === "clis" && (
+              <ErrorBoundary region="CLIs" className="absolute inset-0 z-[5]">
+                <CliHub onClose={closeDialog} />
+              </ErrorBoundary>
+            )}
             <DiskUsageHost />
             <ErrorBoundary region="Server view" className="absolute inset-0 z-[6]">
               <ServerViewHost />
@@ -619,6 +634,7 @@ function StatusBar({
         )}
       </div>
       <CopyJobsPill />
+      <CliPill />
       <PillButton
         onClick={() => openSettings(SETTINGS_ENTRY_POINTS.statusBarSync)}
         data-settings-link="statusBarSync"

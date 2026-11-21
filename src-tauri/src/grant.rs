@@ -479,6 +479,8 @@ async fn import_connection(
         proxy_command: None,
         oauth_client_id: None,
         cf_forwards: Vec::new(),
+        cli_auth: None,
+        cli_source: None,
     };
     if let Err(e) = state.profiles.upsert(profile.clone()).await {
         crate::credentials::delete_secret(&key_ref);

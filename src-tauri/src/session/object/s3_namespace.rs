@@ -3,7 +3,9 @@
 //! File streaming stays in object_store; signing uses its public SigV4 signer.
 use crate::profiles::{AuthMethod, ConnectionProfile};
 use anyhow::{bail, Context, Result};
-use object_store::aws::{AwsAuthorizer, AwsCredential};
+use object_store::aws::{AwsAuthorizer, AwsCredential, AwsCredentialProvider};
+use object_store::StaticCredentialProvider;
+use std::sync::Arc;
 use reqwest::{Client, Method, StatusCode};
 use serde::Deserialize;
 use std::time::Duration;
@@ -14,7 +16,9 @@ pub struct S3Namespace {
     bucket_url: Url,
     bucket: String,
     region: String,
-    credentials: AwsCredential,
+    /// Saved keys, or short-lived ones from the AWS CLI's login (Plan 35),
+    /// fetched per request from its cache.
+    credentials: AwsCredentialProvider,
 }
 
 #[derive(Default, Deserialize)]
@@ -71,8 +75,21 @@ impl S3Namespace {
             .map_err(|_| anyhow::anyhow!("invalid S3 endpoint"))?
             .pop_if_empty()
             .push(&bucket);
-        let AuthMethod::Password { password } = &profile.auth else {
-            bail!("S3 requires password authentication")
+        let credentials: AwsCredentialProvider = match &profile.cli_auth {
+            Some(auth) => Arc::new(crate::cli_integrations::creds::AwsCli {
+                auth: auth.clone(),
+                data_dir: crate::cli_integrations::data_dir()?,
+            }),
+            None => {
+                let AuthMethod::Password { password } = &profile.auth else {
+                    bail!("S3 requires password authentication")
+                };
+                Arc::new(StaticCredentialProvider::new(AwsCredential {
+                    key_id: profile.username.clone(),
+                    secret_key: password.clone(),
+                    token: None,
+                }))
+            }
         };
         Ok(Self {
             client: crate::proxy::http_client_builder(profile)?
@@ -83,11 +100,7 @@ impl S3Namespace {
             bucket_url,
             bucket,
             region,
-            credentials: AwsCredential {
-                key_id: profile.username.clone(),
-                secret_key: password.clone(),
-                token: None,
-            },
+            credentials,
         })
     }
 
@@ -136,7 +149,11 @@ impl S3Namespace {
             builder = builder.header("x-amz-copy-source", encoded);
         }
         let mut request = builder.build()?;
-        AwsAuthorizer::new(&self.credentials, "s3", &self.region).authorize(&mut request, None);
+        let credential = self.credentials.get_credential().await.map_err(|e| match e {
+            object_store::Error::Generic { source, .. } => anyhow::anyhow!("{source}"),
+            other => other.into(),
+        })?;
+        AwsAuthorizer::new(&credential, "s3", &self.region).authorize(&mut request, None);
         let response = self
             .client
             .execute(request)

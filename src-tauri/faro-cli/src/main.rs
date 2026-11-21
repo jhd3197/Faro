@@ -320,6 +320,24 @@ enum Cmd {
         #[command(subcommand)]
         action: CfCmd,
     },
+
+    /// The command-line tools Faro uses (aws, gcloud, az, gh, cloudflared,
+    /// 1Password, ...): installed or not, who is signed in, and how many
+    /// connections use each. Runs each CLI's own account check; never prints
+    /// a token.
+    Tools {
+        #[command(subcommand)]
+        action: Option<ToolsCmd>,
+        /// Machine-readable output.
+        #[arg(long, global = true)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ToolsCmd {
+    /// Check one tool's login now (`aws`, `gcloud`, `gh`, ...).
+    Check { id: String },
 }
 
 #[derive(Subcommand)]
@@ -721,6 +739,10 @@ async fn run(cli: Cli) -> Result<()> {
     faro_lib::proxy_command::set_fallback_service_token(faro_lib::cloudflare_api::service_token(&default_data_dir()?));
 
     match cli.command {
+        Cmd::Tools { action, json } => {
+            let only = action.map(|ToolsCmd::Check { id }| id);
+            cmd_tools(&store, only.as_deref(), json).await
+        }
         Cmd::Ls { target, bytes } => cmd_ls(&store, &target, bytes).await,
         Cmd::Exec { profile, command } => cmd_exec(&store, &profile, &command).await,
         Cmd::Cp { source, destination, recursive, dry_run, json, overwrite, verify, rules } => {
@@ -987,6 +1009,37 @@ fn default_data_dir() -> Result<PathBuf> {
     }
     let base = dirs::data_dir().ok_or_else(|| anyhow!("could not resolve a data dir"))?;
     Ok(base.join("com.juandenis.faro"))
+}
+
+async fn cmd_tools(store: &ProfileStore, only: Option<&str>, json: bool) -> Result<()> {
+    use faro_lib::cli_integrations::CliState;
+    let profiles = store.list().await?;
+    let reports = faro_lib::cli_integrations::report(&default_data_dir()?, &profiles, only).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(());
+    }
+    for r in &reports {
+        let s = &r.status;
+        let state = match s.state {
+            CliState::Missing => "not installed",
+            CliState::SignedOut => "signed out",
+            CliState::Ready => "ready",
+            CliState::Expired => "login expired",
+            CliState::Error => "error",
+            CliState::Unknown => "installed",
+        };
+        let who = s.accounts.iter().find(|a| a.active).or(s.accounts.first()).map(|a| format!(" as {}", a.label)).unwrap_or_default();
+        let ver = s.version.as_deref().map(|v| format!(" {v}")).unwrap_or_default();
+        let used = if r.used_by > 0 { format!(" · used by {} connection{}", r.used_by, if r.used_by == 1 { "" } else { "s" }) } else { String::new() };
+        println!("{:<12} {state}{who}{ver}{used}", s.id);
+        if let Some(d) = &s.detail {
+            if s.state != CliState::Missing || only.is_some() {
+                println!("{:<12} {d}", "");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn open_store() -> Result<ProfileStore> {

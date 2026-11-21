@@ -858,6 +858,8 @@ mod tests {
             proxy_command: None,
             oauth_client_id: None,
             cf_forwards: Vec::new(),
+            cli_auth: None,
+            cli_source: None,
         };
 
         let pid = profile.id.clone();
@@ -1126,6 +1128,8 @@ mod tests {
             proxy_command: None,
             oauth_client_id: None,
             cf_forwards: Vec::new(),
+            cli_auth: None,
+            cli_source: None,
         };
 
         let pid = profile.id.clone();

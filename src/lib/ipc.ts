@@ -149,6 +149,8 @@ import type {
   PmStatus,
   ManagedToolId,
   ToolStatus,
+  CliToolStatus,
+  CliAuth,
 } from "./types";
 
 // Typed wrappers around the Tauri command surface. The string names must match
@@ -183,6 +185,9 @@ export const ipc = {
 
   // ---- Password managers (Plan 33). No command returns a secret value. ----
   passwordManagersStatus: () => invoke<PmStatus[]>("password_managers_status"),
+  /** 1Password without the app: add the account to the CLI and sign in. */
+  passwordManagerOpAddAccount: (address: string, email: string, secretKey: string, password: string) =>
+    invoke<void>("password_manager_op_add_account", { address, email, secretKey, password }),
   passwordManagerUnlock: (provider: PasswordManagerId, password: string) =>
     invoke<void>("password_manager_unlock", { provider, password }),
   passwordManagerLock: (provider: PasswordManagerId) =>
@@ -346,6 +351,22 @@ export const ipc = {
   toolInstall: (id: ManagedToolId) => invoke<ToolStatus>("tool_install", { id }),
   toolSetCustomPath: (id: ManagedToolId, path: string | null) =>
     invoke<ToolStatus>("tool_set_custom_path", { id, path }),
+
+  // ---- CLIs page (Plan 35): account checks, sign-in, discovery ----
+  /** Every CLI as last checked; runs no account checks. */
+  cliStatuses: () => invoke<CliToolStatus[]>("cli_statuses"),
+  /** Run one CLI's account check now. */
+  cliCheck: (id: ManagedToolId) => invoke<CliToolStatus>("cli_check", { id }),
+  /** Open the CLI's own login in a window; a status event follows when it closes. */
+  cliSignIn: (id: ManagedToolId, account?: string) => invoke<void>("cli_sign_in", { id, account: account ?? null }),
+  /** Allow (or stop) Faro using an account's login for connections. */
+  cliSetAllowed: (id: ManagedToolId, account: string, allowed: boolean) =>
+    invoke<CliToolStatus>("cli_set_allowed", { id, account, allowed }),
+  /** Servers, buckets or portals an account reaches, as import previews. */
+  cliDiscover: (id: ManagedToolId, account?: string) =>
+    invoke<ProfilePreview[]>("cli_discover", { id, account: account ?? null }),
+  /** Fetch and drop a credential for the editor's Test button. */
+  cliAuthTest: (auth: CliAuth) => invoke<string>("cli_auth_test", { auth }),
 
   // ---- One-click "Add faro-cli to PATH" (Plan 16 Phase 4): per-user, no admin.
   pathStatus: () => invoke<PathStatus>("path_status"),
@@ -1104,6 +1125,11 @@ export async function onAgentHostPaired(
 /** Access TCP forwards changed (a session connected, or one was started or stopped). */
 export async function onCfForwardsChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("cf-forward://status", () => cb());
+}
+
+/** A CLI's account state changed (`cli://status`). */
+export async function onCliStatus(cb: (status: CliToolStatus) => void): Promise<UnlistenFn> {
+  return listen<CliToolStatus>("cli://status", (e) => cb(e.payload));
 }
 
 /** A Faro-managed tool changed or has an update (`tools://status`). */

@@ -48,9 +48,11 @@ const OP_MISSING: &str = "The 1Password CLI isn't installed. Install it in Setti
 const BW_MISSING: &str = "The Bitwarden CLI isn't installed. Install it in Settings › Password managers.";
 const BW_CMD: &str = "Faro needs the standalone Bitwarden CLI (bw.exe); the npm bw.cmd can't be used. Install it in Settings › Password managers.";
 const OP_LOCKED: &str = "Click Sign in, then approve Faro in the 1Password app.";
-const OP_SIGNED_OUT: &str = "Open the 1Password app and turn on Settings › Developer › Integrate with 1Password CLI. The app has to stay running.";
+const OP_PASSWORD: &str = "Enter your 1Password account password to sign in.";
+const OP_NEEDS_PASSWORD: &str = "This computer doesn't have the 1Password app, so sign in with your account password instead.";
+const OP_SIGNED_OUT: &str = "The 1Password CLI has no account yet. Sign in below with your 1Password account, or in the 1Password app turn on Settings › Developer › Integrate with 1Password CLI.";
 const OP_APP_CLOSED: &str = "Faro can't reach the 1Password app. Open 1Password and unlock it, then click Check again.";
-const OP_NO_APP: &str = "The 1Password CLI only works with the 1Password app. Install the app, sign in, then turn on Settings › Developer › Integrate with 1Password CLI.";
+const OP_NO_APP: &str = "The 1Password CLI is installed but has no account yet. Sign in below with your 1Password account; Faro adds it to the CLI.";
 const OP_UNKNOWN: &str = "1Password couldn't check your account. Open the 1Password app, then click Check again.";
 const BW_LOCKED: &str = "Bitwarden is locked. Unlock it in Settings › Password managers.";
 const BW_SIGNED_OUT: &str = "Bitwarden isn't signed in. Run `bw login` once in a terminal.";
@@ -64,6 +66,20 @@ fn bw_session() -> Option<String> {
 
 fn set_bw_session(value: Option<String>) {
     *BW_SESSION.lock().unwrap_or_else(|e| e.into_inner()) = value;
+}
+
+/// A 1Password session from signing in with the account password (no
+/// desktop app): the account's user id and its session token. Memory only,
+/// handed to `op` as `OP_SESSION_<user id>` (never argv), gone when Faro
+/// quits. 1Password ends it after 30 idle minutes.
+static OP_SESSION: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+fn op_session() -> Option<(String, String)> {
+    OP_SESSION.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn set_op_session(value: Option<(String, String)>) {
+    *OP_SESSION.lock().unwrap_or_else(|e| e.into_inner()) = value;
 }
 
 // ---------- Shapes (camelCase JSON) ----------
@@ -89,6 +105,14 @@ pub struct PmStatus {
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// 1Password: how to sign in from here. `add` = no account yet (sign in
+    /// with address, email, Secret Key and password), `password` = an account
+    /// that signs in with its password, `app` = approve in the 1Password app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<String>,
+    /// 1Password: the desktop app is on this computer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub app_installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -146,10 +170,12 @@ struct Cli {
     timeout: Duration,
     /// For messages: "1Password" or "Bitwarden".
     name: &'static str,
+    /// Carry the 1Password password sign-in's session (`OP_SESSION_<id>`).
+    op_session: bool,
 }
 
 fn cli(provider: &str) -> Result<Cli> {
-    Ok(Cli { program: discover(provider)?, prefix_args: Vec::new(), timeout: TIMEOUT, name: display_name(provider) })
+    Ok(Cli { program: discover(provider)?, prefix_args: Vec::new(), timeout: TIMEOUT, name: display_name(provider), op_session: provider == ONEPASSWORD })
 }
 
 fn missing(provider: &str) -> &'static str {
@@ -245,6 +271,8 @@ pub static OP_TOOL: ToolSpec = ToolSpec {
         download_base: "https://cache.agilebits.com/dist/1P/op2/pkg",
         key: op_signing_key,
     },
+    roles: &[managed_tools::Role::Secrets],
+    version_args: &["--version"],
     parse_version: managed_tools::plain_version,
     find_installed: || find_installed("op"),
     check_custom: |p| check_program(p, ONEPASSWORD),
@@ -262,6 +290,8 @@ pub static BW_TOOL: ToolSpec = ToolSpec {
         tag_prefix: "cli-",
         pick: bw_asset,
     },
+    roles: &[managed_tools::Role::Secrets],
+    version_args: &["--version"],
     parse_version: managed_tools::plain_version,
     find_installed: || find_installed("bw"),
     check_custom: |p| check_program(p, BITWARDEN),
@@ -352,12 +382,18 @@ async fn read_capped<R: AsyncRead + Unpin>(mut reader: R, cap: usize) -> std::io
 }
 
 async fn exec(cli: &Cli, args: &[&str], env: &[(&str, &str)], session: Option<&str>, cap: usize) -> Result<Out> {
+    exec_in(cli, args, env, session, None, cap).await
+}
+
+/// [`exec`], writing `input` to the child's stdin (a password `op` reads
+/// there when there is no terminal: never argv, never the environment).
+async fn exec_in(cli: &Cli, args: &[&str], env: &[(&str, &str)], session: Option<&str>, input: Option<&str>, cap: usize) -> Result<Out> {
     let name = cli.name;
     let mut command = tokio::process::Command::new(&cli.program);
     command
         .args(&cli.prefix_args)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -366,6 +402,13 @@ async fn exec(cli: &Cli, args: &[&str], env: &[(&str, &str)], session: Option<&s
         .env("BW_NOINTERACTION", "true");
     if let Some(session) = session {
         command.env("BW_SESSION", session);
+    }
+    // 1Password signed in with its password: every call carries the session.
+    if cli.op_session {
+        command.env_remove("OP_SECRET_KEY");
+        if let Some((account, token)) = op_session() {
+            command.env(format!("OP_SESSION_{account}"), token).env("OP_ACCOUNT", account);
+        }
     }
     for (key, value) in env {
         command.env(key, value);
@@ -376,6 +419,13 @@ async fn exec(cli: &Cli, args: &[&str], env: &[(&str, &str)], session: Option<&s
     // The command holds the child's environment (maybe the master password).
     drop(command);
     let mut child = spawned.map_err(|_| anyhow!("The {name} CLI couldn't start."))?;
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        use tokio::io::AsyncWriteExt;
+        // A CLI that exits before reading is fine: its answer says why.
+        let _ = stdin.write_all(text.as_bytes()).await;
+        let _ = stdin.write_all(b"\n").await;
+        drop(stdin);
+    }
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         bail!("The {name} CLI couldn't start.");
     };
@@ -602,6 +652,7 @@ fn op_not_connected() -> &'static str {
 /// `op account list` can: with the integration on it lists the app's
 /// accounts without asking for approval.
 async fn op_status(cli: &Cli) -> (PmState, Option<String>, Option<String>) {
+    let held = op_session().is_some();
     let whoami = match exec(cli, &["whoami", "--format", "json"], &[], None, VALUE_CAP).await {
         Ok(out) => out,
         Err(e) => return (PmState::SignedOut, None, Some(e.to_string())),
@@ -610,6 +661,10 @@ async fn op_status(cli: &Cli) -> (PmState, Option<String>, Option<String>) {
         let info = json(&whoami.stdout, cli.name).unwrap_or(Value::Null);
         let account = str_at(&info, &["email"]).or_else(|| str_at(&info, &["url"])).map(str::to_string);
         return (PmState::Ready, account, None);
+    }
+    if held {
+        // The password sign-in ran out (30 idle minutes) or was revoked.
+        set_op_session(None);
     }
     match op_problem(&whoami.stderr) {
         OpProblem::AppClosed => return (PmState::SignedOut, None, Some(OP_APP_CLOSED.into())),
@@ -625,7 +680,8 @@ async fn op_status(cli: &Cli) -> (PmState, Option<String>, Option<String>) {
             match first {
                 Some(acct) => {
                     let who = str_at(&acct, &["email"]).or_else(|| str_at(&acct, &["url"])).map(str::to_string);
-                    (PmState::Locked, who, Some(OP_LOCKED.into()))
+                    let detail = if matches!(op_app(), OpApp::Installed { integration: Some(true) }) { OP_LOCKED } else { OP_PASSWORD };
+                    (PmState::Locked, who, Some(detail.into()))
                 }
                 None => (PmState::SignedOut, None, Some(op_not_connected().into())),
             }
@@ -639,11 +695,162 @@ async fn op_status(cli: &Cli) -> (PmState, Option<String>, Option<String>) {
     }
 }
 
+/// How the card offers to sign in: no account yet, an account's password,
+/// or the app's approval prompt.
+fn op_sign_in_mode(state: PmState, detail: Option<&str>) -> Option<&'static str> {
+    match state {
+        PmState::Ready | PmState::Missing => None,
+        PmState::Locked if detail == Some(OP_LOCKED) => Some("app"),
+        PmState::Locked => Some("password"),
+        PmState::SignedOut => Some("add"),
+    }
+}
+
+/// Open the 1Password app when it's installed, so its approval prompt (or
+/// its Developer settings) is one click away.
+fn op_open_app() -> bool {
+    let Some(app) = op_app_paths().into_iter().find(|p| p.is_file()) else { return false };
+    std::process::Command::new(app).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().is_ok()
+}
+
+/// The approval prompt can take a person a while (Windows Hello, Touch ID).
+const OP_APPROVE_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// `op signin`: with the desktop-app integration this raises 1Password's own
-/// unlock prompt, so Faro never sees the account password.
+/// unlock prompt, so Faro never sees the account password. The app is opened
+/// first when it's installed and closed.
 async fn op_unlock(cli: &Cli) -> Result<()> {
-    let out = exec(cli, &["signin"], &[], None, VALUE_CAP).await?;
+    if matches!(op_app(), OpApp::NotInstalled) {
+        bail!(OP_NEEDS_PASSWORD);
+    }
+    let first = exec(cli, &["signin"], &[], None, VALUE_CAP).await?;
+    if first.ok {
+        return Ok(());
+    }
+    if op_problem(&first.stderr) == OpProblem::AppClosed && op_open_app() {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+    let slow = Cli { timeout: OP_APPROVE_TIMEOUT, ..cli.clone() };
+    let out = exec(&slow, &["signin"], &[], None, VALUE_CAP).await?;
     if out.ok { Ok(()) } else { Err(op_failure(&out.stderr, OP_LOCKED)) }
+}
+
+/// A 1Password sign-in address: `my.1password.com`, a team's
+/// `acme.1password.eu`, or a custom domain. No scheme, path or spaces.
+fn op_address(address: &str) -> Result<String> {
+    let a = address.trim().trim_start_matches("https://").trim_end_matches('/').to_ascii_lowercase();
+    let a = if a.is_empty() { "my.1password.com".to_string() } else { a };
+    ensure!(
+        a.len() <= 253 && a.contains('.') && !a.starts_with(['-', '.']) && a.chars().all(|c| c.is_ascii_alphanumeric() || ".-:".contains(c)),
+        "Enter your 1Password sign-in address, like my.1password.com."
+    );
+    Ok(a)
+}
+
+fn op_email(email: &str) -> Result<String> {
+    let e = email.trim();
+    ensure!(
+        e.len() <= 254 && e.contains('@') && !e.starts_with('-') && !e.chars().any(|c| c.is_whitespace() || c.is_control()),
+        "Enter the email address of your 1Password account."
+    );
+    Ok(e.to_string())
+}
+
+/// `A3-XXXXXX-…`: letters, digits and dashes, as 1Password prints it.
+fn op_secret_key(key: &str) -> Result<String> {
+    let k: String = key.trim().to_ascii_uppercase().chars().filter(|c| !c.is_whitespace()).collect();
+    ensure!(
+        k.starts_with("A3-") && (30..=64).contains(&k.len()) && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "Enter your Secret Key. It starts with A3- and is in your Emergency Kit or the 1Password app's account settings."
+    );
+    Ok(k)
+}
+
+fn op_token(out: Out, name: &str) -> Result<String> {
+    let token = text(out.stdout, name)?.trim().to_string();
+    ensure!(
+        !token.is_empty() && token.len() <= 4096 && !token.chars().any(|c| c.is_whitespace() || c.is_control()),
+        "1Password didn't return a session."
+    );
+    Ok(token)
+}
+
+/// What a failed password sign-in means, without copying op's text.
+fn op_password_failure(stderr: &str) -> anyhow::Error {
+    let s = stderr.to_ascii_lowercase();
+    if s.contains("enter your full sign-in address") || s.contains("no such host") || s.contains("sign-in address") {
+        anyhow!("1Password couldn't find that sign-in address. Check it (for example my.1password.com) and try again.")
+    } else if s.contains("secret key") {
+        anyhow!("1Password didn't accept that Secret Key. Check it against your Emergency Kit.")
+    } else if s.contains("password") || s.contains("unauthorized") || s.contains("401") || s.contains("authentication") {
+        anyhow!("1Password didn't accept that email and password.")
+    } else if s.contains("network") || s.contains("timeout") || s.contains("connection") || s.contains("dial tcp") {
+        anyhow!("Faro couldn't reach 1Password. Check your connection and try again.")
+    } else {
+        anyhow!("1Password didn't sign in. Check the details and try again.")
+    }
+}
+
+/// The user id `op` names the session variable after, for the account just
+/// signed in to (matched by address and email when op lists several).
+async fn op_account_id(cli: &Cli, address: Option<&str>, email: Option<&str>) -> Result<String> {
+    let out = exec(cli, &["account", "list", "--format", "json"], &[], None, VALUE_CAP).await?;
+    let list = json(&out.stdout, cli.name).unwrap_or(Value::Null);
+    let accounts = list.as_array().cloned().unwrap_or_default();
+    let matches = |a: &Value| {
+        address.is_none_or(|ad| str_at(a, &["url"]).is_some_and(|u| u.trim_start_matches("https://").trim_end_matches('/').eq_ignore_ascii_case(ad)))
+            && email.is_none_or(|em| str_at(a, &["email"]).is_some_and(|e| e.eq_ignore_ascii_case(em)))
+    };
+    let pick = accounts.iter().find(|a| matches(a)).or(accounts.first());
+    let id = pick.and_then(|a| str_at(a, &["user_uuid"]).or_else(|| str_at(a, &["shorthand"]))).map(str::to_string);
+    let id = id.ok_or_else(|| anyhow!("1Password signed in but didn't list the account. Click Check again."))?;
+    ensure!(id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "1Password returned an account id Faro can't use.");
+    Ok(id)
+}
+
+/// Add the account to the CLI and sign in, no desktop app needed. The Secret
+/// Key reaches `op` through `OP_SECRET_KEY` in that one child's environment,
+/// the password through its stdin; neither is kept.
+pub async fn op_add_account(address: &str, email: &str, secret_key: &str, password: String) -> Result<()> {
+    let (address, email, key) = (op_address(address)?, op_email(email)?, op_secret_key(secret_key)?);
+    ensure!(!password.is_empty(), "Enter your 1Password account password.");
+    op_add_account_with(&cli(ONEPASSWORD)?, &address, &email, &key, password).await
+}
+
+async fn op_add_account_with(cli: &Cli, address: &str, email: &str, key: &str, password: String) -> Result<()> {
+    let slow = Cli { timeout: Duration::from_secs(60), ..cli.clone() };
+    let out = exec_in(
+        &slow,
+        &["account", "add", "--address", address, "--email", email, "--signin", "--raw"],
+        &[("OP_SECRET_KEY", key)],
+        None,
+        Some(&password),
+        VALUE_CAP,
+    )
+    .await;
+    drop(password);
+    let out = out?;
+    if !out.ok {
+        return Err(op_password_failure(&out.stderr));
+    }
+    let token = op_token(out, cli.name)?;
+    let id = op_account_id(cli, Some(address), Some(email)).await?;
+    set_op_session(Some((id, token)));
+    Ok(())
+}
+
+/// Sign in to an account the CLI already has, with its password.
+async fn op_password_signin(cli: &Cli, password: &str) -> Result<()> {
+    ensure!(!password.is_empty(), "Enter your 1Password account password.");
+    let id = op_account_id(cli, None, None).await?;
+    let slow = Cli { timeout: Duration::from_secs(60), ..cli.clone() };
+    let out = exec_in(&slow, &["signin", "--account", &id, "--raw"], &[], None, Some(password), VALUE_CAP).await?;
+    if !out.ok {
+        return Err(op_password_failure(&out.stderr));
+    }
+    let token = op_token(out, cli.name)?;
+    set_op_session(Some((id, token)));
+    Ok(())
 }
 
 async fn op_resolve(cli: &Cli, reference: &str) -> Result<String> {
@@ -963,7 +1170,7 @@ async fn status_of(provider: &str) -> PmStatus {
     let cli = match cli(provider) {
         Ok(cli) => cli,
         Err(e) => {
-            return PmStatus { id: provider.into(), name, cli_path: None, state: PmState::Missing, account: None, detail: Some(e.to_string()) }
+            return PmStatus { id: provider.into(), name, cli_path: None, state: PmState::Missing, account: None, detail: Some(e.to_string()), sign_in: None, app_installed: false }
         }
     };
     let (state, account, detail) = if provider == ONEPASSWORD {
@@ -976,7 +1183,12 @@ async fn status_of(provider: &str) -> PmStatus {
         }
         status
     };
-    PmStatus { id: provider.into(), name, cli_path: Some(cli.program.display().to_string()), state, account, detail }
+    let (sign_in, app_installed) = if provider == ONEPASSWORD {
+        (op_sign_in_mode(state, detail.as_deref()).map(str::to_string), !matches!(op_app(), OpApp::NotInstalled))
+    } else {
+        (None, false)
+    };
+    PmStatus { id: provider.into(), name, cli_path: Some(cli.program.display().to_string()), state, account, detail, sign_in, app_installed }
 }
 
 pub async fn status() -> Vec<PmStatus> {
@@ -988,7 +1200,13 @@ pub async fn status() -> Vec<PmStatus> {
 /// memory. 1Password: raise the app's unlock prompt.
 pub async fn unlock(provider: &str, password: String) -> Result<()> {
     match provider {
-        ONEPASSWORD => op_unlock(&cli(ONEPASSWORD)?).await,
+        ONEPASSWORD => {
+            // A password signs in to the account the CLI has; none means
+            // "approve in the 1Password app".
+            let result = if password.is_empty() { op_unlock(&cli(ONEPASSWORD)?).await } else { op_password_signin(&cli(ONEPASSWORD)?, &password).await };
+            drop(password);
+            result
+        }
         BITWARDEN => {
             let session = bw_unlock(&cli(BITWARDEN)?, &password).await;
             drop(password);
@@ -1003,7 +1221,14 @@ pub async fn unlock(provider: &str, password: String) -> Result<()> {
 /// own app, so there's nothing to do.
 pub async fn lock(provider: &str) -> Result<()> {
     match provider {
-        ONEPASSWORD => Ok(()),
+        ONEPASSWORD => {
+            // A password sign-in ends here; the app locks from itself.
+            if let (Some(_), Ok(cli)) = (op_session(), cli(ONEPASSWORD)) {
+                let _ = exec(&cli, &["signout"], &[], None, VALUE_CAP).await;
+            }
+            set_op_session(None);
+            Ok(())
+        }
         BITWARDEN => {
             if let (Some(session), Ok(cli)) = (bw_session(), cli(BITWARDEN)) {
                 let _ = exec(&cli, &["lock"], &[], Some(&session), VALUE_CAP).await;
@@ -1073,6 +1298,8 @@ mod tests {
             );
             s += &format!("Add-Content -LiteralPath {log} -Value ('ARGV ' + $joined)\n");
             s += &format!("Add-Content -LiteralPath {log} -Value ('ENV BW_SESSION=' + $env:BW_SESSION + ' PW=' + $env:FARO_BW_PASSWORD)\n");
+            s += &format!("Add-Content -LiteralPath {log} -Value ('OPENV KEY=' + $env:OP_SECRET_KEY + ' ACCOUNT=' + $env:OP_ACCOUNT + ' SESSION=' + [Environment]::GetEnvironmentVariable('OP_SESSION_' + $env:OP_ACCOUNT))\n");
+            s += &format!("$line = [Console]::In.ReadLine(); if ($line) {{ Add-Content -LiteralPath {log} -Value ('STDIN ' + $line) }}\n");
             for (prefix, stdout, stderr, code) in rules {
                 let body = if *stdout == "SLEEP" {
                     "Start-Sleep -Seconds 30".to_string()
@@ -1093,6 +1320,7 @@ mod tests {
                     .collect(),
                 timeout: TIMEOUT,
                 name: "Fake",
+                op_session: true,
             }
         }
 
@@ -1103,6 +1331,8 @@ mod tests {
             let mut s = String::from("#!/bin/sh\njoined=\"$*\"\n");
             s += &format!("printf 'ARGV %s\\n' \"$joined\" >> {log}\n");
             s += &format!("printf 'ENV BW_SESSION=%s PW=%s\\n' \"$BW_SESSION\" \"$FARO_BW_PASSWORD\" >> {log}\n");
+            s += &format!("eval \"sess=\\${{OP_SESSION_$OP_ACCOUNT:-}}\"; printf 'OPENV KEY=%s ACCOUNT=%s SESSION=%s\\n' \"$OP_SECRET_KEY\" \"$OP_ACCOUNT\" \"$sess\" >> {log}\n");
+            s += &format!("if read -r line && [ -n \"$line\" ]; then printf 'STDIN %s\\n' \"$line\" >> {log}; fi\n");
             s += "case \"$joined\" in\n";
             for (prefix, stdout, stderr, code) in rules {
                 let body = if *stdout == "SLEEP" {
@@ -1115,7 +1345,7 @@ mod tests {
             s += "esac\nprintf 'unexpected call' >&2\nexit 64\n";
             let script = dir.join("fake.sh");
             std::fs::write(&script, s).unwrap();
-            Cli { program: "/bin/sh".into(), prefix_args: vec![script.to_string_lossy().into_owned()], timeout: TIMEOUT, name: "Fake" }
+            Cli { program: "/bin/sh".into(), prefix_args: vec![script.to_string_lossy().into_owned()], timeout: TIMEOUT, name: "Fake", op_session: true }
         }
 
         fn calls(&self) -> String {
@@ -1143,7 +1373,10 @@ mod tests {
             ("whoami", "", "[ERROR] 2026/11/19 10:00:00 account is not signed in", 1),
             ("account list", r#"[{"url":"my.1password.com","email":"me@example.com","user_uuid":"U","account_uuid":"A"}]"#, "", 0),
         ]);
-        assert_eq!(op_status(&approve.cli).await, (PmState::Locked, Some("me@example.com".into()), Some(OP_LOCKED.into())));
+        // With the app's integration on, approve there; otherwise the account
+        // (added to the CLI by Faro) signs in with its password.
+        let expected = if matches!(op_app(), OpApp::Installed { integration: Some(true) }) { OP_LOCKED } else { OP_PASSWORD };
+        assert_eq!(op_status(&approve.cli).await, (PmState::Locked, Some("me@example.com".into()), Some(expected.into())));
         // Integration off: no accounts configured.
         let off = Fake::new(&[
             ("whoami", "", "[ERROR] 2026/11/19 10:00:00 account is not signed in", 1),
@@ -1383,10 +1616,111 @@ mod tests {
 
     #[test]
     fn status_json_shape() {
-        let status = PmStatus { id: BITWARDEN.into(), name: "Bitwarden".into(), cli_path: Some("/usr/bin/bw".into()), state: PmState::SignedOut, account: None, detail: None };
+        let status = PmStatus { id: BITWARDEN.into(), name: "Bitwarden".into(), cli_path: Some("/usr/bin/bw".into()), state: PmState::SignedOut, account: None, detail: None, sign_in: None, app_installed: false };
         let json = serde_json::to_value(&status).unwrap();
         assert_eq!(json, serde_json::json!({"id":"bitwarden","name":"Bitwarden","cliPath":"/usr/bin/bw","state":"signedOut"}));
         let field = PmField { label: "Password".into(), reference: "r".into(), kind: FieldKind::Otp, concealed: true };
         assert_eq!(serde_json::to_value(&field).unwrap(), serde_json::json!({"label":"Password","reference":"r","kind":"otp","concealed":true}));
     }
+
+    // ---- 1Password without the desktop app ----
+
+    /// Shared state (the session) means these run one at a time.
+    static OP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    const OP_LIST: &str = r#"[{"url":"my.1password.com","email":"me@example.com","user_uuid":"USERABC123","account_uuid":"ACCT1"}]"#;
+
+    #[tokio::test]
+    async fn op_add_account_signs_in_without_the_app() {
+        let _one = OP_TEST_LOCK.lock().await;
+        set_op_session(None);
+        let fake = Fake::new(&[
+            ("account add --address my.1password.com --email me@example.com --signin --raw", "SESSIONTOKEN42\n", "", 0),
+            ("account list --format json", OP_LIST, "", 0),
+            ("whoami --format json", r#"{"url":"my.1password.com","email":"me@example.com","user_uuid":"USERABC123"}"#, "", 0),
+        ]);
+        let key = op_secret_key("a3-abcdef-ghijkl-mnopqr-stuvwx-yz2345-67890").unwrap();
+        op_add_account_with(&fake.cli, "my.1password.com", "me@example.com", &key, "correct horse battery".into()).await.unwrap();
+        assert_eq!(op_session(), Some(("USERABC123".into(), "SESSIONTOKEN42".into())));
+
+        // Later calls carry the session, and the status reads ready.
+        let (state, account, _) = op_status(&fake.cli).await;
+        assert_eq!(state, PmState::Ready);
+        assert_eq!(account.as_deref(), Some("me@example.com"));
+
+        let log = std::fs::read_to_string(&fake.log).unwrap();
+        // The password went through stdin only; the Secret Key through the
+        // environment of the add call only; neither in argv.
+        assert!(log.contains("STDIN correct horse battery"), "{log}");
+        assert!(!log.lines().filter(|l| l.starts_with("ARGV")).any(|l| l.contains("correct horse") || l.contains("A3-")), "{log}");
+        let add_env = log.lines().skip_while(|l| !l.contains("account add")).find(|l| l.starts_with("OPENV")).unwrap();
+        assert!(add_env.contains("KEY=A3-ABCDEF-GHIJKL-MNOPQR-STUVWX-YZ2345-67890"), "{add_env}");
+        let who_env = log.lines().skip_while(|l| !l.contains("whoami")).find(|l| l.starts_with("OPENV")).unwrap();
+        assert!(who_env.contains("ACCOUNT=USERABC123") && who_env.contains("SESSION=SESSIONTOKEN42") && who_env.contains("KEY= "), "{who_env}");
+        set_op_session(None);
+    }
+
+    #[tokio::test]
+    async fn op_password_signin_and_expiry() {
+        let _one = OP_TEST_LOCK.lock().await;
+        set_op_session(None);
+        let fake = Fake::new(&[
+            ("account list --format json", OP_LIST, "", 0),
+            ("signin --account USERABC123 --raw", "TOKEN2\n", "", 0),
+        ]);
+        op_password_signin(&fake.cli, "hunter2").await.unwrap();
+        assert_eq!(op_session(), Some(("USERABC123".into(), "TOKEN2".into())));
+        let log = std::fs::read_to_string(&fake.log).unwrap();
+        assert!(log.contains("STDIN hunter2"), "{log}");
+        assert!(op_password_signin(&fake.cli, "").await.unwrap_err().to_string().contains("password"));
+
+        // The session ran out: status drops it and asks for the password.
+        let expired = Fake::new(&[
+            ("whoami --format json", "", "[ERROR] 2026/11/20 You are not currently signed in. Please run `op signin --help` for instructions", 1),
+            ("account list --format json", OP_LIST, "", 0),
+        ]);
+        let (state, who, detail) = op_status(&expired.cli).await;
+        assert_eq!(state, PmState::Locked);
+        assert_eq!(who.as_deref(), Some("me@example.com"));
+        assert!(op_session().is_none(), "an expired session is forgotten");
+        if matches!(op_app(), OpApp::Installed { integration: Some(true) }) {
+            assert_eq!(detail.as_deref(), Some(OP_LOCKED));
+        } else {
+            assert_eq!(detail.as_deref(), Some(OP_PASSWORD));
+            assert_eq!(op_sign_in_mode(state, detail.as_deref()), Some("password"));
+        }
+    }
+
+    #[tokio::test]
+    async fn op_sign_in_failures_are_plain_and_copy_nothing() {
+        let _one = OP_TEST_LOCK.lock().await;
+        set_op_session(None);
+        let fake = Fake::new(&[(
+            "account add",
+            "",
+            "[ERROR] 2026/11/20 (401) Unauthorized: You aren't authorized to perform this action. SECRET-LEAK",
+            1,
+        )]);
+        let err = op_add_account_with(&fake.cli, "my.1password.com", "me@example.com", "A3-ABCDEF-GHIJKL-MNOPQR-STUVWX-YZ2345-67890", "pw".into())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "1Password didn't accept that email and password.");
+        assert!(op_session().is_none());
+        assert!(op_password_failure("[error] can't sign in. enter your full sign-in address.").to_string().contains("sign-in address"));
+    }
+
+    #[test]
+    fn op_sign_in_fields_are_validated() {
+        assert_eq!(op_address("").unwrap(), "my.1password.com");
+        assert_eq!(op_address(" https://Acme.1Password.EU/ ").unwrap(), "acme.1password.eu");
+        assert!(op_address("--evil").is_err() && op_address("a b.com").is_err() && op_address("nodot").is_err());
+        assert!(op_email("me@example.com").is_ok() && op_email("-x@y").is_err() && op_email("nope").is_err());
+        assert_eq!(op_secret_key(" a3-abcdef-ghijkl-mnopqr-stuvwx-yz2345-67890 ").unwrap(), "A3-ABCDEF-GHIJKL-MNOPQR-STUVWX-YZ2345-67890");
+        assert!(op_secret_key("A3-short").is_err() && op_secret_key("B3-ABCDEF-GHIJKL-MNOPQR-STUVWX-YZ2345-67890").is_err());
+        assert_eq!(op_sign_in_mode(PmState::SignedOut, Some(OP_SIGNED_OUT)), Some("add"));
+        assert_eq!(op_sign_in_mode(PmState::Locked, Some(OP_LOCKED)), Some("app"));
+        assert_eq!(op_sign_in_mode(PmState::Ready, None), None);
+    }
 }
+

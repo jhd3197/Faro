@@ -3,7 +3,7 @@ use anyhow::{anyhow, Context, Result};
 use object_store::aws::AmazonS3Builder;
 use object_store::azure::MicrosoftAzureBuilder;
 use object_store::gcp::GoogleCloudStorageBuilder;
-use object_store::{ClientOptions, ObjectStore};
+use object_store::{ClientOptions, CredentialProvider, ObjectStore};
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -62,6 +62,24 @@ fn client_options(profile: &ConnectionProfile) -> ClientOptions {
     }
 }
 
+/// The profile's CLI sign-in when it names `tool`; another tool is a mistake
+/// worth saying out loud.
+fn cli_auth(profile: &ConnectionProfile, tool: &str) -> Result<Option<crate::profiles::CliAuth>> {
+    match &profile.cli_auth {
+        None => Ok(None),
+        Some(a) if a.tool == tool => Ok(Some(a.clone())),
+        Some(a) => Err(anyhow!("{} can't sign in to this kind of connection", crate::cli_integrations::display_name(&a.tool))),
+    }
+}
+
+/// Our sentence out of `object_store`'s "Generic … error" wrapper.
+fn cred_message(e: object_store::Error) -> String {
+    match e {
+        object_store::Error::Generic { source, .. } => source.to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub async fn object_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
     match profile.protocol.as_str() {
         "s3" => s3_connect(profile).await,
@@ -77,16 +95,6 @@ async fn s3_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
         .as_ref()
         .ok_or_else(|| anyhow!("S3 profile is missing the bucket name"))?
         .clone();
-    let access_key = profile.username.clone();
-    let secret_key = match &profile.auth {
-        AuthMethod::Password { password } => password.clone(),
-        _ => {
-            return Err(anyhow!(
-                "S3 backend requires an access key (username) and secret (password). \
-                 Switch the auth method to Password."
-            ))
-        }
-    };
     let region = profile
         .region
         .clone()
@@ -94,10 +102,27 @@ async fn s3_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
 
     let mut builder = AmazonS3Builder::new()
         .with_bucket_name(&bucket)
-        .with_access_key_id(&access_key)
-        .with_secret_access_key(&secret_key)
         .with_region(&region)
         .with_client_options(client_options(profile));
+    if let Some(auth) = cli_auth(profile, "aws")? {
+        // Short-lived keys from the AWS CLI's login (Plan 35), fetched now so
+        // a sign-in problem fails the connect with a plain message.
+        let provider = crate::cli_integrations::creds::AwsCli { auth, data_dir: crate::cli_integrations::data_dir()? };
+        provider.get_credential().await.map_err(|e| anyhow!(cred_message(e)))?;
+        builder = builder.with_credentials(Arc::new(provider));
+    } else {
+        let access_key = profile.username.clone();
+        let secret_key = match &profile.auth {
+            AuthMethod::Password { password } => password.clone(),
+            _ => {
+                return Err(anyhow!(
+                    "S3 backend requires an access key (username) and secret (password). \
+                     Switch the auth method to Password."
+                ))
+            }
+        };
+        builder = builder.with_access_key_id(&access_key).with_secret_access_key(&secret_key);
+    }
 
     if let Some(endpoint) = profile.endpoint.as_ref().filter(|s| !s.is_empty()) {
         builder = builder.with_endpoint(endpoint);
@@ -138,21 +163,27 @@ async fn azure_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
             }
         })
         .ok_or_else(|| anyhow!("Azure profile is missing the storage account name"))?;
-    let access_key = match &profile.auth {
-        AuthMethod::Password { password } => password.clone(),
-        _ => {
-            return Err(anyhow!(
-                "Azure backend requires the storage account key (password field). \
-                 Switch the auth method to Password."
-            ))
-        }
-    };
-
     let mut builder = MicrosoftAzureBuilder::new()
         .with_account(&account)
         .with_container_name(&container)
-        .with_access_key(&access_key)
         .with_client_options(client_options(profile));
+    if let Some(auth) = cli_auth(profile, "az")? {
+        // An Entra token from the Azure CLI's login (Plan 35).
+        let provider = crate::cli_integrations::creds::AzureCli { auth, data_dir: crate::cli_integrations::data_dir()? };
+        provider.get_credential().await.map_err(|e| anyhow!(cred_message(e)))?;
+        builder = builder.with_credentials(Arc::new(provider));
+    } else {
+        let access_key = match &profile.auth {
+            AuthMethod::Password { password } => password.clone(),
+            _ => {
+                return Err(anyhow!(
+                    "Azure backend requires the storage account key (password field). \
+                     Switch the auth method to Password."
+                ))
+            }
+        };
+        builder = builder.with_access_key(&access_key);
+    }
 
     if let Some(endpoint) = profile.endpoint.as_ref().filter(|s| !s.is_empty()) {
         builder = builder.with_endpoint(endpoint.clone());
@@ -187,18 +218,25 @@ async fn gcs_connect(profile: &ConnectionProfile) -> Result<ObjectSession> {
         .with_bucket_name(&bucket)
         .with_client_options(client_options(profile));
 
-    match &profile.auth {
-        AuthMethod::Key { path, .. } => {
-            builder = builder.with_service_account_path(path.clone());
-        }
-        AuthMethod::Password { password } if !password.trim().is_empty() => {
-            builder = builder.with_service_account_key(password.clone());
-        }
-        _ => {
-            return Err(anyhow!(
-                "GCS backend needs a service-account key: either a path to the JSON \
-                 key file (Private key file auth) or the pasted JSON (Password auth)."
-            ))
+    if let Some(auth) = cli_auth(profile, "gcloud")? {
+        // An access token from the Google Cloud CLI's login (Plan 35).
+        let provider = crate::cli_integrations::creds::GcpCli { auth, data_dir: crate::cli_integrations::data_dir()? };
+        provider.get_credential().await.map_err(|e| anyhow!(cred_message(e)))?;
+        builder = builder.with_credentials(Arc::new(provider));
+    } else {
+        match &profile.auth {
+            AuthMethod::Key { path, .. } => {
+                builder = builder.with_service_account_path(path.clone());
+            }
+            AuthMethod::Password { password } if !password.trim().is_empty() => {
+                builder = builder.with_service_account_key(password.clone());
+            }
+            _ => {
+                return Err(anyhow!(
+                    "GCS backend needs a service-account key: either a path to the JSON \
+                     key file (Private key file auth) or the pasted JSON (Password auth)."
+                ))
+            }
         }
     }
 

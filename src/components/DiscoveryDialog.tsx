@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef } from "react";
-import { ArrowRight, FileCode2, Loader2, Plus, Server, ShieldCheck, TerminalSquare, X } from "lucide-react";
+import { ArrowRight, FileCode2, Loader2, Plus, Server, ShieldCheck, TerminalSquare, X, Cloud } from "lucide-react";
 import { useDialog } from "@/hooks/useDialog";
 import { useLayout } from "@/stores/layoutStore";
 import { useDiscovery, type FoundSource } from "@/stores/discoveryStore";
@@ -25,7 +25,7 @@ const NEW_CONNECTIONS: { protocol: Protocol | null; label: string; detail: strin
   { protocol: null, label: "More types", detail: "Cloud drives, WordPress, more" },
 ];
 
-const SOURCE_ICON = { openssh: TerminalSquare, filezilla: Server, putty: ShieldCheck } as const;
+const SOURCE_ICON = { openssh: TerminalSquare, filezilla: Server, putty: ShieldCheck, cli: Cloud } as const;
 
 export function DiscoveryDialog({ mode }: { mode: "welcome" | "whatsNew" }) {
   const panel = useRef<HTMLDivElement>(null);
@@ -99,14 +99,14 @@ function Welcome({ heading, titleId, close }: { heading: React.RefObject<HTMLHea
 }
 
 function FoundRow({ source, onImport }: { source: FoundSource; onImport: () => void }) {
-  const Icon = SOURCE_ICON[source.kind] ?? FileCode2;
+  const Icon = (SOURCE_ICON as Record<string, typeof Server>)[source.kind] ?? FileCode2;
   return <li className="flex items-center gap-3 px-3 py-2">
     <Icon size={14} className="shrink-0 text-text-muted" />
     <span className="min-w-0 flex-1">
       <span className="block text-xs font-medium text-text">{source.label}</span>
       {source.path && <span className="block truncate font-mono text-[11px] text-text-dim" title={source.path}>{source.path}</span>}
     </span>
-    <span className="shrink-0 text-xs tabular-nums text-text-muted">{source.count} {source.count === 1 ? "connection" : "connections"}</span>
+    <span className="shrink-0 text-xs tabular-nums text-text-muted">{source.countLabel ?? `${source.count} ${source.count === 1 ? "connection" : "connections"}`}</span>
     <button className={primary} onClick={onImport}>Import <ArrowRight size={12} /></button>
   </li>;
 }

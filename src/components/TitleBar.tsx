@@ -182,6 +182,11 @@ export function TitleBar() {
           icon: <Radio size={11} />,
           onClick: () => openDialog("agentBridge"),
         },
+        {
+          label: "CLIs…",
+          icon: <TerminalSquare size={11} />,
+          onClick: () => openDialog("clis"),
+        },
         { kind: "sep" },
         {
           label: showsDark ? "Switch to light theme" : "Switch to dark theme",

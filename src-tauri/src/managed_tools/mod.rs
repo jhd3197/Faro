@@ -1,5 +1,7 @@
-//! Faro-managed copies of the command-line tools it drives: cloudflared, the
-//! 1Password CLI and the Bitwarden CLI.
+//! The command-line tools Faro drives: cloudflared and the 1Password and
+//! Bitwarden CLIs, which Faro can install itself, plus the cloud and platform
+//! CLIs (`aws`, `gcloud`, `az`, `gh`, ...) it only finds and uses (Plan 35,
+//! `cli_integrations`).
 //!
 //! Each tool is a [`ToolSpec`]: where its official releases are, which
 //! download fits this machine and how that download is verified. Adding a
@@ -38,13 +40,34 @@ const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 /// Pushed whenever a tool's status changes in the background.
 pub const STATUS_EVENT: &str = "tools://status";
 
-/// Every tool Faro can install. The order is the Settings order.
-pub fn tools() -> [&'static ToolSpec; 3] {
-    [&crate::cloudflared::SPEC, &crate::password_managers::OP_TOOL, &crate::password_managers::BW_TOOL]
+/// Every tool Faro knows. The order is the Settings order: the three Faro can
+/// install, then the CLIs it only finds (`cli_integrations`).
+pub fn tools() -> &'static [&'static ToolSpec] {
+    static ALL: std::sync::OnceLock<Vec<&'static ToolSpec>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        let mut all: Vec<&'static ToolSpec> =
+            vec![&crate::cloudflared::SPEC, &crate::password_managers::OP_TOOL, &crate::password_managers::BW_TOOL];
+        all.extend(crate::cli_integrations::specs());
+        all
+    })
 }
 
 pub fn spec(id: &str) -> Result<&'static ToolSpec> {
-    tools().into_iter().find(|t| t.id == id).ok_or_else(|| anyhow!("Unknown tool: {id}"))
+    tools().iter().copied().find(|t| t.id == id).ok_or_else(|| anyhow!("Unknown tool: {id}"))
+}
+
+/// What a CLI does for Faro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Role {
+    /// Makes a connection reachable (a ProxyCommand).
+    Tunnel,
+    /// Supplies a saved password or key.
+    Secrets,
+    /// Short-lived credentials from the CLI's own login.
+    SignIn,
+    /// Lists servers, buckets or portals to import.
+    Discover,
 }
 
 // ---- Specs ------------------------------------------------------------------
@@ -60,7 +83,11 @@ pub struct ToolSpec {
     pub config_file: &'static str,
     /// Where releases come from.
     pub feed: Feed,
-    /// The version out of `<program> --version`.
+    /// What the tool does for Faro.
+    pub roles: &'static [Role],
+    /// The arguments that print the version: `--version`, or `version`.
+    pub version_args: &'static [&'static str],
+    /// The version out of `<program> <version_args>`.
     pub parse_version: fn(&str) -> Option<String>,
     /// A copy installed outside Faro (PATH, the usual folders).
     pub find_installed: fn() -> Option<PathBuf>,
@@ -95,6 +122,15 @@ pub enum Feed {
         download_base: &'static str,
         key: fn() -> PgpKey,
     },
+    /// Faro doesn't install this one (an MSI, an SDK bundle, a daemon, an
+    /// npm package): it finds it, and the UI links the publisher's page.
+    DetectOnly { install_url: &'static str },
+}
+
+impl Feed {
+    pub fn installable(&self) -> bool {
+        !matches!(self, Feed::DetectOnly { .. })
+    }
 }
 
 pub fn exe_name(program: &str) -> String {
@@ -146,6 +182,12 @@ pub enum Source {
 pub struct ToolStatus {
     pub id: String,
     pub name: String,
+    pub roles: Vec<Role>,
+    /// Faro can install and update its own copy.
+    pub installable: bool,
+    /// Where to get a tool Faro doesn't install.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_url: Option<String>,
     pub source: Source,
     pub path: Option<String>,
     pub version: Option<String>,
@@ -223,7 +265,7 @@ pub fn configure(spec: &'static ToolSpec, data_dir: &Path) {
 
 /// Every tool's choice, for the app and faro-cli at startup.
 pub fn configure_all(data_dir: &Path) {
-    for spec in tools() {
+    for spec in tools().iter().copied() {
         configure(spec, data_dir);
     }
 }
@@ -236,8 +278,8 @@ pub async fn version(spec: &ToolSpec, path: &Path) -> Option<String> {
     for attempt in 1..=5 {
         let run = tokio::time::timeout(
             QUICK_TIMEOUT,
-            tokio::process::Command::new(path)
-                .arg("--version")
+            crate::cli_integrations::command(path)
+                .args(spec.version_args)
                 .stdin(std::process::Stdio::null())
                 .kill_on_drop(true)
                 .no_console_window()
@@ -431,6 +473,7 @@ impl Installer {
         let (api, base, key) = match &spec.feed {
             Feed::GitHub { api, .. } => (*api, "", None),
             Feed::Signed { check_url, download_base, key, .. } => (*check_url, *download_base, Some(key())),
+            Feed::DetectOnly { .. } => ("", "", None),
         };
         Self::with_urls(spec, api, base, key)
     }
@@ -451,8 +494,15 @@ impl Installer {
 
     async fn get_json(&self, url: &str, from: &str) -> Result<Value> {
         let name = self.spec.name;
-        self.client
-            .get(url)
+        let mut req = self.client.get(url);
+        // With the person's OK on the CLIs page, release checks use their
+        // `gh` login, which lifts GitHub's 60-an-hour anonymous limit.
+        if url.starts_with("https://api.github.com/") {
+            if let Some(token) = crate::cli_integrations::creds::github_token().await {
+                req = req.bearer_auth(token);
+            }
+        }
+        req
             .send()
             .await
             .and_then(|r| r.error_for_status())
@@ -491,6 +541,9 @@ impl Installer {
                 let path = asset(os, arch, &version)?;
                 let file = path.rsplit('/').next().unwrap_or(&path).to_string();
                 Ok(Release { url: format!("{}/{path}", self.download_base), version, asset: file, check: Check::Signature })
+            }
+            Feed::DetectOnly { install_url } => {
+                bail!("Faro doesn't install {}; get it from {install_url}", self.spec.name)
             }
         }
     }
@@ -568,6 +621,9 @@ impl Installer {
 
 // ---- One tool in the app ------------------------------------------------------------
 
+/// A `--version` answer: the path, its file time, and what it said.
+type VersionSeen = (PathBuf, Option<std::time::SystemTime>, Option<String>);
+
 pub struct ToolManager {
     pub spec: &'static ToolSpec,
     data_dir: PathBuf,
@@ -575,6 +631,9 @@ pub struct ToolManager {
     /// One install at a time.
     installing: Mutex<()>,
     latest: Mutex<Option<String>>,
+    /// The last `--version` answer, by path and file time: some CLIs (az,
+    /// gcloud) take seconds to say it, and the CLIs page lists them all.
+    version_cache: std::sync::Mutex<Option<VersionSeen>>,
 }
 
 impl ToolManager {
@@ -586,6 +645,7 @@ impl ToolManager {
             data_dir,
             installing: Mutex::new(()),
             latest: Mutex::new(None),
+            version_cache: std::sync::Mutex::new(None),
         }
     }
 
@@ -593,17 +653,39 @@ impl ToolManager {
         managed_path(self.spec, &self.data_dir)
     }
 
+    async fn cached_version(&self, path: &Path) -> Option<String> {
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if let Ok(c) = self.version_cache.lock() {
+            if let Some((p, t, v)) = c.as_ref() {
+                if p == path && *t == mtime && mtime.is_some() {
+                    return v.clone();
+                }
+            }
+        }
+        let v = version(self.spec, path).await;
+        if let Ok(mut c) = self.version_cache.lock() {
+            *c = Some((path.to_path_buf(), mtime, v.clone()));
+        }
+        v
+    }
+
     pub async fn status(&self) -> ToolStatus {
         let cfg = self.config.lock().await.clone();
         let (source, path) = locate(self.spec, &self.data_dir, &cfg);
         let version = match &path {
-            Some(p) if p.is_file() => version(self.spec, p).await,
+            Some(p) if p.is_file() => self.cached_version(p).await,
             _ => None,
         };
         let latest = self.latest.lock().await.clone();
         ToolStatus {
             id: self.spec.id.to_string(),
             name: self.spec.name.to_string(),
+            roles: self.spec.roles.to_vec(),
+            installable: self.spec.feed.installable(),
+            install_url: match &self.spec.feed {
+                Feed::DetectOnly { install_url } => Some(install_url.to_string()),
+                _ => None,
+            },
             update_available: matches!((&latest, &version), (Some(l), Some(v)) if is_newer(l, v)),
             source,
             path: path.map(|p| p.display().to_string()),
@@ -615,8 +697,12 @@ impl ToolManager {
         }
     }
 
-    /// Ask the publisher for the latest release, then report.
+    /// Ask the publisher for the latest release, then report. A tool Faro
+    /// doesn't install just reports what is there.
     pub async fn check(&self, installer: &Installer) -> ToolStatus {
+        if !self.spec.feed.installable() {
+            return self.status().await;
+        }
         match installer.latest().await {
             Ok(r) => {
                 *self.latest.lock().await = Some(r.version);
@@ -632,6 +718,7 @@ impl ToolManager {
 
     /// Install or update Faro's own copy and start using it.
     pub async fn install(&self, installer: &Installer) -> Result<ToolStatus> {
+        ensure!(self.spec.feed.installable(), "Faro doesn't install {}; install it yourself, then click Check", self.spec.name);
         let _one = self.installing.lock().await;
         let installed = installer.install(&self.managed_path()).await?;
         *self.latest.lock().await = Some(installed.clone());
@@ -696,7 +783,7 @@ impl Tools {
     }
 
     pub fn from_dir(data_dir: &Path) -> Self {
-        let by_id = tools().into_iter().map(|s| (s.id, Arc::new(ToolManager::from_dir(s, data_dir.to_path_buf())))).collect();
+        let by_id = tools().iter().copied().map(|s| (s.id, Arc::new(ToolManager::from_dir(s, data_dir.to_path_buf())))).collect();
         Self { by_id }
     }
 
@@ -706,7 +793,7 @@ impl Tools {
 
     /// After startup: look for updates to every Faro-managed copy.
     pub async fn check_on_launch(&self, app: AppHandle) {
-        for spec in tools() {
+        for spec in tools().iter().copied() {
             if let Some(m) = self.by_id.get(spec.id) {
                 let event = if spec.id == crate::cloudflared::SPEC.id { "cloudflared://status" } else { STATUS_EVENT };
                 m.check_on_launch(&app, event).await;

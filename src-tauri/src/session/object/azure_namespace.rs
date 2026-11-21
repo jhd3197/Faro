@@ -2,7 +2,9 @@
 use super::s3_namespace::{Listing, Object, Prefix};
 use crate::profiles::{AuthMethod, ConnectionProfile};
 use anyhow::{bail, Context, Result};
-use object_store::azure::{AzureAccessKey, AzureAuthorizer, AzureCredential};
+use object_store::azure::{AzureAccessKey, AzureAuthorizer, AzureCredential, AzureCredentialProvider};
+use object_store::StaticCredentialProvider;
+use std::sync::Arc;
 use reqwest::{Client, Method, StatusCode};
 use serde::Deserialize;
 use std::{collections::HashSet, time::Duration};
@@ -15,7 +17,8 @@ pub struct AzureNamespace {
     client: Client,
     container: Url,
     account: String,
-    credential: AzureCredential,
+    /// The account key, or an Entra token from the Azure CLI (Plan 35).
+    credential: AzureCredentialProvider,
 }
 
 #[derive(Deserialize)]
@@ -103,8 +106,17 @@ impl AzureNamespace {
                     .as_deref()
                     .context("missing Azure container")?,
             );
-        let AuthMethod::Password { password } = &profile.auth else {
-            bail!("Azure requires an account key");
+        let credential: AzureCredentialProvider = match &profile.cli_auth {
+            Some(auth) => Arc::new(crate::cli_integrations::creds::AzureCli {
+                auth: auth.clone(),
+                data_dir: crate::cli_integrations::data_dir()?,
+            }),
+            None => {
+                let AuthMethod::Password { password } = &profile.auth else {
+                    bail!("Azure requires an account key");
+                };
+                Arc::new(StaticCredentialProvider::new(AzureCredential::AccessKey(AzureAccessKey::try_new(password)?)))
+            }
         };
         Ok(Self {
             client: crate::proxy::http_client_builder(profile)?
@@ -114,7 +126,7 @@ impl AzureNamespace {
                 .build()?,
             container,
             account,
-            credential: AzureCredential::AccessKey(AzureAccessKey::try_new(password)?),
+            credential,
         })
     }
 
@@ -143,7 +155,11 @@ impl AzureNamespace {
             builder = builder.header(*key, value);
         }
         let mut request = builder.build()?;
-        AzureAuthorizer::new(&self.credential, &self.account).authorize(&mut request);
+        let credential = self.credential.get_credential().await.map_err(|e| match e {
+            object_store::Error::Generic { source, .. } => anyhow::anyhow!("{source}"),
+            other => other.into(),
+        })?;
+        AzureAuthorizer::new(&credential, &self.account).authorize(&mut request);
         let response = self
             .client
             .execute(request)

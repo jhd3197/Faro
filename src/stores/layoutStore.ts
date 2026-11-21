@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ConnectionProfile, ImporterKind } from "@/lib/types";
+import type { ConnectionProfile, ImporterKind, ManagedToolId } from "@/lib/types";
 import {
   normalizeSettingsTarget,
   type SettingsSectionId,
@@ -20,7 +20,8 @@ export type AppDialog =
   | "grant"
   | "export"
   | "invite"
-  | "moveToCloudflare";
+  | "moveToCloudflare"
+  | "clis";
 
 /** What the Export dialog starts with: the connections to tick and format. */
 export interface ExportRequest {
@@ -93,6 +94,14 @@ interface LayoutState {
   moveProfileId: string | null;
   openMoveToCloudflare: (id: string) => void;
 
+  // The CLIs page (Plan 35): which CLI it opens on, and the Import dialog's
+  // "From your CLIs" seed. Closing an import started there returns to it.
+  cliSelect: ManagedToolId | null;
+  openClis: (id?: ManagedToolId) => void;
+  importCli: { tool: ManagedToolId; account?: string } | null;
+  openImportCli: (tool?: ManagedToolId, account?: string) => void;
+  returnTo: AppDialog | null;
+
   // When true, the file browser shows the LOCAL filesystem instead of the
   // active server. Toggled by the rail's "Local" home bubble; cleared when a
   // server bubble is selected.
@@ -133,9 +142,21 @@ export const useLayout = create<LayoutState>((set) => ({
   toggleAgentDrawer: () => set((s) => ({ agentDrawerOpen: !s.agentDrawerOpen })),
 
   dialog: null,
-  openDialog: (d) => set({ dialog: d, settingsTarget: null }),
+  openDialog: (d) => set({ dialog: d, settingsTarget: null, returnTo: null }),
   closeDialog: () =>
-    set({ dialog: null, settingsTarget: null, connectionPrefill: null, grantPrefill: null, exportRequest: null, importFile: null, importTab: null, inviteIds: [], moveProfileId: null }),
+    set((s) => ({
+      dialog: s.returnTo && s.returnTo !== s.dialog ? s.returnTo : null,
+      returnTo: null,
+      settingsTarget: null,
+      connectionPrefill: null,
+      grantPrefill: null,
+      exportRequest: null,
+      importFile: null,
+      importTab: null,
+      importCli: null,
+      inviteIds: [],
+      moveProfileId: null,
+    })),
 
   settingsTarget: null,
   openSettings: (target) => {
@@ -163,6 +184,20 @@ export const useLayout = create<LayoutState>((set) => ({
   openInvite: (ids) => set({ dialog: "invite", inviteIds: ids }),
   moveProfileId: null,
   openMoveToCloudflare: (id) => set({ dialog: "moveToCloudflare", moveProfileId: id }),
+
+  cliSelect: null,
+  openClis: (id) => set({ dialog: "clis", cliSelect: id ?? null, settingsTarget: null, returnTo: null }),
+  importCli: null,
+  openImportCli: (tool, account) =>
+    set((s) => ({
+      dialog: "import",
+      importTab: "cli",
+      importFile: null,
+      importCli: tool ? { tool, account } : null,
+      returnTo: s.dialog === "clis" ? "clis" : null,
+      cliSelect: s.dialog === "clis" ? tool ?? s.cliSelect : s.cliSelect,
+    })),
+  returnTo: null,
 
   browseLocal: false,
   setBrowseLocal: (v) => set({ browseLocal: v }),
