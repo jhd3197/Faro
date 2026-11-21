@@ -19,6 +19,7 @@
   <strong><a href="https://github.com/jhd3197/faro/releases/latest">Download Faro</a></strong> ·
   <a href="https://www.youtube.com/watch?v=nL9r3c9-5Kc">Watch the demo</a> ·
   <a href="#screenshots">Take a tour</a> ·
+  <a href="#mount-a-server-as-a-folder">Mount as a folder</a> ·
   <a href="#transfers">Transfers</a> ·
   <a href="#agent-bridge">Agent Bridge</a> ·
   <a href="#develop">Build from source</a>
@@ -30,11 +31,18 @@
 
 **Faro is a desktop file client for Windows, macOS, and Linux.** Connect to a server or cloud account, browse files side by side, and transfer folders between them. Open an SSH terminal in the same workspace, edit remote files with your own editor, or give a local AI agent access through the Agent Bridge.
 
+<a name="-mount"></a>
+## Mount a server as a folder
+
+On Windows, right-click a connection or a remote folder, choose **Mount as folder…**, and pick an empty local folder. The server's files appear in Explorer right away and download only when you open them.
+
 <p align="center">
-  <a href="#backends"><img src="docs/images/readme/backends.svg" width="260" alt="17 connection types: servers, buckets, drives, and CMS platforms" /></a>
-  <a href="#quick-start"><img src="docs/images/readme/platforms.svg" width="260" alt="3 desktop platforms: Windows, macOS, and Linux" /></a>
-  <a href="#cli"><img src="docs/images/readme/interfaces.svg" width="260" alt="GUI, CLI, and an MCP bridge: browse by hand or script your work" /></a>
+  <img src="docs/images/readme/mount-demo.gif" width="100%" alt="Demo with fictional data: mounting an SFTP server as a folder, browsing its files in Windows Explorer, and opening a photo to download it" />
 </p>
+
+- Placeholders use the Windows Cloud Files API, the same mechanism OneDrive uses. **Free up space** in Settings › Sync turns downloaded files back into placeholders.
+- Uploads are opt-in: with **Upload files I save here**, saved edits go back to the server. If the server copy changed meanwhile, your edit is kept as a conflict copy. Deletes and renames reach the server only if you also allow them.
+- Run several mounts side by side and manage them in Settings › Sync. Other platforms don't offer mounts.
 
 <a name="-quick-start"></a>
 ## Quick start
@@ -108,6 +116,12 @@ Keep servers in the connection rail, drag files between panes, and save frequent
 
 <a name="-features"></a>
 ## Features
+
+<p align="center">
+  <a href="#backends"><img src="docs/images/readme/backends.svg" width="260" alt="17 connection types: servers, buckets, drives, and CMS platforms" /></a>
+  <a href="#quick-start"><img src="docs/images/readme/platforms.svg" width="260" alt="3 desktop platforms: Windows, macOS, and Linux" /></a>
+  <a href="#cli"><img src="docs/images/readme/interfaces.svg" width="260" alt="GUI, CLI, and an MCP bridge: browse by hand or script your work" /></a>
+</p>
 
 | Files and connections | Tools for daily work |
 |---|---|
