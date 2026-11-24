@@ -204,6 +204,12 @@ windows = { version = "0.58", optional = true, features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# native-tls (reqwest, suppaftp's TLS 1.0/1.1 fallback) links OpenSSL on Linux.
+# Build it in statically so the .deb/.rpm/AppImage don't need the distro's
+# libssl.so.3 — Ubuntu 26.10 ships OpenSSL 4 only (#97).
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
 [dev-dependencies]
 # Paused-clock tokio tests for the transfer token bucket (Plan 17).
 tokio = { version = "1", features = ["test-util"] }

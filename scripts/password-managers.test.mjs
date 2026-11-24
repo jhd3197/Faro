@@ -350,7 +350,13 @@ test("password managers", { timeout: 180000 }, async () => {
     assert.equal(await value("select[aria-label='SSH agent']"), "1password");
     await page.select("select[aria-label='SSH agent']", "custom");
     await page.waitForSelector("input[aria-label='Agent path']");
-    await page.type("input[aria-label='Agent path']", "/run/user/1000/agent.sock");
+    // The field can re-render just after it appears and drop keystrokes under
+    // load (full-suite runs); retype until it holds the whole path.
+    for (let i = 0; i < 5 && (await value("input[aria-label='Agent path']")) !== "/run/user/1000/agent.sock"; i++) {
+      await page.click("input[aria-label='Agent path']", { clickCount: 3 });
+      await page.keyboard.press("Backspace");
+      await page.type("input[aria-label='Agent path']", "/run/user/1000/agent.sock");
+    }
     await clickText("button", "Save");
     await page.waitForFunction(() => !document.querySelector("select[aria-label='SSH agent']"));
     assert.equal((await profile("p-db")).identityAgent, "/run/user/1000/agent.sock");
