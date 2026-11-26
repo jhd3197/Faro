@@ -436,6 +436,11 @@ enum AgentCmd {
     Context,
     /// List the servers the Agent Bridge can currently reach.
     Sessions,
+    /// List the approval requests waiting on the user in Faro right now.
+    ///
+    /// Approving always happens in Faro's UI; the Bridge exposes no approve
+    /// call (a caller can only deny, over the REST endpoint).
+    Approvals,
     /// Run a shell command on a server (SSH or Faro Agent). Exits with its exit code.
     ///
     /// For a multi-line program (heredocs, nested quotes) pass `--file <path>` or
@@ -3065,6 +3070,26 @@ fn cmd_agent(action: AgentCmd) -> Result<()> {
                 let host = s.get("host").and_then(|v| v.as_str()).unwrap_or("");
                 let can_exec = s.get("canExec").and_then(|v| v.as_bool()).unwrap_or(false);
                 println!("{name:<24} {proto:<6} {host:<28} exec={can_exec}");
+            }
+            Ok(())
+        }
+        AgentCmd::Approvals => {
+            let body = http_get(&ep, "/approvals")?;
+            let approvals = body
+                .get("approvals")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if approvals.is_empty() {
+                eprintln!("No approval requests are waiting.");
+            }
+            for a in &approvals {
+                let id = a.get("requestId").and_then(|v| v.as_str()).unwrap_or("?");
+                let name = a.get("sessionName").and_then(|v| v.as_str()).unwrap_or("?");
+                let kind = a.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+                let command = a.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                let preview: String = command.lines().next().unwrap_or("").chars().take(60).collect();
+                println!("{id}  {name:<24} {kind:<10} {preview}");
             }
             Ok(())
         }
