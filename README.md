@@ -81,60 +81,35 @@ Faro's desktop builds do not yet have an Apple notarization or Windows code-sign
 
 Keep servers in the connection rail, drag files between panes, and save frequently used folders as site shortcuts.
 
-<a href="docs/screenshots/overview.png"><img src="docs/images/readme/frames/overview.webp" width="100%" alt="Faro dual-pane file browser with a local folder and an SFTP server" /></a>
+<a href="docs/screenshots/overview.png"><img src="docs/images/readme/frames/overview.webp" alt="Faro dual-pane file browser with a local folder and an SFTP server" /></a>
 
 <sub>App screenshots use fictional demo data, including hostnames, paths, and transfer speeds. [Reproduce the screenshots](docs/screenshots/CAPTURE.md).</sub>
 
-### Open a terminal where you work
-
-Use an SSH shell alongside the file browser.
-
-<a href="docs/screenshots/terminal.png"><img src="docs/images/readme/frames/terminal.webp" width="100%" alt="SSH terminal in Faro" /></a>
-
-### See what is taking up space
-
-Explore a folder with a treemap and size-ranked tree.
-
-<a href="docs/screenshots/disk-usage.png"><img src="docs/images/readme/frames/disk-usage.webp" width="100%" alt="Disk Usage Explorer with a treemap and size-ranked folders" /></a>
+| Open a terminal where you work | See what is taking up space |
+|---|---|
+| <a href="docs/screenshots/terminal.png"><img src="docs/images/readme/frames/terminal.webp" alt="SSH terminal in Faro" /></a> | <a href="docs/screenshots/disk-usage.png"><img src="docs/images/readme/frames/disk-usage.webp" alt="Disk Usage Explorer with a treemap and size-ranked folders" /></a> |
+| Use an SSH shell alongside the file browser. | Explore a folder with a treemap and size-ranked tree. |
 
 <details>
 <summary><strong>More views: transfers, sync, cloud storage, and settings</strong></summary>
 
-**Transfer queue**
+| Transfer queue | Directory sync |
+|---|---|
+| <a href="docs/screenshots/transfers.png"><img src="docs/images/readme/frames/transfers.webp" alt="Transfer progress and queue" /></a> | <a href="docs/screenshots/sync.png"><img src="docs/images/readme/frames/sync.webp" alt="Preview of a directory sync plan" /></a> |
 
-<a href="docs/screenshots/transfers.png"><img src="docs/images/readme/frames/transfers.webp" width="100%" alt="Transfer progress and queue" /></a>
+| Object storage | Connection rail |
+|---|---|
+| <a href="docs/screenshots/object-storage.png"><img src="docs/images/readme/frames/object-storage.webp" alt="S3 bucket browser" /></a> | <a href="docs/screenshots/server-rail.png"><img src="docs/images/readme/frames/server-rail.webp" alt="Expanded connection rail" /></a> |
 
-**Directory sync**
+| Agent Bridge | Command approval |
+|---|---|
+| <a href="docs/screenshots/agent-bridge.png"><img src="docs/images/readme/frames/agent-bridge.webp" alt="Agent Bridge sessions and tools" /></a> | <a href="docs/screenshots/agent-bridge-approve.png"><img src="docs/images/readme/frames/agent-bridge-approve.webp" alt="Agent command awaiting approval" /></a> |
 
-<a href="docs/screenshots/sync.png"><img src="docs/images/readme/frames/sync.webp" width="100%" alt="Preview of a directory sync plan" /></a>
+| New connection | Settings |
+|---|---|
+| <a href="docs/screenshots/new-connection.png"><img src="docs/images/readme/frames/new-connection.webp" alt="Connection editor" /></a> | <a href="docs/screenshots/settings.png"><img src="docs/images/readme/frames/settings.webp" alt="Faro settings" /></a> |
 
-**Object storage**
-
-<a href="docs/screenshots/object-storage.png"><img src="docs/images/readme/frames/object-storage.webp" width="100%" alt="S3 bucket browser" /></a>
-
-**Connection rail**
-
-<a href="docs/screenshots/server-rail.png"><img src="docs/images/readme/frames/server-rail.webp" width="100%" alt="Expanded connection rail" /></a>
-
-**Agent Bridge**
-
-<a href="docs/screenshots/agent-bridge.png"><img src="docs/images/readme/frames/agent-bridge.webp" width="100%" alt="Agent Bridge sessions and tools" /></a>
-
-**Command approval**
-
-<a href="docs/screenshots/agent-bridge-approve.png"><img src="docs/images/readme/frames/agent-bridge-approve.webp" width="100%" alt="Agent command awaiting approval" /></a>
-
-**New connection**
-
-<a href="docs/screenshots/new-connection.png"><img src="docs/images/readme/frames/new-connection.webp" width="100%" alt="Connection editor" /></a>
-
-**Settings**
-
-<a href="docs/screenshots/settings.png"><img src="docs/images/readme/frames/settings.webp" width="100%" alt="Faro settings" /></a>
-
-**File actions**
-
-<a href="docs/screenshots/context-menu.png"><img src="docs/images/readme/frames/context-menu.webp" width="100%" alt="File actions context menu" /></a>
+<a href="docs/screenshots/context-menu.png"><img src="docs/images/readme/frames/context-menu.webp" alt="File actions context menu" /></a>
 
 </details>
 <!-- FARO:SHOTS:END -->
