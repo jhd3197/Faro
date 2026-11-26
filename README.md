@@ -9,7 +9,7 @@
 <p align="center"><strong>A modern desktop client for SFTP, FTP, SSH, S3-compatible storage, WebDAV, and cloud storage.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/badge/version-1.4.6-f0a63c?style=flat-square&amp;labelColor=111317" alt="Latest release" /></a>
+  <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/badge/version-1.4.21-f0a63c?style=flat-square&amp;labelColor=111317" alt="Latest release" /></a>
   <a href="https://github.com/jhd3197/faro/releases"><img src="https://img.shields.io/github/downloads/jhd3197/faro/total?style=flat-square&amp;color=f0a63c&amp;labelColor=111317" alt="Downloads" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f0a63c?style=flat-square&amp;labelColor=111317" alt="MIT license" /></a>
   <a href="https://discord.gg/ZKk6tkCQfG"><img src="https://img.shields.io/badge/Discord-join_the_community-f0a63c?style=flat-square&amp;labelColor=111317" alt="Join the Faro Discord" /></a>
