@@ -38,7 +38,8 @@ if (!chrome) {
 }
 
 // name = file in docs/screenshots (without .png); title = the large heading on the frame.
-// crop = optional [x, y, width, height] region of the screenshot, in screenshot pixels.
+// crop = optional [x, y, width, height] region of the screenshot, in screenshot pixels,
+// scaled down when needed so it fits the window height.
 const frames = [
   { name: 'overview', title: 'Side by side' },
   { name: 'terminal', title: 'Terminal where you work' },
@@ -46,8 +47,8 @@ const frames = [
   { name: 'transfers', title: 'Transfer queue' },
   { name: 'sync', title: 'Directory sync' },
   { name: 'object-storage', title: 'Object storage' },
-  // The rail capture is a tall, narrow strip. Show its top part at full resolution.
-  { name: 'server-rail', title: 'Connection rail', crop: [0, 0, 600, 780] },
+  // The rail capture is a tall, narrow strip: show it down to the Agent Bridge entry.
+  { name: 'server-rail', title: 'Connection rail', crop: [0, 0, 600, 1300] },
   { name: 'agent-bridge', title: 'Agent Bridge' },
   { name: 'agent-bridge-approve', title: 'Command approval' },
   { name: 'new-connection', title: 'New connection' },
@@ -60,13 +61,14 @@ const WIN_W = 1344, WIN_H = 840, WIN_TOP = 170; // framed window for 16:10 captu
 
 const markSvg = `<svg viewBox="383 262 254 567" width="100%" height="100%"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#17120a"/><stop offset=".45" stop-color="#b9831f"/><stop offset=".8" stop-color="#f5c463"/><stop offset="1" stop-color="#fff1c9"/></linearGradient></defs><rect x="${markRect[0]}" y="${markRect[1]}" width="${markRect[2]}" height="${markRect[3]}" fill="url(#g)"/><path fill="#e8eaee" fill-rule="evenodd" d="${markPath}"/></svg>`;
 
-function page({ title, dataUri, crop }) {
-  const cw = crop ? crop[2] : WIN_W;
-  const ch = crop ? crop[3] : WIN_H;
+function page({ title, dataUri, crop, pngWidth }) {
+  const k = crop ? Math.min(1, WIN_H / crop[3], WIN_W / crop[2]) : 1;
+  const cw = crop ? Math.round(crop[2] * k) : WIN_W;
+  const ch = crop ? Math.round(crop[3] * k) : WIN_H;
   const left = Math.round((W - cw) / 2);
   const top = WIN_TOP + Math.round((WIN_H - ch) / 2);
   const img = crop
-    ? `<img src="${dataUri}" style="position:absolute;left:${-crop[0]}px;top:${-crop[1]}px" />`
+    ? `<img src="${dataUri}" style="position:absolute;left:${-crop[0] * k}px;top:${-crop[1] * k}px;width:${pngWidth * k}px" />`
     : `<img src="${dataUri}" style="width:100%;display:block" />`;
   return `<!doctype html><meta charset="utf-8"><style>
 *{box-sizing:border-box;margin:0}
@@ -122,8 +124,10 @@ try {
   for (const f of frames) {
     const file = path.join(shots, `${f.name}.png`);
     if (!existsSync(file)) { console.warn(`skip ${f.name}: ${file} not found`); continue; }
-    const dataUri = `data:image/png;base64,${readFileSync(file).toString('base64')}`;
-    await tab.setContent(page({ title: f.title, dataUri, crop: f.crop }), { waitUntil: 'load' });
+    const png = readFileSync(file);
+    const pngWidth = png.readUInt32BE(16); // IHDR width
+    const dataUri = `data:image/png;base64,${png.toString('base64')}`;
+    await tab.setContent(page({ title: f.title, dataUri, crop: f.crop, pngWidth }), { waitUntil: 'load' });
     await tab.evaluate(() => document.fonts.ready);
     const buf = await tab.screenshot({ type: 'webp', quality: 94 });
     writeFileSync(path.join(out, `${f.name}.webp`), buf);

@@ -19,7 +19,7 @@ That script (`scripts/capture-screenshots.mjs`):
    Rust backend**;
 2. drives the UI with headless Chrome/Edge (via `puppeteer-core`, using an
    already-installed browser — no download) into each state and writes the PNGs
-   here.
+   here. Set `CHROME_PATH` if your browser is not in a standard location.
 
 No real servers, credentials, or network are involved.
 
@@ -34,6 +34,7 @@ No real servers, credentials, or network are involved.
 | `transfers.png` | Transfers panel (progress + queued/done) |
 | `sync.png` | Directory-sync plan |
 | `agent-bridge.png` | Agent Bridge panel |
+| `agent-bridge-approve.png` | Agent command approval prompt |
 | `new-connection.png` | Profile editor (two-pane, grouped protocol rail) |
 | `settings.png` | Settings |
 | `disk-usage.png` | Disk Usage explorer — treemap + size-ranked list |
