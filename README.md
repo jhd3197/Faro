@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshots/poster.png" width="100%" alt="Faro: modern file access for servers and cloud" />
+  <img src="docs/images/readme/hero-banner.jpg" width="100%" alt="Faro: your files, wherever you work. File and Agent Remote Operations over SFTP, FTP, SSH, S3, WebDAV, and cloud storage." />
 </p>
 
 <h1 align="center">Faro</h1>
@@ -9,10 +9,10 @@
 <p align="center"><strong>A modern desktop client for SFTP, FTP, SSH, S3-compatible storage, WebDAV, and cloud storage.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/badge/version-1.4.6-e9bd69?style=flat-square&amp;labelColor=181e28" alt="Latest release" /></a>
-  <a href="https://github.com/jhd3197/faro/releases"><img src="https://img.shields.io/github/downloads/jhd3197/faro/total?style=flat-square&amp;color=e9bd69&amp;labelColor=181e28" alt="Downloads" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-e9bd69?style=flat-square&amp;labelColor=181e28" alt="MIT license" /></a>
-  <a href="https://discord.gg/ZKk6tkCQfG"><img src="https://img.shields.io/badge/Discord-join_the_community-e9bd69?style=flat-square&amp;labelColor=181e28" alt="Join the Faro Discord" /></a>
+  <a href="https://github.com/jhd3197/faro/releases/latest"><img src="https://img.shields.io/badge/version-1.4.6-f0a63c?style=flat-square&amp;labelColor=111317" alt="Latest release" /></a>
+  <a href="https://github.com/jhd3197/faro/releases"><img src="https://img.shields.io/github/downloads/jhd3197/faro/total?style=flat-square&amp;color=f0a63c&amp;labelColor=111317" alt="Downloads" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f0a63c?style=flat-square&amp;labelColor=111317" alt="MIT license" /></a>
+  <a href="https://discord.gg/ZKk6tkCQfG"><img src="https://img.shields.io/badge/Discord-join_the_community-f0a63c?style=flat-square&amp;labelColor=111317" alt="Join the Faro Discord" /></a>
 </p>
 
 <p align="center">
@@ -81,13 +81,13 @@ Faro's desktop builds do not yet have an Apple notarization or Windows code-sign
 
 Keep servers in the connection rail, drag files between panes, and save frequently used folders as site shortcuts.
 
-![Faro dual-pane file browser with a local folder and an SFTP server](docs/screenshots/overview.png)
+![Illustration of Faro's dual-pane file browser with a local folder and an SFTP server](docs/images/readme/tour/overview.jpg)
 
-<sub>App screenshots use fictional demo data, including hostnames, paths, and transfer speeds. [Reproduce the screenshots](docs/screenshots/CAPTURE.md).</sub>
+<sub>Illustrations with fictional sample data, not screenshots. Real captures are in [docs/screenshots](docs/screenshots/).</sub>
 
 | Open a terminal where you work | See what is taking up space |
 |---|---|
-| ![SSH terminal in Faro](docs/screenshots/terminal.png) | ![Disk Usage Explorer with a treemap and size-ranked folders](docs/screenshots/disk-usage.png) |
+| ![Illustration of an SSH terminal next to the file browser](docs/images/readme/tour/terminal.jpg) | ![Illustration of the Disk Usage Explorer with a treemap and size-ranked folders](docs/images/readme/tour/disk-usage.jpg) |
 | Use an SSH shell alongside the file browser. | Explore a folder with a treemap and size-ranked tree. |
 
 <details>
@@ -95,33 +95,27 @@ Keep servers in the connection rail, drag files between panes, and save frequent
 
 | Transfer queue | Directory sync |
 |---|---|
-| ![Transfer progress and queue](docs/screenshots/transfers.png) | ![Preview of a directory sync plan](docs/screenshots/sync.png) |
+| ![Illustration of the transfer progress and queue](docs/images/readme/tour/transfers.jpg) | ![Illustration of a directory sync plan preview](docs/images/readme/tour/sync.jpg) |
 
 | Object storage | Connection rail |
 |---|---|
-| ![S3 bucket browser](docs/screenshots/object-storage.png) | ![Expanded connection rail](docs/screenshots/server-rail.png) |
+| ![Illustration of an S3 bucket browser](docs/images/readme/tour/object-storage.jpg) | ![Illustration of the expanded connection rail](docs/images/readme/tour/connection-rail.jpg) |
 
 | Agent Bridge | Command approval |
 |---|---|
-| ![Agent Bridge sessions and tools](docs/screenshots/agent-bridge.png) | ![Agent command awaiting approval](docs/screenshots/agent-bridge-approve.png) |
+| ![Illustration of Agent Bridge sessions and tools](docs/images/readme/tour/agent-bridge.jpg) | ![Illustration of an agent command awaiting approval](docs/images/readme/tour/agent-approval.jpg) |
 
 | New connection | Settings |
 |---|---|
-| ![Connection editor](docs/screenshots/new-connection.png) | ![Faro settings](docs/screenshots/settings.png) |
+| ![Illustration of the connection editor](docs/images/readme/tour/new-connection.jpg) | ![Illustration of Faro settings](docs/images/readme/tour/settings.jpg) |
 
-![File actions context menu](docs/screenshots/context-menu.png)
+![Illustration of the file actions context menu](docs/images/readme/tour/context-menu.jpg)
 
 </details>
 <!-- FARO:SHOTS:END -->
 
 <a name="-features"></a>
 ## Features
-
-<p align="center">
-  <a href="#backends"><img src="docs/images/readme/backends.svg" width="260" alt="17 connection types: servers, buckets, drives, and CMS platforms" /></a>
-  <a href="#quick-start"><img src="docs/images/readme/platforms.svg" width="260" alt="3 desktop platforms: Windows, macOS, and Linux" /></a>
-  <a href="#cli"><img src="docs/images/readme/interfaces.svg" width="260" alt="GUI, CLI, and an MCP bridge: browse by hand or script your work" /></a>
-</p>
 
 | Files and connections | Tools for daily work |
 |---|---|

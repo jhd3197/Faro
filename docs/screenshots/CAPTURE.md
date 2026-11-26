@@ -1,9 +1,10 @@
 # Screenshots — how they're made
 
 The PNGs in this folder are **auto-generated** from a mock-data demo build, so
-every hostname, IP, username, path, and metric is fictional. They render in the
-README's **Screenshots** section (between the `<!-- FARO:SHOTS:START -->` and
-`<!-- FARO:SHOTS:END -->` markers).
+every hostname, IP, username, path, and metric is fictional. They are the real
+captures of the demo build. The README's **Screenshots** section (between the
+`<!-- FARO:SHOTS:START -->` and `<!-- FARO:SHOTS:END -->` markers) currently shows
+illustrations from `docs/images/readme/tour/` instead.
 
 ## Regenerate them
 
@@ -49,5 +50,5 @@ No real servers, credentials, or network are involved.
 - **Preview the demo build by hand**: `npm run dev:mock`, then open
   http://localhost:1425.
 
-If you add a shot, also add its `docs/screenshots/<name>.png` reference inside
-the `FARO:SHOTS` block in `README.md`.
+If you add a shot, also add a reference to it inside the `FARO:SHOTS` block in
+`README.md` (use `docs/screenshots/<name>.png` for a real capture).
