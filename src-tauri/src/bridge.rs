@@ -19,7 +19,11 @@
 //!     (emit event → await oneshot → resolve), UNLESS the user has relaxed the
 //!     approval policy (allow-all, auto-approve read-only ops, or auto-approve
 //!     safe read-only commands). The policy + the per-profile allow-list are
-//!     persisted to `bridge.json` so they survive restarts/reconnects.
+//!     persisted to `bridge.json` so they survive restarts/reconnects,
+//!   * a caller can see which approvals are waiting and deny one
+//!     (`GET /approvals` / `POST /approvals/deny`) but can never approve —
+//!     approving happens in Faro's UI, at the computer (the rule vela.rs
+//!     documents for the companion).
 
 use crate::AppState;
 use anyhow::{anyhow, Context, Result};
@@ -1495,6 +1499,8 @@ async fn route(app: &AppHandle, state: &Arc<BridgeState>, req: &Request) -> (u16
         ),
         ("GET", "/context") => op_context(app, state).await,
         ("GET", "/sessions") => handle_sessions(app, state).await,
+        ("GET", "/approvals") => handle_approvals(state).await,
+        ("POST", "/approvals/deny") => handle_approval_deny(state, &req.body).await,
         ("POST", "/direct/authorize") => handle_direct_authorize(app, state, &req.body).await,
         ("POST", "/direct/report") => handle_direct_report(app, state, &req.body).await,
         ("GET", "/direct/profiles") => handle_direct_profiles(app, state).await,
@@ -1546,6 +1552,52 @@ async fn handle_sessions(app: &AppHandle, state: &Arc<BridgeState>) -> (u16, Val
         }
     }
     (200, json!({ "sessions": out }))
+}
+
+/// `GET /approvals` — the approval prompts waiting on the user right now, so a
+/// caller blocked on one can see what it is waiting for. Read-only.
+async fn handle_approvals(state: &Arc<BridgeState>) -> (u16, Value) {
+    (200, approvals_json(state.pending_approvals().await))
+}
+
+/// The `/approvals` payload: `{"approvals":[{requestId, sessionId, sessionName,
+/// kind, command}…]}` (camelCase from `ApprovalRequest`'s serde). Sorted by
+/// request id so a polling caller sees a stable order — the pending map is a
+/// HashMap, whose iteration order is arbitrary.
+fn approvals_json(mut pending: Vec<ApprovalRequest>) -> Value {
+    pending.sort_by(|a, b| a.request_id.cmp(&b.request_id));
+    json!({ "approvals": pending })
+}
+
+/// Body of `/approvals/deny`: `{ "requestId": "<id>" }`. Anything else — bad
+/// JSON, a missing/empty/non-string id — is a 400.
+fn parse_deny_body(body: &[u8]) -> Result<String, (u16, Value)> {
+    let parsed = parse_body(body)?;
+    let request_id = body_str(&parsed, "requestId");
+    if request_id.is_empty() {
+        return Err((400, json!({"error": "requestId is required"})));
+    }
+    Ok(request_id)
+}
+
+/// `POST /approvals/deny` — resolve ONE waiting approval as Deny. Deny-only by
+/// design (the rule vela.rs documents): approving belongs at the computer,
+/// where the full command and its session are in view, so no route anywhere
+/// approves. Nothing is logged here — the operation waiting on the approval
+/// logs the denial itself when its prompt resolves, exactly as if the user had
+/// clicked Deny in Faro.
+async fn handle_approval_deny(state: &Arc<BridgeState>, body: &[u8]) -> (u16, Value) {
+    let request_id = match parse_deny_body(body) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match state
+        .resolve_approval(&request_id, ApprovalDecision::Deny)
+        .await
+    {
+        Ok(()) => (200, json!({"denied": true, "requestId": request_id})),
+        Err(e) => (404, json!({"error": e.to_string()})),
+    }
 }
 
 fn body_str(v: &Value, key: &str) -> String {
@@ -6839,6 +6891,46 @@ mod tests {
                 .unwrap();
         assert_eq!(a.read, AccessLevel::Auto);
         assert_eq!(serde_json::to_value(a).unwrap()["write"], "ask");
+    }
+
+    #[test]
+    fn deny_body_requires_a_request_id() {
+        assert_eq!(
+            parse_deny_body(br#"{"requestId":"abc-123"}"#).unwrap(),
+            "abc-123"
+        );
+        // Bad JSON, missing / empty / non-string id → all 400.
+        for body in [
+            &b"not json"[..],
+            &br#"{}"#[..],
+            &br#"{"requestId":""}"#[..],
+            &br#"{"requestId":42}"#[..],
+        ] {
+            let (status, _) = parse_deny_body(body).unwrap_err();
+            assert_eq!(status, 400, "body: {}", String::from_utf8_lossy(body));
+        }
+    }
+
+    #[test]
+    fn approvals_json_shapes_and_sorts_the_list() {
+        let mk = |id: &str| ApprovalRequest {
+            request_id: id.to_string(),
+            session_id: "s1".to_string(),
+            session_name: "prod".to_string(),
+            kind: "exec".to_string(),
+            command: "df -h".to_string(),
+        };
+        // The pending map is a HashMap, so the payload sorts by request id.
+        let v = approvals_json(vec![mk("b"), mk("a")]);
+        let list = v["approvals"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["requestId"], "a");
+        assert_eq!(list[1]["requestId"], "b");
+        assert_eq!(list[0]["sessionId"], "s1");
+        assert_eq!(list[0]["sessionName"], "prod");
+        assert_eq!(list[0]["kind"], "exec");
+        assert_eq!(list[0]["command"], "df -h");
+        assert_eq!(approvals_json(Vec::new())["approvals"], json!([]));
     }
 
     // Plan 10 Phase 1: the CLI base64-encodes a script's raw bytes; the bridge

@@ -185,7 +185,7 @@ S3 presets include AWS, Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean Spaces
 
 3. Ask the agent to inspect the server. Faro exposes tools for sessions, commands, files, search, and workflows; command approvals and activity appear in the Bridge panel.
 
-The bridge binds to `127.0.0.1`, requires a per-launch bearer token, and limits access to sessions you enable. Commands require approval by default; you can configure approval policies. The panel records commands, approvals, and denials, and exports a `SKILL.md` for agents using the HTTP API.
+The bridge binds to `127.0.0.1`, requires a per-launch bearer token, and limits access to sessions you enable. Commands require approval by default; you can configure approval policies. A local caller can see which approvals are waiting and deny one (`GET /approvals`, `POST /approvals/deny`) — but never approve: that always happens in Faro itself. The panel records commands, approvals, and denials, and exports a `SKILL.md` for agents using the HTTP API.
 
 <a name="-faro-agent--control-another-machine"></a>
 ## Faro Agent
