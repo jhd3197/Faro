@@ -81,35 +81,60 @@ Faro's desktop builds do not yet have an Apple notarization or Windows code-sign
 
 Keep servers in the connection rail, drag files between panes, and save frequently used folders as site shortcuts.
 
-![Illustration of Faro's dual-pane file browser with a local folder and an SFTP server](docs/images/readme/tour/overview.jpg)
+<a href="docs/screenshots/overview.png"><img src="docs/images/readme/frames/overview.webp" width="100%" alt="Faro dual-pane file browser with a local folder and an SFTP server" /></a>
 
-<sub>Illustrations with fictional sample data, not screenshots. Real captures are in [docs/screenshots](docs/screenshots/).</sub>
+<sub>App screenshots use fictional demo data, including hostnames, paths, and transfer speeds. [Reproduce the screenshots](docs/screenshots/CAPTURE.md).</sub>
 
-| Open a terminal where you work | See what is taking up space |
-|---|---|
-| ![Illustration of an SSH terminal next to the file browser](docs/images/readme/tour/terminal.jpg) | ![Illustration of the Disk Usage Explorer with a treemap and size-ranked folders](docs/images/readme/tour/disk-usage.jpg) |
-| Use an SSH shell alongside the file browser. | Explore a folder with a treemap and size-ranked tree. |
+### Open a terminal where you work
+
+Use an SSH shell alongside the file browser.
+
+<a href="docs/screenshots/terminal.png"><img src="docs/images/readme/frames/terminal.webp" width="100%" alt="SSH terminal in Faro" /></a>
+
+### See what is taking up space
+
+Explore a folder with a treemap and size-ranked tree.
+
+<a href="docs/screenshots/disk-usage.png"><img src="docs/images/readme/frames/disk-usage.webp" width="100%" alt="Disk Usage Explorer with a treemap and size-ranked folders" /></a>
 
 <details>
 <summary><strong>More views: transfers, sync, cloud storage, and settings</strong></summary>
 
-| Transfer queue | Directory sync |
-|---|---|
-| ![Illustration of the transfer progress and queue](docs/images/readme/tour/transfers.jpg) | ![Illustration of a directory sync plan preview](docs/images/readme/tour/sync.jpg) |
+**Transfer queue**
 
-| Object storage | Connection rail |
-|---|---|
-| ![Illustration of an S3 bucket browser](docs/images/readme/tour/object-storage.jpg) | ![Illustration of the expanded connection rail](docs/images/readme/tour/connection-rail.jpg) |
+<a href="docs/screenshots/transfers.png"><img src="docs/images/readme/frames/transfers.webp" width="100%" alt="Transfer progress and queue" /></a>
 
-| Agent Bridge | Command approval |
-|---|---|
-| ![Illustration of Agent Bridge sessions and tools](docs/images/readme/tour/agent-bridge.jpg) | ![Illustration of an agent command awaiting approval](docs/images/readme/tour/agent-approval.jpg) |
+**Directory sync**
 
-| New connection | Settings |
-|---|---|
-| ![Illustration of the connection editor](docs/images/readme/tour/new-connection.jpg) | ![Illustration of Faro settings](docs/images/readme/tour/settings.jpg) |
+<a href="docs/screenshots/sync.png"><img src="docs/images/readme/frames/sync.webp" width="100%" alt="Preview of a directory sync plan" /></a>
 
-![Illustration of the file actions context menu](docs/images/readme/tour/context-menu.jpg)
+**Object storage**
+
+<a href="docs/screenshots/object-storage.png"><img src="docs/images/readme/frames/object-storage.webp" width="100%" alt="S3 bucket browser" /></a>
+
+**Connection rail**
+
+<a href="docs/screenshots/server-rail.png"><img src="docs/images/readme/frames/server-rail.webp" width="100%" alt="Expanded connection rail" /></a>
+
+**Agent Bridge**
+
+<a href="docs/screenshots/agent-bridge.png"><img src="docs/images/readme/frames/agent-bridge.webp" width="100%" alt="Agent Bridge sessions and tools" /></a>
+
+**Command approval**
+
+<a href="docs/screenshots/agent-bridge-approve.png"><img src="docs/images/readme/frames/agent-bridge-approve.webp" width="100%" alt="Agent command awaiting approval" /></a>
+
+**New connection**
+
+<a href="docs/screenshots/new-connection.png"><img src="docs/images/readme/frames/new-connection.webp" width="100%" alt="Connection editor" /></a>
+
+**Settings**
+
+<a href="docs/screenshots/settings.png"><img src="docs/images/readme/frames/settings.webp" width="100%" alt="Faro settings" /></a>
+
+**File actions**
+
+<a href="docs/screenshots/context-menu.png"><img src="docs/images/readme/frames/context-menu.webp" width="100%" alt="File actions context menu" /></a>
 
 </details>
 <!-- FARO:SHOTS:END -->

@@ -1,10 +1,9 @@
 # Screenshots — how they're made
 
 The PNGs in this folder are **auto-generated** from a mock-data demo build, so
-every hostname, IP, username, path, and metric is fictional. They are the real
-captures of the demo build. The README's **Screenshots** section (between the
-`<!-- FARO:SHOTS:START -->` and `<!-- FARO:SHOTS:END -->` markers) currently shows
-illustrations from `docs/images/readme/tour/` instead.
+every hostname, IP, username, path, and metric is fictional. They render in the
+README's **Screenshots** section (between the `<!-- FARO:SHOTS:START -->` and
+`<!-- FARO:SHOTS:END -->` markers).
 
 ## Regenerate them
 
@@ -50,5 +49,8 @@ No real servers, credentials, or network are involved.
 - **Preview the demo build by hand**: `npm run dev:mock`, then open
   http://localhost:1425.
 
-If you add a shot, also add a reference to it inside the `FARO:SHOTS` block in
-`README.md` (use `docs/screenshots/<name>.png` for a real capture).
+The README shows these captures framed on the Faro backdrop. After `npm run shots`,
+run `node scripts/generate-readme-frames.mjs` to rebuild `docs/images/readme/frames/`.
+
+If you add a shot, also add it to the list in `scripts/generate-readme-frames.mjs` and
+reference its frame inside the `FARO:SHOTS` block in `README.md`.
