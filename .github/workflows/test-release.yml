@@ -1,0 +1,478 @@
+name: test-release
+
+# dev → main PR → a downloadable TEST build, with nothing committed.
+#
+# Every time a PR from `dev` into `main` is opened, updated or reopened, this
+# builds the same installers and CLI/daemon binaries as release.yml (macOS
+# universal, Windows, Linux) and publishes them as a GitHub PRERELEASE tagged
+# `test-<short sha>`, so a change can be installed and tried before it ships.
+# You can also run it by hand from the Actions tab.
+#
+# What it never does:
+#   - bump or commit a version (the version is stamped into the build tree only)
+#   - become "Latest" (make_latest is false; prereleases are never "latest")
+#   - ship updater files: no latest.json, no .sig, no updater signing key, so
+#     the in-app updater can never offer a test build
+#   - touch main, or tag a `vX.Y.Z`: real versioned builds come only from
+#     release.yml, on main
+#
+# Version: `<next release>-<run number>`, e.g. 1.4.23-7. WiX (the .msi bundler)
+# only accepts a numeric pre-release (it becomes the MSI's 4th field, 1.4.23.7);
+# a label like `1.4.23-test.7` fails the MSI build. The "test" label lives in
+# the tag (`test-<sha>`) and the release title instead.
+#
+# Only the 5 newest test releases are kept; older `test-*` prereleases and
+# their tags are deleted at the end of a run.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  # A new push to the PR cancels the build of the previous one.
+  group: test-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  # Comment the download link on the PR.
+  pull-requests: write
+
+env:
+  KEEP_TEST_RELEASES: 5
+
+jobs:
+  # ---- 1. Decide the version and tag ---------------------------------------
+  prepare:
+    # Only the dev → main PR (same repo, not a fork), or a manual run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+      short: ${{ steps.ver.outputs.short }}
+      target: ${{ steps.ver.outputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute test version
+        id: ver
+        shell: bash
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The release this build is a rehearsal for: the same "next patch,
+          # unless the manifest is already ahead" rule release.yml uses.
+          manifest="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          last="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' \
+                  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+          if [ -z "$last" ]; then
+            base="$manifest"
+          else
+            v="${last#v}"; IFS=. read -r MA MI PA <<< "$v"
+            base="${MA}.${MI}.$((PA + 1))"
+            if [ "$(printf '%s\n%s\n' "$v" "$manifest" | sort -V | tail -1)" != "$v" ]; then
+              base="$manifest"
+            fi
+          fi
+          # The manifest may carry a pre-release only if a human put it there.
+          base="${base%%-*}"
+          version="${base}-${RUN_NUMBER}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9]{1,5}$ ]] || { echo '::error::Invalid test version'; exit 1; }
+          # PR builds are named for the dev commit under test; the build itself
+          # is the merge of that commit into main.
+          target="${PR_HEAD_SHA:-$EVENT_SHA}"
+          short="${target:0:7}"
+          {
+            echo "version=$version"
+            echo "tag=test-$short"
+            echo "short=$short"
+            echo "target=$target"
+          } >> "$GITHUB_OUTPUT"
+          echo "Test build $version (tag test-$short)"
+
+  # ---- 2. Desktop app (macOS universal, Windows, Linux) ---------------------
+  gui:
+    needs: prepare
+    name: gui (${{ matrix.platform.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: macos-latest
+            args: '--target universal-apple-darwin'
+          - runner: ubuntu-22.04
+            args: ''
+          - runner: windows-latest
+            args: ''
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the test version (not committed)
+        shell: bash
+        run: node scripts/set-build-version.mjs "${{ needs.prepare.outputs.version }}"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: true
+
+      - name: macOS — add universal targets
+        if: matrix.platform.runner == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Linux — install Tauri system deps
+        if: matrix.platform.runner == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Install npm deps
+        run: npm ci
+
+      # No releaseId/tagName: tauri-action only builds and reports the paths.
+      # No updater config and no signing key, so no .sig or latest.json exist.
+      - name: Build + bundle GUI
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: ${{ matrix.platform.args }}
+          projectPath: src-tauri
+
+      # Same portable zip as release.yml: the unpacked .exe, zipped.
+      - name: Windows — package portable zip
+        if: matrix.platform.runner == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          exe=""
+          for candidate in \
+            src-tauri/target/release/Faro.exe \
+            src-tauri/target/release/faro.exe; do
+            if [ -f "$candidate" ]; then exe="$candidate"; break; fi
+          done
+          if [ -z "$exe" ]; then
+            echo "::error::Could not find the built Faro exe under src-tauri/target/release"
+            exit 1
+          fi
+          mkdir -p dist-portable/Faro-portable
+          cp "$exe" dist-portable/Faro-portable/Faro.exe
+          (cd dist-portable && 7z a "Faro_${version}_x64-portable.zip" Faro-portable >/dev/null)
+
+      # Keep the installers only. Updater artifacts (.sig, .tar.gz, latest.json)
+      # are never staged, even if a future config turns them on.
+      - name: Stage installers
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          mkdir -p staged
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const paths = JSON.parse(process.env.ARTIFACT_PATHS || "[]");
+            const keep = /\.(dmg|msi|deb|rpm|AppImage)$|-setup\.exe$/;
+            let n = 0;
+            for (const p of paths) {
+              if (!keep.test(p) || /\.sig$/.test(p)) continue;
+              fs.copyFileSync(p, path.join("staged", path.basename(p)));
+              n++;
+            }
+            if (!n) { console.error("No installers were produced"); process.exit(1); }
+          '
+          if [ -d dist-portable ]; then cp dist-portable/*.zip staged/; fi
+          ls -la staged
+
+      - name: Save installers for publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-gui-${{ matrix.platform.runner }}
+          path: staged/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---- 3. Standalone CLI binary (all platforms) ----------------------------
+  cli:
+    needs: prepare
+    name: cli (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            asset: faro-cli-macos-arm64
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+            asset: faro-cli-macos-x86_64
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: faro-cli-linux-x86_64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: faro-cli-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the test version (not committed)
+        shell: bash
+        run: node scripts/set-build-version.mjs "${{ needs.prepare.outputs.version }}"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: true
+
+      # faro-cli links faro_lib, which pulls in tauri — see release.yml.
+      - name: Linux — install system deps
+        if: matrix.runner == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            pkg-config
+
+      # generate_context! validates frontendDist (../dist) at compile time.
+      - name: Stub frontend dist
+        shell: bash
+        run: |
+          mkdir -p dist
+          echo '<!doctype html><meta charset="utf-8"><title>faro-cli</title>' > dist/index.html
+
+      - name: Build faro-cli
+        working-directory: src-tauri
+        run: cargo build --release -p faro-cli --bin faro-cli --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "${{ matrix.runner }}" = "windows-latest" ]; then
+            cp "src-tauri/target/${{ matrix.target }}/release/faro-cli.exe" "out/${{ matrix.asset }}"
+          else
+            cp "src-tauri/target/${{ matrix.target }}/release/faro-cli" "out/${{ matrix.asset }}"
+          fi
+
+      - name: Save binary for publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binary-${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---- 3b. Faro Agent daemon binary (all platforms) ------------------------
+  daemon:
+    needs: prepare
+    name: daemon (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            asset: faro-agentd-macos-arm64
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+            asset: faro-agentd-macos-x86_64
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: faro-agentd-linux-x86_64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: faro-agentd-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the test version (not committed)
+        shell: bash
+        run: node scripts/set-build-version.mjs "${{ needs.prepare.outputs.version }}"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: true
+
+      - name: Build faro-agentd
+        working-directory: src-tauri
+        run: cargo build --release -p faro-agentd --bin faro-agentd --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "${{ matrix.runner }}" = "windows-latest" ]; then
+            cp "src-tauri/target/${{ matrix.target }}/release/faro-agentd.exe" "out/${{ matrix.asset }}"
+          else
+            cp "src-tauri/target/${{ matrix.target }}/release/faro-agentd" "out/${{ matrix.asset }}"
+          fi
+
+      - name: Save binary for publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binary-${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---- 4. Publish the prerelease -------------------------------------------
+  publish:
+    needs: [prepare, gui, cli, daemon]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built installers and binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-*
+          path: assets
+          merge-multiple: true
+
+      # Fails the run if anything an updater could pick up got this far, or a
+      # platform is missing.
+      - name: Check the files to publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          cd assets
+          ls -la
+          if ls | grep -E '\.sig$|\.tar\.gz$|^latest\.json$'; then
+            echo '::error::Updater files must never be part of a test release'; exit 1
+          fi
+          for f in \
+            "Faro_${version}_universal.dmg" \
+            "Faro_${version}_x64-setup.exe" \
+            "Faro_${version}_x64_en-US.msi" \
+            "Faro_${version}_x64-portable.zip" \
+            "Faro_${version}_amd64.AppImage" \
+            "Faro_${version}_amd64.deb" \
+            faro-cli-macos-arm64 faro-cli-macos-x86_64 faro-cli-linux-x86_64 faro-cli-windows-x86_64.exe \
+            faro-agentd-macos-arm64 faro-agentd-macos-x86_64 faro-agentd-linux-x86_64 faro-agentd-windows-x86_64.exe; do
+            test -s "$f" || { echo "::error::Missing or empty: $f"; exit 1; }
+          done
+          ls Faro-*.rpm >/dev/null 2>&1 || { echo '::error::Missing the .rpm'; exit 1; }
+          sha256sum -- * > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET: ${{ needs.prepare.outputs.target }}
+          SHORT: ${{ needs.prepare.outputs.short }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh_() { node scripts/release-tools.mjs gh "$@"; }
+          {
+            echo "**Test build — not a release.** Built from the \`dev\` → \`main\` PR at \`${SHORT}\` as version \`${VERSION}\`. It is unsigned, never offered by the in-app updater, and may be deleted when newer test builds appear."
+            echo
+            echo "- **Windows:** \`Faro_${VERSION}_x64-setup.exe\`, \`Faro_${VERSION}_x64_en-US.msi\`, or the portable zip"
+            echo "- **macOS:** \`Faro_${VERSION}_universal.dmg\` (unsigned: run \`xattr -c\` on the app once)"
+            echo "- **Linux:** the AppImage, \`.deb\` or \`.rpm\`"
+            echo "- \`faro-cli-*\` and \`faro-agentd-*\` are the standalone binaries; \`SHA256SUMS.txt\` has every checksum."
+            echo
+            echo "Stable releases are on the [Releases page](https://github.com/${REPO}/releases/latest)."
+          } > notes.md
+          # A re-run for the same commit replaces its earlier test release.
+          if gh_ release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh_ release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
+          fi
+          gh_ release create "$TAG" assets/* --repo "$REPO" --draft \
+            --target "$TARGET" --title "Faro test build ${SHORT} (${VERSION})" --notes-file notes.md
+          gh_ release edit "$TAG" --repo "$REPO" --draft=false --prerelease --latest=false
+          echo "Published https://github.com/${REPO}/releases/tag/${TAG}"
+
+      # Safe by construction: only `test-*` tags that are prereleases or
+      # drafts, newest KEEP_TEST_RELEASES stay, nothing else is touched.
+      - name: Delete older test releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh_() { node scripts/release-tools.mjs gh "$@"; }
+          gh_ release list --repo "$REPO" --limit 100 --json tagName,isPrerelease,isDraft,createdAt > all.json
+          jq -r --argjson keep "$KEEP_TEST_RELEASES" '
+            map(select((.tagName | startswith("test-")) and (.isPrerelease or .isDraft)))
+            | sort_by(.createdAt) | reverse | .[$keep:] | .[].tagName' all.json > stale.txt
+          while read -r tag; do
+            [ -z "$tag" ] && continue
+            echo "Deleting old test release $tag"
+            gh_ release delete "$tag" --repo "$REPO" --yes --cleanup-tag || echo "::warning::Could not delete $tag"
+          done < stale.txt
+
+      - name: Comment the downloads on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh pr comment "$PR" --repo "$REPO" --edit-last --create-if-none --body "Test build \`${VERSION}\` is ready: https://github.com/${REPO}/releases/tag/${TAG}
+
+          It is a prerelease: not the latest release, and the in-app updater will not offer it. Each push to this PR replaces it with a new build."
