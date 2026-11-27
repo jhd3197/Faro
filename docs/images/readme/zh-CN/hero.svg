@@ -1,28 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="390" viewBox="0 0 1280 390" role="img" aria-labelledby="title">
 <title id="title">Faro。无论在哪里工作，都能访问你的文件。文件与智能体远程操作。</title>
-<rect width="1280" height="390" rx="16" fill="#10141c"/>
+<defs>
+<linearGradient id="glass" x1="0" x2="1"><stop offset="0" stop-color="#17120a"/><stop offset=".45" stop-color="#b9831f"/><stop offset=".8" stop-color="#f5c463"/><stop offset="1" stop-color="#fff1c9"/></linearGradient>
+<radialGradient id="glow" cx="1" cy="0" r="1"><stop offset="0" stop-color="#f0a63c" stop-opacity=".16"/><stop offset="1" stop-color="#f0a63c" stop-opacity="0"/></radialGradient>
+<filter id="soft" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+</defs>
+<rect width="1280" height="390" rx="16" fill="#0d0e11"/>
+<rect width="1280" height="390" rx="16" fill="url(#glow)"/>
+<circle cx="747.6" cy="79.8" r="1.2" fill="#f0a63c" opacity="0.26"/><circle cx="1086.2" cy="179.5" r="1.3" fill="#f0a63c" opacity="0.43"/><circle cx="872.7" cy="208.6" r="1.3" fill="#f0a63c" opacity="0.35"/><circle cx="974.0" cy="119.8" r="1.6" fill="#f0a63c" opacity="0.44"/><circle cx="1136.3" cy="200.4" r="1.1" fill="#f0a63c" opacity="0.16"/><circle cx="898.3" cy="194.3" r="0.6" fill="#f0a63c" opacity="0.34"/><circle cx="751.0" cy="54.1" r="1.0" fill="#f0a63c" opacity="0.39"/><circle cx="942.7" cy="107.7" r="1.3" fill="#f0a63c" opacity="0.53"/><circle cx="1140.2" cy="40.3" r="1.0" fill="#f0a63c" opacity="0.32"/><circle cx="847.8" cy="121.0" r="1.2" fill="#f0a63c" opacity="0.23"/><circle cx="1223.2" cy="129.1" r="0.7" fill="#f0a63c" opacity="0.38"/><circle cx="1000.7" cy="130.0" r="1.7" fill="#f0a63c" opacity="0.40"/><circle cx="1243.0" cy="152.4" r="1.2" fill="#f0a63c" opacity="0.49"/><circle cx="750.4" cy="180.4" r="1.0" fill="#f0a63c" opacity="0.27"/><circle cx="818.1" cy="78.7" r="0.8" fill="#f0a63c" opacity="0.53"/><circle cx="890.1" cy="86.0" r="1.2" fill="#f0a63c" opacity="0.39"/><circle cx="1156.3" cy="169.3" r="1.2" fill="#f0a63c" opacity="0.46"/><circle cx="1138.0" cy="201.8" r="1.1" fill="#f0a63c" opacity="0.31"/><circle cx="1051.8" cy="39.6" r="1.5" fill="#f0a63c" opacity="0.45"/><circle cx="763.5" cy="112.7" r="0.7" fill="#f0a63c" opacity="0.25"/><circle cx="947.6" cy="90.7" r="1.1" fill="#f0a63c" opacity="0.17"/><circle cx="964.6" cy="66.8" r="1.2" fill="#f0a63c" opacity="0.39"/><circle cx="897.2" cy="138.9" r="0.7" fill="#f0a63c" opacity="0.24"/><circle cx="1129.8" cy="137.1" r="1.5" fill="#f0a63c" opacity="0.46"/><circle cx="920.6" cy="28.1" r="1.3" fill="#f0a63c" opacity="0.40"/><circle cx="1003.6" cy="64.3" r="1.4" fill="#f0a63c" opacity="0.35"/><circle cx="1171.3" cy="163.7" r="1.4" fill="#f0a63c" opacity="0.37"/><circle cx="1170.9" cy="129.5" r="1.3" fill="#f0a63c" opacity="0.17"/><circle cx="1126.1" cy="97.3" r="0.8" fill="#f0a63c" opacity="0.43"/><circle cx="1060.3" cy="181.6" r="1.6" fill="#f0a63c" opacity="0.49"/><circle cx="795.9" cy="100.4" r="1.6" fill="#f0a63c" opacity="0.23"/><circle cx="1044.4" cy="128.3" r="0.7" fill="#f0a63c" opacity="0.46"/><circle cx="1158.7" cy="154.7" r="1.3" fill="#f0a63c" opacity="0.23"/><circle cx="988.8" cy="197.5" r="1.3" fill="#f0a63c" opacity="0.15"/><circle cx="827.8" cy="194.0" r="1.5" fill="#f0a63c" opacity="0.25"/><circle cx="982.9" cy="142.6" r="1.5" fill="#f0a63c" opacity="0.42"/><circle cx="1005.4" cy="39.5" r="1.2" fill="#f0a63c" opacity="0.16"/><circle cx="991.6" cy="163.5" r="0.8" fill="#f0a63c" opacity="0.52"/><circle cx="845.6" cy="40.5" r="1.6" fill="#f0a63c" opacity="0.50"/><circle cx="782.6" cy="55.3" r="0.7" fill="#f0a63c" opacity="0.37"/><circle cx="1240.2" cy="56.1" r="0.7" fill="#f0a63c" opacity="0.38"/><circle cx="1008.1" cy="111.9" r="1.7" fill="#f0a63c" opacity="0.46"/><circle cx="955.1" cy="37.6" r="1.6" fill="#f0a63c" opacity="0.48"/><circle cx="1063.7" cy="169.6" r="1.2" fill="#f0a63c" opacity="0.23"/><circle cx="1093.0" cy="196.1" r="1.7" fill="#f0a63c" opacity="0.54"/><circle cx="1171.2" cy="44.9" r="0.7" fill="#f0a63c" opacity="0.18"/><circle cx="1084.7" cy="28.2" r="1.4" fill="#f0a63c" opacity="0.46"/><circle cx="1209.2" cy="204.1" r="1.2" fill="#f0a63c" opacity="0.22"/><circle cx="1104.3" cy="62.7" r="1.5" fill="#f0a63c" opacity="0.51"/><circle cx="952.3" cy="88.7" r="1.1" fill="#f0a63c" opacity="0.30"/><circle cx="1110.2" cy="167.7" r="1.1" fill="#f0a63c" opacity="0.28"/><circle cx="1041.4" cy="91.6" r="1.4" fill="#f0a63c" opacity="0.18"/><circle cx="803.6" cy="190.1" r="0.9" fill="#f0a63c" opacity="0.21"/><circle cx="911.2" cy="59.5" r="1.5" fill="#f0a63c" opacity="0.16"/><circle cx="1012.3" cy="84.1" r="1.3" fill="#f0a63c" opacity="0.38"/><circle cx="907.3" cy="151.9" r="1.0" fill="#f0a63c" opacity="0.51"/><circle cx="831.8" cy="76.0" r="1.0" fill="#f0a63c" opacity="0.47"/><circle cx="1165.8" cy="161.4" r="1.1" fill="#f0a63c" opacity="0.33"/><circle cx="773.9" cy="51.5" r="1.3" fill="#f0a63c" opacity="0.27"/><circle cx="941.9" cy="29.7" r="1.0" fill="#f0a63c" opacity="0.30"/><circle cx="996.3" cy="204.1" r="1.5" fill="#f0a63c" opacity="0.21"/><circle cx="1233.1" cy="67.3" r="1.6" fill="#f0a63c" opacity="0.43"/><circle cx="966.9" cy="70.8" r="1.5" fill="#f0a63c" opacity="0.20"/><circle cx="898.1" cy="39.0" r="1.5" fill="#f0a63c" opacity="0.39"/><circle cx="931.9" cy="195.6" r="0.8" fill="#f0a63c" opacity="0.34"/><circle cx="937.4" cy="130.1" r="1.4" fill="#f0a63c" opacity="0.23"/><circle cx="882.8" cy="73.9" r="0.9" fill="#f0a63c" opacity="0.48"/><circle cx="908.9" cy="104.4" r="1.1" fill="#f0a63c" opacity="0.35"/><circle cx="1122.1" cy="116.9" r="1.6" fill="#f0a63c" opacity="0.37"/><circle cx="1165.5" cy="186.1" r="1.4" fill="#f0a63c" opacity="0.20"/><circle cx="1068.1" cy="133.4" r="1.7" fill="#f0a63c" opacity="0.32"/><circle cx="792.5" cy="216.0" r="1.3" fill="#f0a63c" opacity="0.31"/><circle cx="998.4" cy="149.2" r="0.7" fill="#f0a63c" opacity="0.15"/><circle cx="985.6" cy="213.7" r="1.4" fill="#f0a63c" opacity="0.47"/><circle cx="937.7" cy="195.3" r="1.5" fill="#f0a63c" opacity="0.50"/><circle cx="775.4" cy="30.1" r="1.4" fill="#f0a63c" opacity="0.24"/><circle cx="1069.6" cy="199.8" r="0.8" fill="#f0a63c" opacity="0.26"/><circle cx="1094.1" cy="51.0" r="1.1" fill="#f0a63c" opacity="0.20"/><circle cx="1195.0" cy="168.0" r="0.9" fill="#f0a63c" opacity="0.45"/><circle cx="793.2" cy="41.4" r="1.3" fill="#f0a63c" opacity="0.19"/><circle cx="1087.0" cy="149.7" r="0.7" fill="#f0a63c" opacity="0.43"/><circle cx="830.8" cy="70.5" r="1.7" fill="#f0a63c" opacity="0.51"/><circle cx="1138.5" cy="121.1" r="0.8" fill="#f0a63c" opacity="0.34"/><circle cx="1159.0" cy="46.1" r="1.2" fill="#f0a63c" opacity="0.21"/><circle cx="972.9" cy="164.7" r="1.6" fill="#f0a63c" opacity="0.47"/><circle cx="1042.5" cy="85.2" r="1.1" fill="#f0a63c" opacity="0.44"/><circle cx="1064.0" cy="198.3" r="1.7" fill="#f0a63c" opacity="0.55"/><circle cx="1176.5" cy="136.3" r="1.3" fill="#f0a63c" opacity="0.22"/><circle cx="823.8" cy="112.8" r="1.4" fill="#f0a63c" opacity="0.37"/><circle cx="955.7" cy="119.6" r="0.8" fill="#f0a63c" opacity="0.49"/><circle cx="860.3" cy="70.5" r="1.7" fill="#f0a63c" opacity="0.36"/><circle cx="1191.8" cy="76.1" r="0.8" fill="#f0a63c" opacity="0.35"/><circle cx="1021.7" cy="61.7" r="0.9" fill="#f0a63c" opacity="0.37"/><circle cx="1054.4" cy="105.6" r="1.7" fill="#f0a63c" opacity="0.49"/><circle cx="1240.3" cy="209.4" r="1.3" fill="#f0a63c" opacity="0.33"/><circle cx="795.1" cy="89.5" r="1.5" fill="#f0a63c" opacity="0.24"/>
+<rect x=".5" y=".5" width="1279" height="389" rx="15.5" fill="none" stroke="#262a33"/>
+
 <g font-family="Segoe UI, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
-<text x="56" y="62" font-size="18" fill="#e9bd69" font-weight="600" letter-spacing="3">文件与智能体远程操作</text>
-<text x="50" y="186" font-size="120" fill="#f4f1ea" font-weight="650" letter-spacing="-6">Faro</text>
-<text x="56" y="247" font-size="34" fill="#f4f1ea" font-weight="500" >无论在哪里工作，都能访问你的文件。</text>
-<text x="56" y="289" font-size="23" fill="#b2bac7" font-weight="400" >服务器、云存储与远程设备。</text>
-<path d="M56 326L1224 326" stroke="#343b47"/>
-<text x="56" y="360" font-size="16" fill="#e9bd69" font-weight="600" letter-spacing="2">浏览  /  传输  /  自动化</text>
-<text x="1224" y="360" font-size="16" fill="#b2bac7" font-weight="400" text-anchor="end">WINDOWS · macOS · LINUX</text>
-<g fill="none" stroke="#343b47" stroke-width="1.5">
+<text x="56" y="62" font-size="18" fill="#f0a63c" font-weight="600" letter-spacing="3">文件与智能体远程操作</text>
+<text x="50" y="186" font-size="120" fill="#e8eaee" font-weight="650" letter-spacing="-6">Faro</text>
+<text x="56" y="247" font-size="34" fill="#e8eaee" font-weight="500" >无论在哪里工作，都能访问你的文件。</text>
+<text x="56" y="289" font-size="23" fill="#a3aab7" font-weight="400" >服务器、云存储与远程设备。</text>
+<path d="M56 326L1224 326" stroke="#262a33"/>
+<text x="56" y="360" font-size="16" fill="#f0a63c" font-weight="600" letter-spacing="2">浏览  /  传输  /  自动化</text>
+<text x="1224" y="360" font-size="16" fill="#a3aab7" font-weight="400" text-anchor="end">WINDOWS · macOS · LINUX</text>
+<g fill="none" stroke="#262a33" stroke-width="1.5">
 <circle cx="820" cy="168" r="46"/><circle cx="820" cy="168" r="78"/>
 <path d="M866 168H950V82H1008 M898 168H1008 M866 168H950V254H1008"/>
 </g>
-<circle cx="820" cy="168" r="7" fill="#e9bd69"/>
+<circle cx="820" cy="168" r="7" fill="#f0a63c"/>
 
-<rect x="1008" y="57" width="216" height="50" rx="6" fill="#181e28" stroke="#343b47"/>
-<path d="M1027 82h14" stroke="#e9bd69" stroke-width="2"/>
-<text x="1054" y="88" font-size="17" fill="#b2bac7" font-weight="500" letter-spacing="1.5">服务器</text>
-<rect x="1008" y="143" width="216" height="50" rx="6" fill="#181e28" stroke="#343b47"/>
-<path d="M1027 168h14" stroke="#e9bd69" stroke-width="2"/>
-<text x="1054" y="174" font-size="17" fill="#b2bac7" font-weight="500" letter-spacing="1.5">云存储</text>
-<rect x="1008" y="229" width="216" height="50" rx="6" fill="#181e28" stroke="#343b47"/>
-<path d="M1027 254h14" stroke="#e9bd69" stroke-width="2"/>
-<text x="1054" y="260" font-size="17" fill="#b2bac7" font-weight="500" letter-spacing="1.5">远程设备</text>
+<rect x="1008" y="57" width="216" height="50" rx="6" fill="#111317" stroke="#262a33"/>
+<path d="M1027 82h14" stroke="#f0a63c" stroke-width="2"/>
+<text x="1054" y="88" font-size="17" fill="#a3aab7" font-weight="500" letter-spacing="1.5">服务器</text>
+<rect x="1008" y="143" width="216" height="50" rx="6" fill="#111317" stroke="#262a33"/>
+<path d="M1027 168h14" stroke="#f0a63c" stroke-width="2"/>
+<text x="1054" y="174" font-size="17" fill="#a3aab7" font-weight="500" letter-spacing="1.5">云存储</text>
+<rect x="1008" y="229" width="216" height="50" rx="6" fill="#111317" stroke="#262a33"/>
+<path d="M1027 254h14" stroke="#f0a63c" stroke-width="2"/>
+<text x="1054" y="260" font-size="17" fill="#a3aab7" font-weight="500" letter-spacing="1.5">远程设备</text>
 </g>
 </svg>

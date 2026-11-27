@@ -1,0 +1,80 @@
+name: sync-main-to-dev
+
+# After a release lands on main, open a PR main → dev so dev picks up the
+# release bot's version-bump commit (and anything else only on main).
+#
+# It runs when release.yml finishes on main, not on the push itself: the bump
+# commit is pushed by the release job with [skip ci] and the workflow token,
+# which triggers no workflows, so a push trigger would never see it. Waiting
+# for the release also means the PR already contains the bump.
+#
+# It only OPENS the PR, never merges it. The head is `main` itself, so the PR
+# keeps tracking main if it moves again. Nothing runs if dev already contains
+# main, or if a main → dev PR is already open. You can also run it by hand.
+#
+# Needs Settings → Actions → General → "Allow GitHub Actions to create and
+# approve pull requests". PRs opened with the workflow token don't start CI
+# runs; close and reopen the PR (or push to it) if you want checks on it.
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: sync-main-to-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-pr:
+    # After a release that succeeded; a failed or skipped release has nothing new on main.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Is dev behind main?
+        id: behind
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main dev
+          if git merge-base --is-ancestor origin/main origin/dev; then
+            echo "dev already contains main — nothing to sync."
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "behind=true" >> "$GITHUB_OUTPUT"
+            echo "commits=$(git rev-list --count origin/dev..origin/main)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open the main → dev PR
+        if: steps.behind.outputs.behind == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMITS: ${{ steps.behind.outputs.commits }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          open="$(gh pr list --repo "$REPO" --base dev --head main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$open" ]; then
+            echo "main → dev PR #$open is already open and tracks main — nothing to do."
+            exit 0
+          fi
+          git checkout -q origin/main
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          {
+            echo "Merges \`main\` (currently v${version}) into \`dev\` so the version manifests and README badge match the latest release, and \`dev\` has everything that shipped."
+            echo
+            echo "\`dev\` is ${COMMITS} commit(s) behind \`main\`. Opened automatically after the release; it only needs a merge once it looks right. The head is \`main\` itself, so it keeps following it."
+          } > body.md
+          gh pr create --repo "$REPO" --base dev --head main \
+            --title "Sync main into dev (v${version})" --body-file body.md
