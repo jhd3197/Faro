@@ -8,6 +8,11 @@ name: release
 # public GitHub Release anyone can download. You can also trigger it by hand
 # from the Actions tab and pin an explicit version.
 #
+# Real versioned releases come ONLY from main: a manual run from any other
+# branch (dev, a feature branch) fails at the first step instead of pushing
+# that branch to main. To try a dev build, open the dev → main PR: test-release.yml
+# publishes a test prerelease for it (no version bump, never "Latest").
+#
 # Builds are UNSIGNED (no Apple Developer / Windows EV cert). The release notes
 # spell out the one-time macOS `xattr` step and the Windows SmartScreen click-
 # through. To push to main WITHOUT cutting a release, put [skip ci] in the
@@ -42,6 +47,16 @@ jobs:
       tag: ${{ steps.ver.outputs.tag }}
       release_id: ${{ steps.release.outputs.id }}
     steps:
+      # The commit step below pushes HEAD to main, so a run from any other
+      # branch would publish that branch as a release. Stop here instead.
+      - name: Only release from main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Releases are cut from main only (this run is on ${REF}). To try dev, open the dev → main PR for a test build."
+          exit 1
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
