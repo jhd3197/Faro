@@ -151,9 +151,9 @@ npm run tauri icon src-tauri/icons/source.png
 
 ## README artwork
 
-Run `node scripts/generate-readme-art.mjs` from the repository root to regenerate the SVG banner and cards in `docs/images/readme/`. The script owns the charcoal and gold palette, text, and layouts. Use the existing lighthouse icon for the app identity.
+Run `node scripts/generate-readme-art.mjs` from the repository root to regenerate the SVG banner and cards in `docs/images/readme/`. The script owns the palette (night background and lamp-amber accent, matching faroapp.dev), text, and layouts. It draws the lighthouse F from the site's hero mark.
 
-The generator also writes Spanish, Portuguese, and Simplified Chinese artwork to the `es/`, `pt/`, and `zh-CN/` subfolders. Edit the translations in `scripts/readme-art-translations.mjs` and keep the three translated READMEs in `docs/` aligned with the English README. The app screenshots share the English demo interface.
+The generator also writes Spanish, Portuguese, and Simplified Chinese artwork to the `es/`, `pt/`, and `zh-CN/` subfolders. Edit the translations in `scripts/readme-art-translations.mjs` and keep the three translated READMEs in `docs/` aligned with the English README. The app screenshots share the English demo interface. `node scripts/generate-readme-frames.mjs` places each capture from `docs/screenshots/` on the Faro backdrop (title, lighthouse mark, framed window) and writes `docs/images/readme/frames/*.webp`; it needs Chrome or Edge and does not alter the captured UI. Run it again after `npm run shots`.
 
 The transfer cards describe implementation behavior, not measured throughput. Update them when the corresponding limits in `src-tauri/src/transfer/sources.rs` change. Comparative speed claims need a reproducible workload, client versions, server and network details, repeated timings, and integrity checks.
 

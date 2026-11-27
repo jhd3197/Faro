@@ -1,12 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="600" height="340" viewBox="0 0 600 340" role="img" aria-labelledby="title">
 <title id="title">Faro. Seus arquivos, onde você estiver. Operações remotas com arquivos e agentes.</title>
-<rect width="600" height="340" rx="16" fill="#10141c"/>
+<defs>
+<linearGradient id="glass" x1="0" x2="1"><stop offset="0" stop-color="#17120a"/><stop offset=".45" stop-color="#b9831f"/><stop offset=".8" stop-color="#f5c463"/><stop offset="1" stop-color="#fff1c9"/></linearGradient>
+<radialGradient id="glow" cx="1" cy="0" r="1"><stop offset="0" stop-color="#f0a63c" stop-opacity=".16"/><stop offset="1" stop-color="#f0a63c" stop-opacity="0"/></radialGradient>
+<filter id="soft" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+</defs>
+<rect width="600" height="340" rx="16" fill="#0d0e11"/>
+<rect width="600" height="340" rx="16" fill="url(#glow)"/>
+<circle cx="349.1" cy="163.8" r="1.4" fill="#f0a63c" opacity="0.31"/><circle cx="441.5" cy="174.8" r="1.3" fill="#f0a63c" opacity="0.18"/><circle cx="427.9" cy="81.4" r="1.5" fill="#f0a63c" opacity="0.26"/><circle cx="443.0" cy="187.9" r="1.1" fill="#f0a63c" opacity="0.36"/><circle cx="441.0" cy="134.8" r="1.5" fill="#f0a63c" opacity="0.38"/><circle cx="447.4" cy="168.5" r="1.2" fill="#f0a63c" opacity="0.46"/><circle cx="497.6" cy="164.2" r="1.6" fill="#f0a63c" opacity="0.52"/><circle cx="470.8" cy="126.3" r="1.3" fill="#f0a63c" opacity="0.41"/><circle cx="422.2" cy="158.3" r="1.6" fill="#f0a63c" opacity="0.25"/><circle cx="350.8" cy="44.4" r="1.3" fill="#f0a63c" opacity="0.45"/><circle cx="576.6" cy="89.8" r="1.4" fill="#f0a63c" opacity="0.26"/><circle cx="461.2" cy="40.9" r="1.1" fill="#f0a63c" opacity="0.16"/><circle cx="476.4" cy="173.7" r="0.9" fill="#f0a63c" opacity="0.54"/><circle cx="427.0" cy="168.0" r="0.7" fill="#f0a63c" opacity="0.18"/><circle cx="423.9" cy="169.6" r="1.7" fill="#f0a63c" opacity="0.46"/><circle cx="377.9" cy="62.1" r="1.1" fill="#f0a63c" opacity="0.41"/><circle cx="562.0" cy="163.9" r="1.3" fill="#f0a63c" opacity="0.18"/><circle cx="418.3" cy="150.6" r="1.7" fill="#f0a63c" opacity="0.22"/><circle cx="393.3" cy="137.2" r="1.3" fill="#f0a63c" opacity="0.52"/><circle cx="390.0" cy="88.6" r="0.9" fill="#f0a63c" opacity="0.36"/><circle cx="464.4" cy="36.9" r="1.4" fill="#f0a63c" opacity="0.51"/><circle cx="354.2" cy="43.0" r="1.7" fill="#f0a63c" opacity="0.28"/><circle cx="509.0" cy="82.2" r="1.3" fill="#f0a63c" opacity="0.52"/><circle cx="363.9" cy="115.1" r="1.6" fill="#f0a63c" opacity="0.35"/><circle cx="379.9" cy="155.9" r="1.2" fill="#f0a63c" opacity="0.21"/><circle cx="382.4" cy="24.8" r="1.0" fill="#f0a63c" opacity="0.25"/><circle cx="421.9" cy="189.5" r="0.7" fill="#f0a63c" opacity="0.18"/><circle cx="446.7" cy="118.6" r="1.7" fill="#f0a63c" opacity="0.24"/><circle cx="499.8" cy="135.6" r="0.9" fill="#f0a63c" opacity="0.20"/><circle cx="582.9" cy="44.2" r="1.6" fill="#f0a63c" opacity="0.22"/><circle cx="403.5" cy="135.2" r="1.6" fill="#f0a63c" opacity="0.34"/><circle cx="423.3" cy="166.7" r="1.0" fill="#f0a63c" opacity="0.40"/><circle cx="540.9" cy="147.3" r="1.1" fill="#f0a63c" opacity="0.47"/><circle cx="408.8" cy="118.5" r="0.8" fill="#f0a63c" opacity="0.29"/><circle cx="430.3" cy="114.3" r="1.1" fill="#f0a63c" opacity="0.26"/><circle cx="395.0" cy="179.0" r="1.3" fill="#f0a63c" opacity="0.52"/><circle cx="555.9" cy="41.0" r="0.7" fill="#f0a63c" opacity="0.51"/><circle cx="357.8" cy="110.2" r="1.4" fill="#f0a63c" opacity="0.30"/><circle cx="468.2" cy="63.3" r="1.5" fill="#f0a63c" opacity="0.54"/>
+<rect x=".5" y=".5" width="599" height="339" rx="15.5" fill="none" stroke="#262a33"/>
+
 <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<text x="30" y="43" font-size="19" fill="#e9bd69" font-weight="600" letter-spacing="1">ARQUIVOS E AGENTES REMOTOS</text>
-<text x="26" y="150" font-size="106" fill="#f4f1ea" font-weight="650" letter-spacing="-5">Faro</text>
-<text x="30" y="207" font-size="30" fill="#f4f1ea" font-weight="500" >Seus arquivos, onde você estiver.</text>
-<text x="30" y="247" font-size="24" fill="#b2bac7" font-weight="400" >Servidores, nuvem e máquinas remotas.</text>
-<path d="M30 278L570 278" stroke="#343b47"/>
-<text x="30" y="315" font-size="21" fill="#e9bd69" font-weight="500" letter-spacing="1">WINDOWS · macOS · LINUX</text>
+<text x="30" y="43" font-size="19" fill="#f0a63c" font-weight="600" letter-spacing="1">ARQUIVOS E AGENTES REMOTOS</text>
+<text x="26" y="150" font-size="106" fill="#e8eaee" font-weight="650" letter-spacing="-5">Faro</text>
+<text x="30" y="207" font-size="30" fill="#e8eaee" font-weight="500" >Seus arquivos, onde você estiver.</text>
+<text x="30" y="247" font-size="24" fill="#a3aab7" font-weight="400" >Servidores, nuvem e máquinas remotas.</text>
+<path d="M30 278L570 278" stroke="#262a33"/>
+<text x="30" y="315" font-size="21" fill="#f0a63c" font-weight="500" letter-spacing="1">WINDOWS · macOS · LINUX</text>
 </g>
 </svg>
