@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate GitHub workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/release-notes.yml
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/release-notes.yml .github/workflows/test-release.yml .github/workflows/sync-main-to-dev.yml
 
       - name: Setup Node
         uses: actions/setup-node@v4

@@ -21,14 +21,19 @@ const PORT = 1425;
 const URL = `http://localhost:${PORT}/`;
 
 const CHROME_CANDIDATES = [
+  process.env.CHROME_PATH,
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
 ];
-const chrome = CHROME_CANDIDATES.find((p) => existsSync(p));
+const chrome = CHROME_CANDIDATES.find((p) => p && existsSync(p));
 if (!chrome) {
-  console.error("No Chrome/Edge found. Install one or edit CHROME_CANDIDATES.");
+  console.error("No Chrome/Edge found. Install one, set CHROME_PATH, or edit CHROME_CANDIDATES.");
   process.exit(1);
 }
 
@@ -94,7 +99,8 @@ async function main() {
     const root = async () => await page.$("#root");
     const shot = async (name, clip) => {
       const file = path.join(OUT, `${name}.png`);
-      if (clip) await page.screenshot({ path: file, clip });
+      // captureBeyondViewport would resize the page, which closes open menus.
+      if (clip) await page.screenshot({ path: file, clip, captureBeyondViewport: false });
       else await (await root()).screenshot({ path: file });
       console.log("  ✓", `${name}.png`);
     };
@@ -133,12 +139,13 @@ async function main() {
       const el = rows[1] ?? rows[0];
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      // Near the name, so the menu opens beside it rather than mid-list.
+      return { x: r.x + Math.min(160, r.width / 2), y: r.y + r.height / 2 };
     });
     if (rowBox) {
       await page.mouse.click(rowBox.x, rowBox.y, { button: "right" });
-      await settle(450);
-      await shot("context-menu");
+      await settle(900);
+      await shot("context-menu", { x: 0, y: 0, width: 1440, height: 900 });
       await page.keyboard.press("Escape");
     }
 

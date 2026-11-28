@@ -11,21 +11,26 @@ See `PRODUCT.md` for the full pitch.
 
 ## Git & release workflow — read this first
 
-**Two branches, nothing else: `main` and `dev`.**
+**Two long-lived branches: `main` and `dev`. Work reaches them through PRs.**
 
-- **Do all work on `dev`.** Never create per-feature branches (`feat/…`, `fix/…`,
-  `chore/…`) — stay on `dev`.
-- **Commit locally; never push.** Make small, focused commits on `dev` as you go.
-  **Do not `git push`, do not merge into `main`, do not open PRs.** The maintainer
-  reviews the local commits and pushes / merges to `main` himself.
-- **`main` is the release branch.** Every push to `main` auto-cuts a public
-  release (`.github/workflows/release.yml`); `[skip ci]` in the commit message
-  pushes without releasing. Because a push to `main` ships to users, that step is
-  always the maintainer's — not yours.
-- **Shipping a slice = `dev` → `main`, done by the maintainer.** When a slice is
-  complete and verified, say so. If a PR write-up helps, run the **`create-pr`**
-  skill — it only *writes a description file* to `.pr/`, it does not open or push
-  anything.
+- **Feature work: branch from `dev`, open a PR into `dev`.** Name the branch for
+  the work (`feat/…`, `fix/…`, `chore/…`). Small, focused commits.
+- **Never push or merge straight to `main` or `dev`.** `dev` takes feature PRs;
+  `main` is updated only by a `dev` → `main` PR. No force pushes.
+- **`main` is the release branch.** Every push to `main` auto-cuts the next
+  numbered public release (`.github/workflows/release.yml`); `[skip ci]` in the
+  commit message pushes without releasing. Because a merge into `main` ships to
+  users, that step is the maintainer's call. `release.yml` only runs from `main`.
+- **Shipping a slice = a `dev` → `main` PR.** When a slice is complete and
+  verified, say so. If a PR write-up helps, run the **`create-pr`** skill — it
+  only *writes a description file* to `.pr/`, it does not open or push anything.
+- **Every `dev` → `main` PR gets a test build.** `test-release.yml` builds the
+  installers for it and publishes a prerelease tagged `test-<short sha>`. That
+  build has no version bump, is never "Latest", and never reaches the updater.
+  Real versions come only from `main`.
+- **After a release, `main` → `dev`.** `sync-main-to-dev.yml` opens a PR that
+  brings the release bot's version-bump commit back into `dev`. Merge it so
+  `dev` and the next release start from the same version.
 - Use the configured Git author. Do not add AI/model `Co-Authored-By` trailers
   unless Juan explicitly requests an accurate attribution for that commit.
   Never copy a model name from earlier commits or repository instructions.
