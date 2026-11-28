@@ -82,12 +82,12 @@ export function getPane(paneId: string): PaneEntry | undefined {
  *  Idempotent: a second call with the same id returns the live instance. */
 export function acquirePane(
   paneId: string,
-  opts: { sessionId: SessionId; initialCommand?: string }
+  opts: { sessionId: SessionId; initialCommand?: string; shell?: string; cwd?: string }
 ): PaneEntry {
   const existing = panes.get(paneId);
   if (existing) return existing;
 
-  const { sessionId, initialCommand } = opts;
+  const { sessionId, initialCommand, shell, cwd } = opts;
   const {
     terminalFontSize,
     terminalFontFamily,
@@ -210,7 +210,15 @@ export function acquirePane(
   // Open the PTY and wire its lifecycle. Runs once per pane.
   (async () => {
     try {
+      // Output can arrive before `openTerminal` returns the id (a local PTY
+      // asks for the cursor position the moment it starts, and waits for the
+      // answer). Hold it until the id is known instead of dropping it.
+      let early: { terminalId: string; data: string }[] | null = [];
       entry.unlistenData = await onTerminalData((e) => {
+        if (entry.terminalId === null) {
+          if (early && early.length < 500) early.push(e);
+          return;
+        }
         if (e.terminalId === entry.terminalId) term.write(e.data);
       });
       entry.unlistenExit = await onTerminalExit((e) => {
@@ -226,8 +234,13 @@ export function acquirePane(
           );
         }
       });
-      const id = await ipc.openTerminal(sessionId, term.cols || 80, term.rows || 24);
+      const id = await ipc.openTerminal(sessionId, term.cols || 80, term.rows || 24, {
+        shell,
+        cwd,
+      });
       entry.terminalId = id;
+      for (const e of early ?? []) if (e.terminalId === id) term.write(e.data);
+      early = null;
       if (entry.disposed) {
         ipc.closeTerminal(id).catch(() => {});
         return;

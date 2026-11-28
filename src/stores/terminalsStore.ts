@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SessionId } from "@/lib/types";
+import { LOCAL_SESSION, type SessionId } from "@/lib/types";
 import { disposePane } from "@/lib/terminalRegistry";
 
 // A terminal tab owns a LAYOUT TREE of panes (Plan 11 Phase 2). A fresh tab is
@@ -39,6 +39,10 @@ export interface TerminalTab {
   initialPaneId: string;
   /** Sent to that pane's PTY once, right after it opens (e.g. a `cd`). */
   initialCommand?: string;
+  /** Local tabs: the shell profile id every pane of this tab runs. */
+  shell?: string;
+  /** Local tabs: the folder the shell starts in. */
+  cwd?: string;
 }
 
 /** What it takes to reopen a closed tab: a fresh shell on the same session,
@@ -47,6 +51,8 @@ export interface ClosedTab {
   sessionId: SessionId;
   title: string;
   initialCommand?: string;
+  shell?: string;
+  cwd?: string;
 }
 
 /** How many closed tabs "Reopen closed tab" remembers. */
@@ -61,7 +67,7 @@ interface TerminalsState {
   openTab: (
     sessionId: SessionId,
     initialCommand?: string,
-    opts?: { title?: string }
+    opts?: { title?: string; shell?: string; cwd?: string }
   ) => TerminalTab;
   /** Close a tab. Closing the active one focuses its right-hand neighbour in
    *  the same session (else the left one). `remember: false` keeps it off the
@@ -139,6 +145,14 @@ export function sessionTabsOf(tabs: TerminalTab[], sessionId: SessionId): Termin
   return tabs.filter((t) => t.sessionId === sessionId);
 }
 
+/** The tabs the dock shows while `sessionId` is focused: that connection's
+ *  shells, then the local ones (which are on screen for every connection). */
+export function dockTabsOf(tabs: TerminalTab[], sessionId: SessionId | null): TerminalTab[] {
+  const remote =
+    sessionId && sessionId !== LOCAL_SESSION ? sessionTabsOf(tabs, sessionId) : [];
+  return [...remote, ...sessionTabsOf(tabs, LOCAL_SESSION)];
+}
+
 export const useTerminals = create<TerminalsState>((set, get) => ({
   tabs: [],
   activeId: null,
@@ -156,6 +170,8 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
       zoomedPaneId: null,
       initialPaneId: paneId,
       initialCommand,
+      shell: opts?.shell,
+      cwd: opts?.cwd,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
     return tab;
@@ -186,6 +202,8 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
               sessionId: tab.sessionId,
               title: tab.title,
               initialCommand: tab.initialCommand,
+              shell: tab.shell,
+              cwd: tab.cwd,
             },
           ].slice(-CLOSED_TAB_LIMIT);
     set({ tabs, activeId, closed });
@@ -211,7 +229,11 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     if (at < 0) return null;
     const entry = s.closed[at];
     set({ closed: s.closed.filter((_, i) => i !== at) });
-    return get().openTab(sessionId, entry.initialCommand, { title: entry.title });
+    return get().openTab(sessionId, entry.initialCommand, {
+      title: entry.title,
+      shell: entry.shell,
+      cwd: entry.cwd,
+    });
   },
 
   moveTab: (id, index) => {

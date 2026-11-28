@@ -1,3 +1,4 @@
+import { openLocalTerminal } from "./localTerminal";
 import {
   LOCAL_SESSION,
   isImage,
@@ -180,6 +181,10 @@ export const tauriFileSystem: FileSystemAdapter = {
 
   // Reveal the terminal dock and open a fresh shell already cd'd into `path`.
   openTerminal: async (sessionId, path) => {
+    if (sessionId === LOCAL_SESSION) {
+      await openLocalTerminal({ cwd: path });
+      return;
+    }
     useLayout.getState().setTerminalOpen(true);
     useTerminals.getState().openTab(sessionId, `cd ${shQuote(path)}\n`);
   },

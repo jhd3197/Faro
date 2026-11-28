@@ -46,7 +46,9 @@ import {
 } from "@/stores/settingsStore";
 import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
-import { useTerminals, sessionTabsOf } from "@/stores/terminalsStore";
+import { useTerminals, dockTabsOf } from "@/stores/terminalsStore";
+import { openLocalTerminal } from "@/lib/localTerminal";
+import { LOCAL_SESSION } from "@/lib/types";
 import { useServerView } from "@/stores/serverViewStore";
 import { TERMINAL_CHORDS, termTabCommandId } from "@/lib/terminalChords";
 import { SETTINGS_SECTIONS, settingsCommandId } from "@/lib/settingsNav";
@@ -108,7 +110,8 @@ export function useCommands(): Command[] {
   const focusedShell =
     focused?.kind === "file" &&
     focused.isDir &&
-    profiles.find((p) => p.id === focusedProfileId)?.protocol === "sftp";
+    (focused.sessionId === LOCAL_SESSION ||
+      profiles.find((p) => p.id === focusedProfileId)?.protocol === "sftp");
 
   const cmds: Command[] = [
     {
@@ -242,8 +245,16 @@ export function useCommands(): Command[] {
       group: "View",
       icon: <TerminalSquare size={14} />,
       combo: COMMAND_COMBOS["toggle-terminal"],
-      enabled: !!activeSessionId && supportsTerminal,
       run: toggleTerminal,
+    },
+    {
+      id: "new-local-terminal",
+      title: "New Local Terminal",
+      group: "View",
+      icon: <TerminalSquare size={14} />,
+      keywords: "terminal shell local powershell bash zsh cmd wsl this computer",
+      bindable: true,
+      run: () => void openLocalTerminal(),
     },
     {
       id: "open-terminal-here",
@@ -255,6 +266,10 @@ export function useCommands(): Command[] {
       enabled: !!focusedShell,
       run: () => {
         if (focused?.kind !== "file" || !focused.isDir) return;
+        if (focused.sessionId === LOCAL_SESSION) {
+          void openLocalTerminal({ cwd: focused.path });
+          return;
+        }
         useLayout.getState().setTerminalOpen(true);
         const quoted = "'" + focused.path.replace(/'/g, "'\\''") + "'";
         useTerminals.getState().openTab(focused.sessionId, `cd ${quoted}\n`);
@@ -351,7 +366,7 @@ export function useCommands(): Command[] {
   // Terminal split controls — only while a terminal is on screen. They act on
   // the active tab's active pane; the chords are swallowed by xterm (see
   // terminalChords) so they never reach the shell.
-  const terminalActive = terminalOpen && supportsTerminal && !!activeSessionId;
+  const terminalActive = terminalOpen;
   const activeTab = () => {
     const t = useTerminals.getState();
     return t.tabs.find((x) => x.id === t.activeId) ?? null;
@@ -412,7 +427,7 @@ export function useCommands(): Command[] {
   // shell by terminalChords.
   const strip = () => {
     const t = useTerminals.getState();
-    const tabs = activeSessionId ? sessionTabsOf(t.tabs, activeSessionId) : [];
+    const tabs = dockTabsOf(t.tabs, supportsTerminal ? activeSessionId : null);
     return { t, tabs, at: tabs.findIndex((x) => x.id === t.activeId) };
   };
   const goTo = (pick: (n: number, at: number) => number) => {
@@ -434,8 +449,9 @@ export function useCommands(): Command[] {
     keywords: "undo close restore tab shell",
     enabled: terminalActive,
     run: () => {
-      if (!activeSessionId) return;
-      const tab = useTerminals.getState().reopenClosed(activeSessionId);
+      const t = useTerminals.getState();
+      const current = t.tabs.find((x) => x.id === t.activeId)?.sessionId;
+      const tab = t.reopenClosed(current ?? activeSessionId ?? LOCAL_SESSION);
       if (!tab) toast.info("No closed tabs to reopen");
     },
   });

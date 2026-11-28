@@ -11,8 +11,11 @@ import {
   Maximize2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Laptop,
 } from "lucide-react";
-import type { SessionId } from "@/lib/types";
+import { LOCAL_SESSION, type LocalShell, type SessionId } from "@/lib/types";
+import { localShells, openLocalTerminal } from "@/lib/localTerminal";
 import {
   acquirePane,
   getPane,
@@ -24,6 +27,7 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import {
   useTerminals,
+  dockTabsOf,
   type TerminalTab,
   type PaneNode,
   type SplitDir,
@@ -69,7 +73,52 @@ export function TerminalDock({
     null
   );
   const keyOf = useKeyOf();
-  const { stripRef, dragId, onPointerDown, onClickCapture } = useTabDrag(moveTab);
+
+  // The strip shows this connection's shells, then the local ones. A drag
+  // reports an index in the strip; a tab only moves among its own kind.
+  const sessionTabs = dockTabsOf(tabs, sessionId);
+  const remoteCount = sessionTabs.filter((t) => t.sessionId !== LOCAL_SESSION).length;
+  const moveInStrip = (id: string, index: number) => {
+    const local = tabs.find((t) => t.id === id)?.sessionId === LOCAL_SESSION;
+    moveTab(id, local ? index - remoteCount : index);
+  };
+  const { stripRef, dragId, onPointerDown, onClickCapture } = useTabDrag(moveInStrip);
+
+  // A new tab is a shell on the focused server when it has one, else local.
+  const newTab = () => {
+    if (sessionId) openTab(sessionId);
+    else void openLocalTerminal();
+  };
+  const openNewTabMenu = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const shells: LocalShell[] = await localShells(true);
+    const items: MenuItem[] = [];
+    if (sessionId) {
+      items.push({
+        label: "Shell on this server",
+        icon: <TerminalSquare size={12} />,
+        onClick: () => openTab(sessionId),
+        separatorAfter: true,
+      });
+    }
+    if (shells.length === 0) {
+      items.push({
+        label: "No local shell found",
+        icon: <TerminalSquare size={12} />,
+        disabled: true,
+        onClick: () => {},
+      });
+    }
+    for (const shell of shells) {
+      items.push({
+        label: shell.name,
+        icon: <Laptop size={12} />,
+        onClick: () => void openLocalTerminal({ shell: shell.id }),
+      });
+    }
+    setMenu({ x: r.left, y: r.bottom + 4, items });
+  };
 
   // Move the active pane's shell into its own window: hand the live PTY over
   // (scrollback serialized through localStorage) and drop it here.
@@ -102,10 +151,6 @@ export function TerminalDock({
       toast.error("Pop out failed", String(e));
     }
   };
-
-  const sessionTabs = sessionId
-    ? tabs.filter((t) => t.sessionId === sessionId)
-    : [];
 
   // The split items act on the right-clicked tab, so their chord is shown as a
   // hint only (pressed, a chord acts on the active tab, maybe another one).
@@ -270,14 +315,14 @@ export function TerminalDock({
 
   // Open a first shell when the dock is shown for a session that has none.
   useEffect(() => {
-    if (visible && sessionId && sessionTabs.length === 0) {
-      openTab(sessionId);
-    }
+    if (!visible || sessionTabs.length > 0) return;
+    if (sessionId) openTab(sessionId);
+    else void openLocalTerminal();
   }, [visible, sessionId, sessionTabs.length, openTab]);
 
   // While shown, keep the active tab pointed at one in the focused session.
   useEffect(() => {
-    if (!visible || !sessionId) return;
+    if (!visible) return;
     if (!activeId || !sessionTabs.some((t) => t.id === activeId)) {
       const first = sessionTabs[0];
       if (first) setActive(first.id);
@@ -316,17 +361,26 @@ export function TerminalDock({
         {overflow.any && (
           <StripChevron dir="right" disabled={!overflow.right} onClick={() => scrollStrip(1)} />
         )}
-        {sessionId && (
-          <button
-            onClick={() => openTab(sessionId)}
-            title="New shell"
-            className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
-          >
-            <Plus size={12} />
-          </button>
-        )}
+        <button
+          onClick={newTab}
+          onContextMenu={(e) => void openNewTabMenu(e)}
+          title={sessionId ? "New shell (right-click for local shells)" : "New local shell (right-click to choose)"}
+          data-term-new-tab
+          className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
+        >
+          <Plus size={12} />
+        </button>
+        <button
+          onClick={(e) => void openNewTabMenu(e)}
+          title="Choose a shell"
+          aria-label="Choose a shell"
+          data-term-new-tab-menu
+          className="flex h-6 w-4 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
+        >
+          <ChevronDown size={11} />
+        </button>
         <div className="flex-1" />
-        {sessionId && sessionTabs.length > 0 && (
+        {sessionTabs.length > 0 && (
           <button
             onClick={openSplitMenu}
             title="Split terminal"
@@ -335,7 +389,7 @@ export function TerminalDock({
             <SplitSquareHorizontal size={13} />
           </button>
         )}
-        {sessionId && (
+        {sessionTabs.length > 0 && (
           <button
             onClick={openSnippetMenu}
             title="Insert snippet"
@@ -479,7 +533,11 @@ function TabChip({
         dragging && "cursor-grabbing bg-bg-hover opacity-80 shadow-sm ring-1 ring-inset ring-accent/60"
       )}
     >
-      <TerminalSquare size={11} className={cn("shrink-0", active && "text-accent")} />
+      {tab.sessionId === LOCAL_SESSION ? (
+        <Laptop size={11} className={cn("shrink-0", active && "text-accent")} />
+      ) : (
+        <TerminalSquare size={11} className={cn("shrink-0", active && "text-accent")} />
+      )}
       <span className="max-w-[18rem] truncate">{tab.title}</span>
       <span
         role="button"
@@ -626,7 +684,12 @@ function TerminalLeaf({
     const host = hostRef.current;
     const initialCommand =
       tab.initialPaneId === paneId ? tab.initialCommand : undefined;
-    const entry = acquirePane(paneId, { sessionId: tab.sessionId, initialCommand });
+    const entry = acquirePane(paneId, {
+      sessionId: tab.sessionId,
+      initialCommand,
+      shell: tab.shell,
+      cwd: tab.cwd,
+    });
     if (host) entry.attach(host);
     const unsub = entry.subscribe(setState);
     return () => {

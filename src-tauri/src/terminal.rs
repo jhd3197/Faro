@@ -142,6 +142,51 @@ impl PtyManager {
         Ok(id)
     }
 
+    /// Open a shell on this machine (Plan 36 Phase 1). Emits the same
+    /// `terminal://data` / `terminal://exit` events as an SSH shell, so the
+    /// frontend never branches on where a pane runs.
+    pub async fn open_local(
+        &self,
+        shell: &crate::local_shell::LocalShell,
+        cwd: Option<String>,
+        cols: u32,
+        rows: u32,
+        app: AppHandle,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let (id_out, app_out) = (id.clone(), app.clone());
+        let (id_exit, app_exit) = (id.clone(), app);
+        let tx = spawn_local_pty(
+            shell,
+            cwd,
+            cols,
+            rows,
+            move |data| {
+                let _ = app_out.emit(
+                    "terminal://data",
+                    TerminalDataEvent {
+                        terminal_id: id_out.clone(),
+                        data,
+                    },
+                );
+            },
+            move |code| {
+                let _ = app_exit.emit(
+                    "terminal://exit",
+                    TerminalExitEvent {
+                        terminal_id: id_exit,
+                        code,
+                    },
+                );
+            },
+        )?;
+        self.ptys
+            .lock()
+            .await
+            .insert(id.clone(), PtyHandle { tx });
+        Ok(id)
+    }
+
     pub async fn write(&self, id: &str, data: String) -> Result<()> {
         let map = self.ptys.lock().await;
         let h = map
@@ -169,6 +214,115 @@ impl PtyManager {
         }
         Ok(())
     }
+}
+
+/// Start `shell` on a local PTY (ConPTY on Windows). `on_data` gets decoded
+/// output, `on_exit` fires once with the exit code. The returned sender takes
+/// input, resizes and the close request.
+fn spawn_local_pty(
+    shell: &crate::local_shell::LocalShell,
+    cwd: Option<String>,
+    cols: u32,
+    rows: u32,
+    on_data: impl Fn(String) + Send + 'static,
+    on_exit: impl FnOnce(Option<i32>) + Send + 'static,
+) -> Result<mpsc::Sender<PtyCommand>> {
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    use std::io::{Read, Write};
+
+    let size = |cols: u32, rows: u32| PtySize {
+        rows: rows.clamp(1, u16::MAX as u32) as u16,
+        cols: cols.clamp(1, u16::MAX as u32) as u16,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+    let pair = native_pty_system()
+        .openpty(size(cols, rows))
+        .map_err(|e| anyhow!("open pty: {e}"))?;
+
+    let mut cmd = CommandBuilder::new(&shell.program);
+    cmd.args(&shell.args);
+    let start_dir = cwd
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(dirs::home_dir);
+    if let Some(dir) = start_dir {
+        cmd.cwd(dir);
+    }
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| anyhow!("start {}: {e}", shell.name))?;
+    // The slave end belongs to the child now; holding it would keep the PTY
+    // open after the shell exits.
+    drop(pair.slave);
+    let mut killer = child.clone_killer();
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| anyhow!("pty reader: {e}"))?;
+    let mut writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| anyhow!("pty writer: {e}"))?;
+    let master = pair.master;
+
+    let (tx, mut rx) = mpsc::channel::<PtyCommand>(64);
+
+    // Output: PTY → caller.
+    std::thread::spawn(move || {
+        let mut text = Utf8Carry::default();
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let s = text.push(&buf[..n]);
+                    if !s.is_empty() {
+                        on_data(s);
+                    }
+                }
+            }
+        }
+    });
+
+    // Exit: report the code, then have the command thread drop the master. On
+    // Windows the reader only sees end-of-file once the pseudo console is
+    // closed, so it can't be the one that notices the shell is gone.
+    let tx_exit = tx.clone();
+    std::thread::spawn(move || {
+        let code = child.wait().ok().map(|s| s.exit_code() as i32);
+        // Let the last output drain before the PTY closes.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        on_exit(code);
+        let _ = tx_exit.blocking_send(PtyCommand::Close);
+    });
+
+    // Input, resize, close: caller → PTY.
+    std::thread::spawn(move || {
+        while let Some(cmd) = rx.blocking_recv() {
+            match cmd {
+                PtyCommand::Input(bytes) => {
+                    if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                        break;
+                    }
+                }
+                PtyCommand::Resize { cols, rows } => {
+                    let _ = master.resize(size(cols, rows));
+                }
+                PtyCommand::Close => break,
+            }
+        }
+        // Already gone when the shell exited by itself; harmless then.
+        let _ = killer.kill();
+        drop(writer);
+        drop(master);
+    });
+
+    Ok(tx)
 }
 
 /// Decodes a byte stream to text chunk by chunk, holding back a multi-byte
@@ -225,5 +379,69 @@ mod tests {
         }
         let mut c = Utf8Carry::default();
         assert_eq!(c.push(b"x\xffy"), "x\u{FFFD}y", "invalid bytes still replaced");
+    }
+
+    /// A real shell on a real PTY: type a command, read its output, see the
+    /// exit code. Covers ConPTY on Windows and the Unix PTY elsewhere.
+    #[test]
+    fn local_pty_runs_a_shell() {
+        use super::{spawn_local_pty, PtyCommand};
+        use std::sync::{mpsc as std_mpsc, Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        let shell = if cfg!(windows) {
+            crate::local_shell::resolve("cmd")
+        } else {
+            crate::local_shell::LocalShell {
+                id: "sh".into(),
+                name: "sh".into(),
+                program: "/bin/sh".into(),
+                args: vec![],
+            }
+        };
+        let out = Arc::new(Mutex::new(String::new()));
+        let out_w = out.clone();
+        let (exit_tx, exit_rx) = std_mpsc::channel();
+        let tx = spawn_local_pty(
+            &shell,
+            None,
+            100,
+            30,
+            move |s| out_w.lock().unwrap().push_str(&s),
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        )
+        .expect("spawn local shell");
+
+        // The marker is computed by the shell, so an echo of the typed line
+        // can't satisfy the assertion.
+        let line = if cfg!(windows) {
+            "set /a 4000+321\r\n"
+        } else {
+            "echo $((4000+321))\n"
+        };
+        tx.blocking_send(PtyCommand::Input(line.as_bytes().to_vec())).unwrap();
+        tx.blocking_send(PtyCommand::Resize { cols: 120, rows: 40 }).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut answered = false;
+        while !out.lock().unwrap().contains("4321") {
+            // ConPTY asks where the cursor is before it starts the shell and
+            // waits for the reply. xterm answers this in the app.
+            if !answered && out.lock().unwrap().contains("\x1b[6n") {
+                answered = true;
+                tx.blocking_send(PtyCommand::Input(b"\x1b[1;1R".to_vec())).unwrap();
+            }
+            assert!(Instant::now() < deadline, "no output: {:?}", out.lock().unwrap());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let quit = if cfg!(windows) { "exit 7\r\n" } else { "exit 7\n" };
+        tx.blocking_send(PtyCommand::Input(quit.as_bytes().to_vec())).unwrap();
+        let code = exit_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("shell exits");
+        assert_eq!(code, Some(7));
     }
 }

@@ -925,11 +925,18 @@ pub async fn open_terminal(
     session_id: String,
     cols: u32,
     rows: u32,
+    shell: Option<String>,
+    cwd: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     if session_id == LOCAL_SESSION {
-        return Err("Local terminal is not supported".into());
+        let profile = crate::local_shell::resolve(shell.as_deref().unwrap_or(""));
+        return state
+            .ptys
+            .open_local(&profile, cwd, cols, rows, app)
+            .await
+            .map_err(err);
     }
     let ssh = state
         .sessions
@@ -939,6 +946,14 @@ pub async fn open_terminal(
     state
         .ptys
         .open(&ssh, cols, rows, app)
+        .await
+        .map_err(err)
+}
+
+/// Shells installed on this machine, the default first (Plan 36 Phase 1).
+#[tauri::command]
+pub async fn list_local_shells() -> Result<Vec<crate::local_shell::LocalShell>, String> {
+    tokio::task::spawn_blocking(crate::local_shell::list)
         .await
         .map_err(err)
 }

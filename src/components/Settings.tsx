@@ -5,6 +5,7 @@ import { ACCENTS } from "@/lib/accent";
 import type { UiLanguage } from "@/lib/i18n";
 import {
   useSettings,
+  setSetting,
   LIGHT_THEMES,
   DARK_THEMES,
   TERMINAL_THEMES,
@@ -26,7 +27,8 @@ import { useBridge } from "@/stores/bridgeStore";
 import { ipc } from "@/lib/ipc";
 import { toast } from "@/stores/toastStore";
 import { toastError } from "@/lib/errors";
-import type { BackupSummary, CacheId, CacheUsage } from "@/lib/types";
+import type { BackupSummary, CacheId, CacheUsage, LocalShell } from "@/lib/types";
+import { localShells } from "@/lib/localTerminal";
 import { fmtSize } from "@/lib/format";
 import { useBindings } from "@/stores/bindingsStore";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -100,6 +102,7 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "terminalScrollback",
     "terminalCopyOnSelect",
     "terminalSuggestions",
+    "terminalLocalShell",
   ],
   connections: ["defaultPort", "storePasswordsInKeychain", "restoreLastSession"],
   about: ["notifications"],
@@ -645,6 +648,7 @@ export function Settings({ onClose }: Props) {
                 ]}
               />
             </Row>
+            <LocalShellRow />
             <CheckRow
               label="Copy on select"
               keywords="clipboard"
@@ -1655,5 +1659,37 @@ function StorageSettings() {
         );
       })}
     </List>
+  );
+}
+
+/// Which shell a new local terminal tab starts (Plan 36 Phase 1).
+function LocalShellRow() {
+  const value = useSettings((s) => s.terminalLocalShell);
+  const [shells, setShells] = useState<LocalShell[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void localShells().then((list) => {
+      if (alive) setShells(list);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return (
+    <Row
+      label="Local shell"
+      keywords="powershell bash zsh cmd wsl git default this computer"
+      help="The shell a new local terminal tab starts. Right-click the + in the terminal to pick another one for a single tab."
+    >
+      <Select<string>
+        label="Local shell"
+        value={shells.some((s) => s.id === value) ? value : ""}
+        onChange={(v) => setSetting("terminalLocalShell", v)}
+        options={[
+          { value: "", label: shells[0] ? `Default (${shells[0].name})` : "Default" },
+          ...shells.map((s) => ({ value: s.id, label: s.name })),
+        ]}
+      />
+    </Row>
   );
 }

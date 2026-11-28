@@ -1319,6 +1319,15 @@ export {
 // reference FileKind below.
 import type { FileKind } from "@faro/file-ui";
 
+/** A shell installed on this machine (Plan 36 Phase 1). */
+export interface LocalShell {
+  /** Stable id: `pwsh`, `cmd`, `git-bash`, `wsl:<distro>`, `zsh`, … */
+  id: string;
+  name: string;
+  program: string;
+  args: string[];
+}
+
 export interface TerminalDataEvent {
   terminalId: string;
   data: string;

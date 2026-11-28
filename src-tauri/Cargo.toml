@@ -167,6 +167,7 @@ rsa = { version = "0.9", features = ["sha2"] }
 # tree transitively; zip gains Deflate through the flate2 above.
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 tar = "0.4"
+portable-pty = "0.9"
 
 # Windows-only: registry access for the PuTTY sessions importer, plus the
 # Cloud Filter API (`cldapi.dll`) that powers on-demand virtual folders (Plan 9)

@@ -100,6 +100,7 @@ import type {
   SyncRecoveryEntry,
   SyncStrategy,
   TerminalDataEvent,
+  LocalShell,
   TerminalExitEvent,
   Transfer,
   TransferQueueState,
@@ -405,8 +406,23 @@ export const ipc = {
   cacheUsage: () => invoke<CacheUsage[]>("cache_usage"),
   cacheClear: (id: CacheId) => invoke<CacheUsage>("cache_clear", { id }),
 
-  openTerminal: (sessionId: SessionId, cols: number, rows: number) =>
-    invoke<string>("open_terminal", { sessionId, cols, rows }),
+  /** `shell` (a local profile id) and `cwd` apply to the local machine only. */
+  openTerminal: (
+    sessionId: SessionId,
+    cols: number,
+    rows: number,
+    opts?: { shell?: string; cwd?: string }
+  ) =>
+    invoke<string>("open_terminal", {
+      sessionId,
+      cols,
+      rows,
+      shell: opts?.shell ?? null,
+      cwd: opts?.cwd ?? null,
+    }),
+
+  /** Shells installed on this machine, the default first. */
+  listLocalShells: () => invoke<LocalShell[]>("list_local_shells"),
 
   terminalWrite: (terminalId: string, data: string) =>
     invoke<void>("terminal_write", { terminalId, data }),

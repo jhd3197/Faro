@@ -323,6 +323,12 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       emit("terminal://data", { terminalId: a.terminalId, data: out });
       return null;
     }
+    case "list_local_shells":
+      return [
+        { id: "pwsh", name: "PowerShell", program: "pwsh.exe", args: ["-NoLogo"] },
+        { id: "cmd", name: "Command Prompt", program: "cmd.exe", args: [] },
+        { id: "wsl:Ubuntu", name: "Ubuntu (WSL)", program: "wsl.exe", args: ["-d", "Ubuntu"] },
+      ];
     case "terminal_resize":
     case "close_terminal":
       return null;

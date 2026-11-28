@@ -48,6 +48,7 @@ pub mod importers;
 pub mod keys;
 pub mod managed_tools;
 mod known_hosts;
+mod local_shell;
 pub mod oauth;
 pub mod password_managers;
 mod path_integration;
@@ -687,6 +688,7 @@ pub fn run() {
             cache::cache_usage,
             cache::cache_clear,
             commands::open_terminal,
+            commands::list_local_shells,
             commands::terminal_write,
             commands::terminal_resize,
             commands::close_terminal,

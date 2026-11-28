@@ -202,6 +202,9 @@ interface SettingsState {
   /** Inline ghost-text history suggestions while typing a command (fish/VS
    *  Code style, → to accept). On by default. */
   terminalSuggestions: boolean;
+  /** Local terminal: the shell profile a new local tab starts ("" = the
+   *  machine's default). */
+  terminalLocalShell: string;
 
   // Connections
   defaultPort: number;
@@ -366,6 +369,7 @@ const DEFAULTS: Persisted = {
   terminalScrollback: 5000,
   terminalCopyOnSelect: true,
   terminalSuggestions: true,
+  terminalLocalShell: "",
   defaultPort: 22,
   storePasswordsInKeychain: false,
   restoreLastSession: true,
@@ -635,6 +639,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setNotifications: (v) => mutate(set, get, "notifications", v),
   setRestoreLastSession: (v) => mutate(set, get, "restoreLastSession", v),
 }));
+
+/** Set one persisted setting. For settings that need no logic of their own,
+ *  so adding one means a field and a default, not a setter. */
+export function setSetting<K extends keyof Persisted>(key: K, value: Persisted[K]) {
+  useSettings.setState({ [key]: value } as Partial<SettingsState>);
+  persistKey(key, value);
+}
 
 /** Reload settings from faro.db and merge them into the live store. Used by
  *  windows that didn't get the pre-paint injection (popouts) and to reflect a
