@@ -1296,6 +1296,16 @@ pub async fn transfer_resume_all(
     Ok(())
 }
 
+/// Turn tar-streamed folder transfers on or off (Plan 37 Phase 4).
+#[tauri::command]
+pub async fn transfer_set_tar_folders(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.transfers.set_tar_folders(enabled);
+    Ok(())
+}
+
 /// Live-adjust how many transfers may run at once (1..=32).
 #[tauri::command]
 pub async fn transfer_set_concurrency(

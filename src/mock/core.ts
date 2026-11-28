@@ -392,6 +392,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case "read_image_file":
       // A 2×1 PNG: one red pixel, one blue.
       return "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGP4z8Dwn4GBgQEADQEB/4o5HXMAAAAASUVORK5CYII=";
+    case "transfer_set_tar_folders":
     case "write_base64_file":
     case "write_text_file":
       return null;

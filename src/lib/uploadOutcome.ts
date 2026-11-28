@@ -2,8 +2,9 @@
 export function uploadOutcome(report: {
   validation?: string; bytes?: number; preparing: boolean; files: number; directories: number;
   verifiedDirectories: number; errors: string[]; skipped: number; canceled: boolean;
-}, rows: Array<{ status: string; transferred?: number } | undefined>) {
-  const done = rows.filter((t) => t?.status === "done").length;
+}, rows: Array<{ status: string; transferred?: number; files?: number } | undefined>) {
+  // A folder sent as one stream is a single row that carries many files.
+  const done = rows.reduce((n, t) => n + (t?.status === "done" ? t.files ?? 1 : 0), 0);
   const failed = rows.filter((t) => t?.status === "error").length;
   const skipped = report.skipped + rows.filter((t) => t?.status === "skipped").length;
   const canceled = report.canceled || rows.some((t) => t?.status === "canceled");

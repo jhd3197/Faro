@@ -85,6 +85,7 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "transferThrottleKbps",
     "transferSegments",
     "transferVerify",
+    "transferTarFolders",
     "deltaSync",
     "defaultDownloadFolder",
   ],
@@ -522,6 +523,13 @@ export function Settings({ onClose }: Props) {
                 )}
               </Row>
               <BandwidthLimit kbps={s.transferThrottleKbps} onChange={s.setTransferThrottleKbps} />
+              <CheckRow
+                label="Send folders of small files as one stream"
+                keywords="tar fast folder many small files ssh stream"
+                help="Over SSH, a folder with 50 or more small files travels as a single tar stream instead of one file at a time, which is much faster. It shows as one row in the queue. Needs tar on the server; if a stream fails, the files are sent one by one."
+                checked={s.transferTarFolders !== "off"}
+                onChange={(v) => setSetting("transferTarFolders", v ? "auto" : "off")}
+              />
             </Group>
             <Group title="Integrity">
               <CheckRow

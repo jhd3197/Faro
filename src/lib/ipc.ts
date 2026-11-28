@@ -534,6 +534,9 @@ export const ipc = {
   transferSetSegments: (count: number) =>
     invoke<void>("transfer_set_segments", { count }),
 
+  /** Send folders of many small files over SSH as one tar stream. */
+  transferSetTarFolders: (enabled: boolean) =>
+    invoke<void>("transfer_set_tar_folders", { enabled }),
   transferSetVerify: (enabled: boolean) =>
     invoke<void>("transfer_set_verify", { enabled }),
 

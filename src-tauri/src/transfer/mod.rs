@@ -23,6 +23,7 @@ mod ranged;
 mod retry;
 mod sources;
 mod speed;
+pub(crate) mod tarstream;
 mod verify;
 pub mod manifest;
 
@@ -286,6 +287,10 @@ pub struct Transfer {
     /// earlier session, waiting for its connection and a Resume.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub restored: bool,
+    /// How many files this one row carries: set for a folder sent as a single
+    /// tar stream, absent for an ordinary one-file transfer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<u32>,
 }
 
 impl Transfer {
@@ -331,6 +336,17 @@ enum RetryInfo {
         source: String,
         direction: crate::sync::SyncDirection,
         stage: crate::sync::recovery::StagedReplacement,
+    },
+    /// A whole folder as one tar stream over SSH (Plan 37 Phase 4).
+    TarFolder {
+        session: Arc<Session>,
+        upload: bool,
+        /// The folder on this machine: the source of an upload, the
+        /// destination of a download.
+        local_root: PathBuf,
+        /// The folder on the server.
+        remote_root: String,
+        policy: OverwritePolicy,
     },
     /// Unit tests drive the runner with a fake copy loop.
     #[cfg(test)]
@@ -395,6 +411,11 @@ pub struct TransferManager {
     db: std::sync::OnceLock<Arc<crate::db::Db>>,
     /// Rows restored from `faro.db`, by transfer id, until resumed.
     restored: Mutex<HashMap<String, crate::db::ResumeRow>>,
+    /// Folders of many small files go over SSH as one tar stream.
+    tar_folders: AtomicBool,
+    /// Per connection (profile id): what the host's tar can do, `None` when
+    /// it has none. Probed once.
+    tar_support: Mutex<HashMap<String, Option<tarstream::TarSupport>>>,
 }
 
 /// Bytes moved between resume checkpoints. Large on purpose: each checkpoint
@@ -660,6 +681,179 @@ impl TransferManager {
             verify: AtomicBool::new(false),
             db: std::sync::OnceLock::new(),
             restored: Mutex::new(HashMap::new()),
+            tar_folders: AtomicBool::new(true),
+            tar_support: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Turn tar-streamed folder transfers on or off (the setting).
+    pub fn set_tar_folders(&self, on: bool) {
+        self.tar_folders.store(on, Ordering::Relaxed);
+    }
+
+    /// What this connection's host can do with tar, probed once.
+    async fn tar_support_for(&self, ssh: &Arc<SshSession>) -> Option<tarstream::TarSupport> {
+        let key = ssh.profile.id.clone();
+        if let Some(known) = self.tar_support.lock().await.get(&key) {
+            return *known;
+        }
+        let found = tarstream::probe(ssh).await;
+        self.tar_support.lock().await.insert(key, found);
+        found
+    }
+
+    /// Queue a folder as one tar stream. The row is sized in file bytes and
+    /// carries the file count, so reports that add up rows still come out
+    /// right.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_tar_folder(
+        self: &Arc<Self>,
+        session: Arc<Session>,
+        upload: bool,
+        local_root: PathBuf,
+        remote_root: String,
+        policy: OverwritePolicy,
+        files: usize,
+        bytes: u64,
+        app: &AppHandle,
+    ) -> String {
+        self.set_app(app);
+        let id = Uuid::new_v4().to_string();
+        let local = local_root.to_string_lossy().into_owned();
+        let transfer = Transfer {
+            id: id.clone(),
+            kind: if upload { TransferKind::Upload } else { TransferKind::Download },
+            source: if upload { local.clone() } else { remote_root.clone() },
+            destination: if upload { remote_root.clone() } else { local },
+            size: bytes,
+            transferred: 0,
+            status: TransferStatus::Queued,
+            error: None,
+            retry_attempt: None,
+            delta: None,
+            started_at: now_ts(),
+            bytes_per_sec: None,
+            eta_secs: None,
+            segments: None,
+            stalled: false,
+            notice: Some(format!("{files} files as one stream")),
+            restored: false,
+            files: Some(files as u32),
+        };
+        self.insert(transfer.clone()).await;
+        self.emit("transfer://added", &transfer);
+        let job = RetryInfo::TarFolder {
+            session,
+            upload,
+            local_root,
+            remote_root,
+            policy,
+        };
+        self.retry.lock().await.insert(id.clone(), job.clone());
+        self.waiting.lock().await.push_back(id.clone());
+        self.pauses.lock().await.insert(id.clone(), PauseGate::new());
+        self.bump_queue(app).await;
+        let task = tokio::spawn(run_job(Arc::clone(self), id.clone(), job));
+        self.tasks.lock().await.insert(id.clone(), task);
+        id
+    }
+
+    /// Whether a folder transfer on this session may go as a tar stream, and
+    /// with which capabilities. Tar can't ask per file, so only "overwrite"
+    /// and "skip" qualify, and "skip" needs a tar that can skip.
+    async fn tar_eligible(
+        &self,
+        session: &Arc<Session>,
+        policy: OverwritePolicy,
+        upload: bool,
+    ) -> Option<Arc<SshSession>> {
+        if !self.tar_folders.load(Ordering::Relaxed) {
+            return None;
+        }
+        let Session::Ssh(ssh) = &**session else {
+            return None;
+        };
+        if policy == OverwritePolicy::Rename {
+            return None;
+        }
+        let support = self.tar_support_for(ssh).await?;
+        // A download unpacks here, where skipping is ours to do.
+        if upload && policy == OverwritePolicy::Skip && !support.skip_old {
+            return None;
+        }
+        Some(ssh.clone())
+    }
+
+    /// A tar stream that failed for good: hand the folder to the per-file
+    /// path, which picks up whatever the stream didn't finish.
+    ///
+    /// Boxed: the per-file path queues transfers, whose runner is the caller
+    /// of this function. Without the box the future's type would contain
+    /// itself.
+    fn tar_fallback<'a>(
+        self: &'a Arc<Self>,
+        id: &'a str,
+        job: &'a RetryInfo,
+    ) -> futures::future::BoxFuture<'a, ()> {
+        Box::pin(self.tar_fallback_inner(id, job))
+    }
+
+    async fn tar_fallback_inner(self: &Arc<Self>, id: &str, job: &RetryInfo) {
+        let RetryInfo::TarFolder {
+            session,
+            upload,
+            local_root,
+            remote_root,
+            policy,
+        } = job
+        else {
+            return;
+        };
+        let Some(app) = self.app.get().cloned() else {
+            return;
+        };
+        // A canceled stream stays canceled.
+        if !self
+            .get(id)
+            .await
+            .is_some_and(|t| matches!(t.status, TransferStatus::Error))
+        {
+            return;
+        }
+        self.set_notice(id, "The stream failed; sending the files one by one").await;
+        let parent_of = |path: &str| -> String {
+            match path.trim_end_matches('/').rsplit_once('/') {
+                Some(("", _)) => "/".to_string(),
+                Some((dir, _)) => dir.to_string(),
+                None => ".".to_string(),
+            }
+        };
+        let result = if *upload {
+            self.start_directory_upload_plain(
+                Arc::clone(session),
+                local_root.to_string_lossy().into_owned(),
+                parent_of(remote_root),
+                *policy,
+                app,
+                None,
+            )
+            .await
+        } else {
+            let local_parent = local_root
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| ".".into());
+            self.start_directory_download_plain(
+                Arc::clone(session),
+                remote_root.clone(),
+                local_parent,
+                *policy,
+                app,
+            )
+            .await
+        };
+        if let Err(e) = result {
+            tracing::warn!("per-file fallback for {id} could not start: {e:#}");
         }
     }
 
@@ -716,7 +910,7 @@ impl TransferManager {
                 segments: None,
                 stalled: false,
                 notice: None,
-                restored: true,
+                restored: true, files: None,
             };
             let state = ResumeState {
                 ranges,
@@ -836,6 +1030,8 @@ impl TransferManager {
             ),
             // Restoring as a plain transfer would bypass conflict checks and publication.
             RetryInfo::SyncReplacement { .. } => return None,
+            // A stream has no partial state worth keeping: it starts over.
+            RetryInfo::TarFolder { .. } => return None,
             #[cfg(test)]
             RetryInfo::Test(_) => return None,
         };
@@ -1606,7 +1802,7 @@ impl TransferManager {
             source: source.clone(), destination, size: stage.size, transferred: 0,
             status: TransferStatus::Queued, error: None, retry_attempt: None, delta: None,
             started_at: now_ts(), bytes_per_sec: None, eta_secs: None, segments: None,
-            stalled: false, notice: Some("Staging replacement; original stays in place until verified".into()), restored: false,
+            stalled: false, notice: Some("Staging replacement; original stays in place until verified".into()), restored: false, files: None,
         };
         self.insert(transfer.clone()).await;
         self.emit("transfer://added", &transfer);
@@ -1670,7 +1866,7 @@ impl TransferManager {
             segments: None,
             stalled: false,
             notice: None,
-            restored: false,
+            restored: false, files: None,
         };
         self.insert(transfer.clone()).await;
         let _ = app.emit("transfer://added", &transfer);
@@ -1749,7 +1945,7 @@ impl TransferManager {
             segments: None,
             stalled: false,
             notice: None,
-            restored: false,
+            restored: false, files: None,
         };
         self.insert(transfer.clone()).await;
         let _ = app.emit("transfer://added", &transfer);
@@ -2743,6 +2939,35 @@ impl TransferManager {
         policy: OverwritePolicy,
         app: AppHandle,
     ) -> Result<Vec<String>> {
+        // Many small files over SSH: one tar stream instead of a file at a
+        // time. Anything that doesn't qualify takes the per-file path below.
+        if let Some(ssh) = self.tar_eligible(&session, policy, false).await {
+            let root_name = basename(&remote_root);
+            if is_plain_local_name(&root_name) {
+                if let Some((files, bytes)) = tarstream::remote_inventory(&ssh, &remote_root).await {
+                    if tarstream::worth_streaming(files, bytes) {
+                        let local_root = PathBuf::from(&local_dir).join(&root_name);
+                        let id = self
+                            .start_tar_folder(session, false, local_root, remote_root, policy, files, bytes, &app)
+                            .await;
+                        return Ok(vec![id]);
+                    }
+                }
+            }
+        }
+        self.start_directory_download_plain(session, remote_root, local_dir, policy, app)
+            .await
+    }
+
+    /// A folder download, one file at a time.
+    async fn start_directory_download_plain(
+        self: &Arc<Self>,
+        session: Arc<Session>,
+        remote_root: String,
+        local_dir: String,
+        policy: OverwritePolicy,
+        app: AppHandle,
+    ) -> Result<Vec<String>> {
         let root_name = basename(&remote_root);
         if !is_plain_local_name(&root_name) {
             anyhow::bail!("unsafe folder name from the server: {root_name:?}");
@@ -2866,7 +3091,7 @@ impl TransferManager {
             segments: None,
             stalled: false,
             notice: None,
-            restored: false,
+            restored: false, files: None,
         };
         self.insert(t.clone()).await;
         self.emit("transfer://added", &t);
@@ -2885,6 +3110,52 @@ impl TransferManager {
     }
 
     pub async fn start_directory_upload_checked(
+        self: &Arc<Self>,
+        session: Arc<Session>,
+        local_root: String,
+        remote_dir: String,
+        policy: OverwritePolicy,
+        app: AppHandle,
+        expected_fingerprint: Option<&str>,
+    ) -> Result<Vec<String>> {
+        if let Some(_ssh) = self.tar_eligible(&session, policy, true).await {
+            let local_root_path = PathBuf::from(&local_root);
+            let inventory = manifest::inventory(&local_root_path).await?;
+            // The same "nothing changed since the preview" check the per-file
+            // path makes.
+            if expected_fingerprint.is_some_and(|expected| expected != inventory.fingerprint) {
+                anyhow::bail!(
+                    "Upload selection changed since inventory: {}. Build the selection again.",
+                    local_root_path.display()
+                );
+            }
+            if tarstream::worth_streaming(inventory.files.len(), inventory.bytes) {
+                let root_name = local_root_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "upload".into());
+                let remote_root = join_remote(&remote_dir, &root_name);
+                let id = self
+                    .start_tar_folder(
+                        session,
+                        true,
+                        local_root_path,
+                        remote_root,
+                        policy,
+                        inventory.files.len(),
+                        inventory.bytes,
+                        &app,
+                    )
+                    .await;
+                return Ok(vec![id]);
+            }
+        }
+        self.start_directory_upload_plain(session, local_root, remote_dir, policy, app, expected_fingerprint)
+            .await
+    }
+
+    /// A folder upload, one file at a time.
+    async fn start_directory_upload_plain(
         self: &Arc<Self>,
         session: Arc<Session>,
         local_root: String,
@@ -3965,6 +4236,13 @@ async fn run_job(mgr: Arc<TransferManager>, id: String, job: RetryInfo) {
                 } => dispatch_upload(&mgr, &id, session, local, final_remote).await,
                 RetryInfo::SyncReplacement { session, source, direction, stage } =>
                     run_sync_replacement(&mgr, &id, session, source, *direction, stage).await,
+                RetryInfo::TarFolder {
+                    session,
+                    upload,
+                    local_root,
+                    remote_root,
+                    policy,
+                } => run_tar_folder(&mgr, &id, session, *upload, local_root, remote_root, *policy).await,
                 #[cfg(test)]
                 RetryInfo::Test(f) => f(Arc::clone(&mgr), id.clone()).await,
             };
@@ -4008,9 +4286,36 @@ async fn run_job(mgr: Arc<TransferManager>, id: String, job: RetryInfo) {
             mgr.update(&id, |t| t.error = None).await;
         }
     };
+    let failed = res.is_err();
     finalize(&mgr, &id, res).await;
+    if failed {
+        mgr.tar_fallback(&id, &job).await;
+    }
     mgr.publishing.lock().await.remove(&id);
     mgr.bump_queue_quiet().await;
+}
+
+async fn run_tar_folder(
+    mgr: &Arc<TransferManager>,
+    id: &str,
+    session: &Arc<Session>,
+    upload: bool,
+    local_root: &Path,
+    remote_root: &str,
+    policy: OverwritePolicy,
+) -> Result<u64> {
+    let Session::Ssh(ssh) = &**session else {
+        anyhow::bail!("a tar stream needs an SSH connection");
+    };
+    let skip = policy == OverwritePolicy::Skip;
+    let written = if upload {
+        tarstream::upload(mgr, id, ssh, local_root, remote_root, skip).await?
+    } else {
+        tarstream::download(mgr, id, ssh, remote_root, local_root, skip).await?
+    };
+    // The row's size is exact now; the runner checks the two agree.
+    mgr.update(id, |t| t.size = written).await;
+    Ok(written)
 }
 
 async fn run_sync_replacement(
@@ -4328,7 +4633,7 @@ mod tests {
             segments: None,
             stalled: false,
             notice: None,
-            restored: false,
+            restored: false, files: None,
         })
         .await;
         mgr.pauses.lock().await.insert(id.into(), PauseGate::new());
@@ -4442,7 +4747,7 @@ mod tests {
                 segments: None,
                 stalled: false,
                 notice: None,
-                restored: false,
+                restored: false, files: None,
             })
             .await;
         }
@@ -4646,7 +4951,7 @@ mod tests {
             segments: None,
             stalled: false,
             notice: None,
-            restored: false,
+            restored: false, files: None,
         })
         .await;
         mgr
@@ -4985,7 +5290,7 @@ mod tests {
             segments: None,
             stalled: false,
             notice: None,
-            restored: false,
+            restored: false, files: None,
         })
         .await;
         let job = RetryInfo::Download {

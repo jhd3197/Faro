@@ -1683,6 +1683,8 @@ export interface Transfer {
   /** Unfinished transfer restored from the last session (Plan 24): Paused,
    *  resumable once its connection is open. */
   restored?: boolean;
+  /** Files carried by this one row: a folder sent as a single tar stream. */
+  files?: number;
 }
 
 /** Live transfer-queue snapshot (Plan 17) — payload of `transfer://queue` and

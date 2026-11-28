@@ -400,6 +400,10 @@ pub fn run() {
                         st.transfers.set_concurrency(n);
                     }
                 }
+                // Plan 37: `transferTarFolders` ("auto" by default, or "off").
+                if let Ok(Some(raw)) = st.db.settings_get("transferTarFolders") {
+                    st.transfers.set_tar_folders(raw.trim_matches('"') != "off");
+                }
                 if let Ok(Some(raw)) = st.db.settings_get("transferThrottleKbps") {
                     if let Ok(kbps) = serde_json::from_str::<u64>(&raw) {
                         st.transfers.set_throttle_kbps(kbps);
@@ -726,6 +730,7 @@ pub fn run() {
             commands::transfer_set_throttle,
             commands::transfer_set_segments,
             commands::transfer_set_verify,
+            commands::transfer_set_tar_folders,
             commands::transfer_set_delta_sync,
             commands::transfer_queue_state,
             commands::rename_path,

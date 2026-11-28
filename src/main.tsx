@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { TerminalWindow } from "./components/TerminalWindow";
 import { useSettings } from "./stores/settingsStore";
+import { ipc } from "./lib/ipc";
 import { applyAccent } from "./lib/accent";
 import { applyUiLanguage, type UiLanguage } from "./lib/i18n";
 import { applyUiZoom } from "./lib/uiZoom";
@@ -69,8 +70,14 @@ function syncClock(s: { timeFormat: TimeFormat; uiLanguage: string }) {
 }
 syncClock(useSettings.getState());
 let themingTimer: ReturnType<typeof setTimeout> | undefined;
+let prevTarFolders = useSettings.getState().transferTarFolders;
 useSettings.subscribe((s) => {
   syncClock(s);
+  if (s.transferTarFolders !== prevTarFolders) {
+    prevTarFolders = s.transferTarFolders;
+    // Live-apply; the saved value covers the next launch.
+    ipc.transferSetTarFolders(s.transferTarFolders !== "off").catch(() => {});
+  }
   if (s.accentColor !== prevAccent) {
     prevAccent = s.accentColor;
     applyAccent(s.accentColor || null);
