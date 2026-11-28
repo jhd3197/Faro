@@ -276,6 +276,7 @@ pub async fn disconnect(
     let profile_id = state.sessions.get(&session_id).await.map(|s| s.profile().id.clone());
     // Stop streamed execs first, while the transport can still carry the kill.
     state.streams.stop_session(&session_id).await;
+    state.ptys.forget_session(&session_id).await;
     state.sessions.disconnect(&session_id).await.map_err(err)?;
     // Stop this connection's forwards once nothing is using the session.
     // A forward started from faro-cli is left running.
@@ -921,24 +922,128 @@ pub async fn read_file_head(
 // ---------- Terminal ----------
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn open_terminal(
     session_id: String,
     cols: u32,
     rows: u32,
+    shell: Option<String>,
+    cwd: Option<String>,
+    persist_name: Option<String>,
+    scrollback: Option<u32>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     if session_id == LOCAL_SESSION {
-        return Err("Local terminal is not supported".into());
+        let profile = crate::local_shell::resolve(shell.as_deref().unwrap_or(""));
+        return state
+            .ptys
+            .open_local(&profile, cwd, cols, rows, app)
+            .await
+            .map_err(err);
     }
     let ssh = state
         .sessions
         .get_ssh(&session_id)
         .await
         .ok_or_else(|| "FTP sessions have no shell".to_string())?;
+    let persist = persist_name.map(|name| crate::terminal::PersistRequest {
+        name,
+        scrollback: scrollback.unwrap_or(5000),
+    });
     state
         .ptys
-        .open(&ssh, cols, rows, app)
+        .open(&session_id, &ssh, cols, rows, persist, app)
+        .await
+        .map_err(err)
+}
+
+/// Faro's tmux sessions on a connection's host (Plan 36 Phase 4): the ones a
+/// restored workspace reattaches to, and any left over from earlier.
+#[tauri::command]
+pub async fn terminal_persist_list(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::term_persist::PersistedSession>, String> {
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "This connection has no shell".to_string())?;
+    Ok(crate::term_persist::list(&ssh).await)
+}
+
+/// End one of Faro's tmux sessions on the host.
+#[tauri::command]
+pub async fn terminal_persist_kill(
+    session_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !crate::term_persist::valid_name(&name) {
+        return Err("Not a Faro session name".into());
+    }
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "This connection has no shell".to_string())?;
+    crate::term_persist::kill(&ssh, &name).await;
+    Ok(())
+}
+
+/// Save a pasted clipboard image where a terminal's shell runs and return its
+/// path, which the frontend types into the shell (Plan 36 Phase 3).
+#[tauri::command]
+pub async fn terminal_paste_image(
+    session_id: String,
+    data: String,
+    ext: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|e| format!("The pasted image couldn't be read: {e}"))?;
+    if session_id == LOCAL_SESSION {
+        return crate::term_paste::save_local(bytes, &ext).await.map_err(err);
+    }
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "This connection has no shell".to_string())?;
+    crate::term_paste::save_remote(&ssh, bytes, &ext)
+        .await
+        .map_err(err)
+}
+
+/// Write text to a local file the user just picked in a save dialog (the
+/// terminal's "Save output to file").
+#[tauri::command]
+pub async fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    tokio::fs::write(&path, contents)
+        .await
+        .map_err(|e| format!("Couldn't write {path}: {e}"))
+}
+
+/// Write base64-encoded bytes to a local file the user just picked in a save
+/// dialog (the image viewer's "Save as").
+#[tauri::command]
+pub async fn write_base64_file(path: String, data: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|e| format!("The data couldn't be decoded: {e}"))?;
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|e| format!("Couldn't write {path}: {e}"))
+}
+
+/// Shells installed on this machine, the default first (Plan 36 Phase 1).
+#[tauri::command]
+pub async fn list_local_shells() -> Result<Vec<crate::local_shell::LocalShell>, String> {
+    tokio::task::spawn_blocking(crate::local_shell::list)
         .await
         .map_err(err)
 }
@@ -969,9 +1074,14 @@ pub async fn terminal_resize(
 #[tauri::command]
 pub async fn close_terminal(
     terminal_id: String,
+    end_session: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.ptys.close(&terminal_id).await.map_err(err)
+    state
+        .ptys
+        .close(&terminal_id, end_session.unwrap_or(true))
+        .await
+        .map_err(err)
 }
 
 // ---------- Command snippets (Plan 11 Phase 4) ----------
@@ -1184,6 +1294,16 @@ pub async fn transfer_resume_all(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.transfers.resume_all(&app).await;
+    Ok(())
+}
+
+/// Turn tar-streamed folder transfers on or off (Plan 37 Phase 4).
+#[tauri::command]
+pub async fn transfer_set_tar_folders(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.transfers.set_tar_folders(enabled);
     Ok(())
 }
 
@@ -2384,6 +2504,61 @@ pub async fn start_edit(
         .map_err(err)
 }
 
+/// Built-in editor: read a text file and the stamp of the version read.
+#[tauri::command]
+pub async fn editor_read(
+    session_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<crate::builtin_editor::EditorFile, FaroError> {
+    let session = editor_session(&session_id, &state).await?;
+    crate::builtin_editor::read(session, &path).await
+}
+
+/// Built-in editor: save, unless the file changed since `expected` was read.
+/// A changed file fails with kind `conflict`; `force` overwrites it.
+#[tauri::command]
+pub async fn editor_write(
+    session_id: String,
+    path: String,
+    text: String,
+    expected: Option<crate::builtin_editor::FileStamp>,
+    force: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<Option<crate::builtin_editor::FileStamp>, FaroError> {
+    let session = editor_session(&session_id, &state).await?;
+    crate::builtin_editor::write(session, &path, text, expected, force.unwrap_or(false)).await
+}
+
+/// Image viewer: a whole image file, base64-encoded.
+#[tauri::command]
+pub async fn read_image_file(
+    session_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<String, FaroError> {
+    use base64::Engine;
+    let session = editor_session(&session_id, &state).await?;
+    let bytes = crate::builtin_editor::read_image(session, &path).await?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// `None` for the local machine, else the connected session.
+async fn editor_session(
+    session_id: &str,
+    state: &AppState,
+) -> Result<Option<Arc<crate::session::Session>>, FaroError> {
+    if session_id == LOCAL_SESSION {
+        return Ok(None);
+    }
+    state
+        .sessions
+        .get(session_id)
+        .await
+        .map(Some)
+        .ok_or_else(|| FaroError::from(format!("session {session_id} not found")))
+}
+
 #[tauri::command]
 pub async fn stop_edit(
     edit_id: String,
@@ -2735,6 +2910,15 @@ pub async fn settings_set(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.db.settings_set(&key, &value).map_err(err)
+}
+
+/// One setting's raw JSON value, or null when it was never set.
+#[tauri::command]
+pub async fn settings_get(
+    key: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state.db.settings_get(&key).map_err(err)
 }
 
 /// Delete one setting row (reset-to-default for shortcut overrides & friends).

@@ -48,6 +48,8 @@ export const SETTINGS_FOCUS = {
 export interface SettingsTarget {
   section: SettingsSectionId;
   focus?: string;
+  /** Open with the search box filled in (a setting picked in the palette). */
+  query?: string;
 }
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "appearance";
@@ -92,7 +94,12 @@ export function entryPointTarget(id: SettingsEntryPointId): SettingsTarget {
 
 /** A section id or a target. Unknown sections are dropped so a bad link cannot open Settings on the wrong page. */
 export function normalizeSettingsTarget(
-  target: SettingsSectionId | string | { section: string; focus?: string } | null | undefined,
+  target:
+    | SettingsSectionId
+    | string
+    | { section: string; focus?: string; query?: string }
+    | null
+    | undefined,
 ): SettingsTarget | null {
   if (target == null) return null;
   if (typeof target === "string") {
@@ -100,5 +107,9 @@ export function normalizeSettingsTarget(
   }
   if (!isSettingsSectionId(target.section)) return null;
   const focus = target.focus?.trim();
-  return focus ? { section: target.section, focus } : { section: target.section };
+  const query = target.query?.trim();
+  const out: SettingsTarget = { section: target.section };
+  if (focus) out.focus = focus;
+  if (query) out.query = query;
+  return out;
 }

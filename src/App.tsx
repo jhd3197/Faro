@@ -22,6 +22,7 @@ import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
 import { FileUiBridge } from "./components/FileUiBridge";
 import { TerminalDock } from "./components/Terminal";
+import { FileViewer } from "./components/editor/FileViewer";
 import { TransferQueue } from "./components/TransferQueue";
 import { ResizablePanel } from "./components/ResizablePanel";
 import { Settings } from "./components/Settings";
@@ -113,7 +114,8 @@ export default function App() {
   const workRowRef = useRef<HTMLDivElement>(null);
   const terminalOpen = useLayout((s) => s.terminalOpen);
   const toggleTerminal = useLayout((s) => s.toggleTerminal);
-  const terminalVisible = !!activeSessionId && terminalOpen && supportsTerminal;
+  // Local shells need no connection, so the dock no longer depends on one.
+  const terminalVisible = terminalOpen;
   const consoleOpen = useLayout((s) => s.consoleOpen);
   const agentDrawerOpen = useLayout((s) => s.agentDrawerOpen);
   const zen = useLayout((s) => s.zen);
@@ -339,10 +341,11 @@ export default function App() {
           <MountDialog />
           <TagsDialog />
           <UploadReports />
+          <FileViewer />
           <TransferQueue containerRef={columnRef} />
           {!zen && <TipStrip />}
           {!zen && <StatusBar
-            terminalOpen={terminalOpen && supportsTerminal}
+            terminalOpen={terminalOpen}
             onToggleTerminal={toggleTerminal}
             terminalAvailable={supportsTerminal}
             transferPanelOpen={transferPanelOpen}
@@ -716,12 +719,11 @@ function StatusBar({
       <PillButton
         active={terminalOpen}
         onClick={onToggleTerminal}
-        disabled={!activeSessionId || !terminalAvailable}
         icon={<TerminalSquare size={11} />}
         title={
-          !terminalAvailable && activeSessionId
-            ? "Terminal is only available for SFTP sessions"
-            : undefined
+          terminalAvailable
+            ? undefined
+            : "Opens a shell on this computer. Server shells need an SFTP connection."
         }
       >
         Terminal

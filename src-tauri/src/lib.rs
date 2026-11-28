@@ -18,6 +18,7 @@ pub mod diagnostics;
 pub mod credential_refs;
 pub mod faro_file;
 pub mod bridge;
+mod builtin_editor;
 pub mod commands;
 mod agent_host;
 mod cache;
@@ -48,6 +49,7 @@ pub mod importers;
 pub mod keys;
 pub mod managed_tools;
 mod known_hosts;
+mod local_shell;
 pub mod oauth;
 pub mod password_managers;
 mod path_integration;
@@ -68,6 +70,8 @@ pub mod sync;
 mod logfollow;
 mod stream_exec;
 mod sysmon;
+mod term_paste;
+mod term_persist;
 mod terminal;
 mod tls_trust;
 mod transfer;
@@ -396,6 +400,10 @@ pub fn run() {
                         st.transfers.set_concurrency(n);
                     }
                 }
+                // Plan 37: `transferTarFolders` ("auto" by default, or "off").
+                if let Ok(Some(raw)) = st.db.settings_get("transferTarFolders") {
+                    st.transfers.set_tar_folders(raw.trim_matches('"') != "off");
+                }
                 if let Ok(Some(raw)) = st.db.settings_get("transferThrottleKbps") {
                     if let Ok(kbps) = serde_json::from_str::<u64>(&raw) {
                         st.transfers.set_throttle_kbps(kbps);
@@ -678,6 +686,9 @@ pub fn run() {
             commands::sync_recovery_restore,
             commands::start_edit,
             commands::stop_edit,
+            commands::editor_read,
+            commands::editor_write,
+            commands::read_image_file,
             commands::list_directory,
             commands::browse_directory,
             commands::capabilities,
@@ -687,6 +698,12 @@ pub fn run() {
             cache::cache_usage,
             cache::cache_clear,
             commands::open_terminal,
+            commands::list_local_shells,
+            commands::write_text_file,
+            commands::write_base64_file,
+            commands::terminal_paste_image,
+            commands::terminal_persist_list,
+            commands::terminal_persist_kill,
             commands::terminal_write,
             commands::terminal_resize,
             commands::close_terminal,
@@ -713,6 +730,7 @@ pub fn run() {
             commands::transfer_set_throttle,
             commands::transfer_set_segments,
             commands::transfer_set_verify,
+            commands::transfer_set_tar_folders,
             commands::transfer_set_delta_sync,
             commands::transfer_queue_state,
             commands::rename_path,
@@ -743,6 +761,7 @@ pub fn run() {
             commands::api_key_status,
             commands::settings_get_all,
             commands::settings_set,
+            commands::settings_get,
             commands::open_external_url,
             commands::wordpress_authorize,
             commands::settings_delete,

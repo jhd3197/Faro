@@ -18,7 +18,18 @@ import { openExternal } from "./openExternal";
 import { attachSuggestions, type SuggestHandle } from "./termSuggest";
 import { registerTerminalPane } from "./termInput";
 import { isTerminalChord } from "./terminalChords";
-import { useSettings, TERMINAL_THEMES } from "@/stores/settingsStore";
+import { attachHighlighter, isDarkHex } from "./terminalHighlight";
+import { broadcastTargets, isTerminalReply } from "./terminalBroadcast";
+import {
+  MAX_PASTE_BYTES,
+  blobToBase64,
+  clipboardImage,
+  imageExt,
+  quotePastePath,
+} from "./terminalPaste";
+import { toastError } from "./errors";
+import { toast } from "@/stores/toastStore";
+import { useSettings, TERMINAL_THEMES, type PersistedSettings } from "@/stores/settingsStore";
 import { useConnections } from "@/stores/connectionsStore";
 import type { SessionId } from "./types";
 
@@ -52,6 +63,8 @@ export interface PaneEntry {
    *  close it (the new window owns its lifetime). Reset to false to reclaim it
    *  if the popout failed to open. */
   setHandedOff(v: boolean): void;
+  /** Write to this pane's PTY. A no-op until the shell is open. */
+  send(data: string): void;
 }
 
 interface InternalEntry extends PaneEntry {
@@ -70,6 +83,55 @@ interface InternalEntry extends PaneEntry {
 
 const panes = new Map<string, InternalEntry>();
 
+/** The xterm options that follow Settings › Terminal. One function so new
+ *  panes, live panes and popped-out windows can't drift apart. */
+export function terminalOptions(s: PersistedSettings) {
+  return {
+    fontFamily: s.terminalFontFamily,
+    fontSize: s.terminalFontSize,
+    lineHeight: s.terminalLineHeight,
+    cursorStyle: s.terminalCursorStyle,
+    cursorBlink: s.terminalCursorBlink,
+    theme: TERMINAL_THEMES[s.terminalTheme],
+  } as const;
+}
+
+/** Everything in a terminal's buffer as plain text: scrollback and screen,
+ *  soft-wrapped lines joined back together. */
+export function bufferText(term: XTerm): string {
+  const buf = term.buffer.active;
+  const lines: string[] = [];
+  for (let y = 0; y < buf.length; y++) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n");
+}
+
+/** OSC 52: let a program on the host put text on the local clipboard
+ *  (`ESC ] 52 ; c ; <base64> BEL`). Write-only: a `?` read request is ignored,
+ *  so a host can never read what is on the clipboard. */
+export function attachOsc52(term: XTerm): { dispose: () => void } {
+  return term.parser.registerOscHandler(52, (data) => {
+    if (!useSettings.getState().terminalOsc52) return true;
+    const at = data.indexOf(";");
+    const payload = at >= 0 ? data.slice(at + 1) : "";
+    if (!payload || payload === "?") return true;
+    try {
+      const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+      const text = new TextDecoder().decode(bytes);
+      if (text) navigator.clipboard.writeText(text).catch(() => {});
+    } catch {
+      // not base64 — ignore
+    }
+    return true;
+  });
+}
+
 export function hasPane(paneId: string): boolean {
   return panes.has(paneId);
 }
@@ -82,25 +144,24 @@ export function getPane(paneId: string): PaneEntry | undefined {
  *  Idempotent: a second call with the same id returns the live instance. */
 export function acquirePane(
   paneId: string,
-  opts: { sessionId: SessionId; initialCommand?: string }
+  opts: {
+    sessionId: SessionId;
+    initialCommand?: string;
+    shell?: string;
+    cwd?: string;
+    /** Run inside this tmux session on the host (persistent pane). */
+    persistName?: string;
+  }
 ): PaneEntry {
   const existing = panes.get(paneId);
   if (existing) return existing;
 
-  const { sessionId, initialCommand } = opts;
-  const {
-    terminalFontSize,
-    terminalFontFamily,
-    terminalTheme,
-    terminalScrollback,
-  } = useSettings.getState();
+  const { sessionId, initialCommand, shell, cwd, persistName } = opts;
+  const settings = useSettings.getState();
 
   const term = new XTerm({
-    fontFamily: terminalFontFamily,
-    fontSize: terminalFontSize,
-    scrollback: terminalScrollback,
-    theme: TERMINAL_THEMES[terminalTheme],
-    cursorBlink: true,
+    ...terminalOptions(settings),
+    scrollback: settings.terminalScrollback,
     allowProposedApi: true,
   });
   const fit = new FitAddon();
@@ -132,6 +193,7 @@ export function acquirePane(
     unlistenExit: null,
     disposables: [],
     onWindowResize: () => {},
+    send: () => {},
     getTerminalId: () => entry.terminalId,
     serialize: () => serialize.serialize({ scrollback: 2000 }),
     attach: (container) => {
@@ -183,11 +245,74 @@ export function acquirePane(
     focus: () => term.focus(),
   });
 
+  const send = (data: string) => {
+    if (entry.terminalId) ipc.terminalWrite(entry.terminalId, data).catch(() => {});
+  };
+  entry.send = send;
   entry.disposables.push(
     term.onData((data) => {
-      if (entry.terminalId) ipc.terminalWrite(entry.terminalId, data).catch(() => {});
+      send(data);
+      // Broadcast: copy what the user typed to the tab's other panes, but
+      // never the terminal's own answers to a program's queries.
+      if (isTerminalReply(data)) return;
+      for (const other of broadcastTargets(paneId)) panes.get(other)?.send(data);
     })
   );
+  entry.disposables.push(attachOsc52(term));
+  entry.disposables.push(
+    attachHighlighter(term, () => {
+      const s = useSettings.getState();
+      return {
+        enabled: s.terminalHighlight,
+        rules: s.terminalHighlightRules,
+        darkBackground: isDarkHex(TERMINAL_THEMES[s.terminalTheme].background),
+      };
+    })
+  );
+
+  // Plain paste: skip xterm's bracketed-paste markers for programs that
+  // mangle them. Capture phase, so this runs before xterm's own handler.
+  // Image paste: save the image where the shell runs and type its path.
+  const pasteImage = async (file: File) => {
+    if (file.size > MAX_PASTE_BYTES) {
+      toast.warning(
+        "Image too large to paste",
+        `Pasted images can be at most ${MAX_PASTE_BYTES / (1024 * 1024)} MB.`
+      );
+      return;
+    }
+    try {
+      const path = await ipc.terminalPasteImage(
+        sessionId,
+        await blobToBase64(file),
+        imageExt(file.type)
+      );
+      send(quotePastePath(path) + " ");
+    } catch (e) {
+      toastError(e, "Couldn't paste the image");
+    }
+  };
+  const onPaste = (e: ClipboardEvent) => {
+    if (useSettings.getState().terminalPasteImages) {
+      const image = clipboardImage(e.clipboardData);
+      if (image) {
+        e.preventDefault();
+        e.stopPropagation();
+        void pasteImage(image);
+        return;
+      }
+    }
+    if (!useSettings.getState().terminalPlainPaste) return;
+    const text = e.clipboardData?.getData("text/plain");
+    if (!text) return;
+    e.preventDefault();
+    e.stopPropagation();
+    send(text.replace(/\r?\n/g, "\r"));
+  };
+  element.addEventListener("paste", onPaste, true);
+  entry.disposables.push({
+    dispose: () => element.removeEventListener("paste", onPaste, true),
+  });
   entry.disposables.push(
     term.onResize(({ cols, rows }) => {
       if (entry.terminalId)
@@ -210,7 +335,15 @@ export function acquirePane(
   // Open the PTY and wire its lifecycle. Runs once per pane.
   (async () => {
     try {
+      // Output can arrive before `openTerminal` returns the id (a local PTY
+      // asks for the cursor position the moment it starts, and waits for the
+      // answer). Hold it until the id is known instead of dropping it.
+      let early: { terminalId: string; data: string }[] | null = [];
       entry.unlistenData = await onTerminalData((e) => {
+        if (entry.terminalId === null) {
+          if (early && early.length < 500) early.push(e);
+          return;
+        }
         if (e.terminalId === entry.terminalId) term.write(e.data);
       });
       entry.unlistenExit = await onTerminalExit((e) => {
@@ -226,8 +359,15 @@ export function acquirePane(
           );
         }
       });
-      const id = await ipc.openTerminal(sessionId, term.cols || 80, term.rows || 24);
+      const id = await ipc.openTerminal(sessionId, term.cols || 80, term.rows || 24, {
+        shell,
+        cwd,
+        persistName,
+        scrollback: settings.terminalScrollback,
+      });
       entry.terminalId = id;
+      for (const e of early ?? []) if (e.terminalId === id) term.write(e.data);
+      early = null;
       if (entry.disposed) {
         ipc.closeTerminal(id).catch(() => {});
         return;
@@ -245,9 +385,31 @@ export function acquirePane(
   return entry;
 }
 
+/** Wipe a pane's screen and scrollback. The running program is untouched: a
+ *  `tail -f` keeps going on a clean screen. */
+export function clearPane(paneId: string): void {
+  const entry = panes.get(paneId);
+  if (!entry) return;
+  entry.term.clear();
+  entry.term.focus();
+}
+
+export function selectAllInPane(paneId: string): void {
+  const entry = panes.get(paneId);
+  if (!entry) return;
+  entry.term.selectAll();
+  entry.term.focus();
+}
+
+/** A pane's whole output as plain text, or null when the pane is gone. */
+export function paneText(paneId: string): string | null {
+  const entry = panes.get(paneId);
+  return entry ? bufferText(entry.term) : null;
+}
+
 /** Fully tear down a pane (store-driven, on tab/pane close or disconnect).
  *  Closes the PTY unless it was handed off to a popout window. */
-export function disposePane(paneId: string): void {
+export function disposePane(paneId: string, opts?: { detach?: boolean }): void {
   const entry = panes.get(paneId);
   if (!entry) return;
   panes.delete(paneId);
@@ -259,7 +421,9 @@ export function disposePane(paneId: string): void {
   entry.unlistenData?.();
   entry.unlistenExit?.();
   if (entry.terminalId && !entry.handedOff) {
-    ipc.closeTerminal(entry.terminalId).catch(() => {});
+    // `detach`: the connection is going away, or the pane is being reopened.
+    // A persistent pane's shell keeps running on the host either way.
+    ipc.closeTerminal(entry.terminalId, !opts?.detach).catch(() => {});
   }
   entry.detach();
   entry.term.dispose();
@@ -269,6 +433,6 @@ export function disposePane(paneId: string): void {
 // orphan PTYs. The store re-acquires panes on the next render.
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    for (const id of [...panes.keys()]) disposePane(id);
+    for (const id of [...panes.keys()]) disposePane(id, { detach: true });
   });
 }

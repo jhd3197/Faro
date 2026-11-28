@@ -285,7 +285,7 @@ fn is_write_event(event: &Event) -> bool {
 /// `(size, modified, etag)` of `remote_path` from a listing of its parent —
 /// the one lookup every backend supports. `None` when it can't be listed, in
 /// which case saves aren't conflict-checked.
-async fn remote_stamp(
+pub(crate) async fn remote_stamp(
     session: &Arc<Session>,
     remote_path: &str,
 ) -> Option<(u64, Option<i64>, Option<String>)> {
@@ -372,7 +372,7 @@ fn spawn_editor(path: &std::path::Path, editor: Option<&str>) -> Result<()> {
 
 /// Download from any backend to a local path. Mirrors the streaming logic in
 /// transfer.rs but writes to a known destination instead of emitting progress.
-async fn download_to(
+pub(crate) async fn download_to(
     session: &Session,
     remote_path: &str,
     local_path: &std::path::Path,

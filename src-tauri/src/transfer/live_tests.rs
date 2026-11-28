@@ -175,7 +175,7 @@ fn row(id: &str, kind: TransferKind, src: &str, dst: &str, size: u64) -> Transfe
         segments: None,
         stalled: false,
         notice: None,
-        restored: false,
+        restored: false, files: None,
     }
 }
 
@@ -1132,4 +1132,183 @@ async fn object_tags_round_trip() {
     assert!(fs.set_object_tags(key, &[]).await.expect("clear tags"));
     assert_eq!(fs.object_tags(key).await.unwrap(), Some(vec![]));
     obj.namespace().unwrap().delete(key).await.ok();
+}
+
+/// A folder of small files goes up and comes back as one tar stream, byte for
+/// byte, and "skip existing" leaves the server's copy alone.
+/// `FARO_LIVE_SFTP=host:port:user:pass cargo test -p faro --lib
+/// transfer::live_tests::live_tar_folder -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore]
+async fn live_tar_folder_round_trip_and_skip() {
+    let Some(session) = sftp_session().await else { return };
+    let Session::Ssh(ssh) = &*session else { unreachable!() };
+    let support = tarstream::probe(ssh).await.expect("the host has tar");
+
+    // 300 small files across nested folders, an empty folder, awkward names.
+    let src = scratch("tar-src").join("site");
+    std::fs::create_dir_all(src.join("assets/img/deep")).unwrap();
+    std::fs::create_dir_all(src.join("empty dir")).unwrap();
+    let mut expected_bytes = 0u64;
+    let mut expected_files = 0usize;
+    for i in 0..300 {
+        let dir = match i % 3 {
+            0 => src.clone(),
+            1 => src.join("assets"),
+            _ => src.join("assets/img/deep"),
+        };
+        let body: Vec<u8> = (0..(200 + i * 37)).map(|n| ((n * 31 + i) % 251) as u8).collect();
+        std::fs::write(dir.join(format!("file {i} é.bin")), &body).unwrap();
+        expected_bytes += body.len() as u64;
+        expected_files += 1;
+    }
+    std::fs::write(src.join("index.html"), b"<h1>local</h1>").unwrap();
+    expected_bytes += 14;
+    expected_files += 1;
+
+    let remote_parent = format!("/tmp/faro-tar-{:08x}", rand::random::<u32>());
+    let remote_root = format!("{remote_parent}/site");
+    let mgr = Arc::new(TransferManager::new());
+
+    // ---- Upload ----
+    let job = RetryInfo::TarFolder {
+        session: Arc::clone(&session),
+        upload: true,
+        local_root: src.clone(),
+        remote_root: remote_root.clone(),
+        policy: OverwritePolicy::Overwrite,
+    };
+    let (t, took, _) = run(
+        &mgr,
+        row(&Uuid::new_v4().to_string(), TransferKind::Upload, &src.to_string_lossy(), &remote_root, 0),
+        job,
+    )
+    .await;
+    assert!(matches!(t.status, TransferStatus::Done), "upload: {:?} {:?}", t.status, t.error);
+    assert_eq!(t.transferred, expected_bytes, "the row counts file bytes");
+    assert_eq!(t.files, Some(expected_files as u32));
+    println!("tar upload: {expected_files} files, {expected_bytes} bytes in {took:?}");
+
+    let check = ssh
+        .exec(&format!(
+            "cd '{remote_root}' && find . -type f | wc -l && test -d 'empty dir' && echo dir-ok && cat index.html && echo && cksum < 'assets/file 1 é.bin'"
+        ))
+        .await
+        .unwrap();
+    let lines: Vec<&str> = check.stdout.lines().collect();
+    assert_eq!(lines[0].trim(), expected_files.to_string(), "every file arrived: {}", check.stderr);
+    assert_eq!(lines[1], "dir-ok", "the empty folder arrived");
+    assert_eq!(lines[2], "<h1>local</h1>");
+
+    // ---- What the planner sees for this folder ----
+    let (files, bytes) = tarstream::remote_inventory(ssh, &remote_root)
+        .await
+        .expect("inventory of the uploaded folder");
+    assert_eq!(files, expected_files, "the planner counts every file");
+    assert!(bytes >= expected_bytes, "du reports at least the file bytes: {bytes}");
+    assert!(tarstream::worth_streaming(files, bytes), "this folder qualifies for a stream");
+    assert!(
+        mgr.tar_eligible(&session, OverwritePolicy::Overwrite, false).await.is_some(),
+        "an SSH session with tar is eligible"
+    );
+    assert!(
+        mgr.tar_eligible(&session, OverwritePolicy::Rename, true).await.is_none(),
+        "keep-both needs a per-file decision"
+    );
+    mgr.set_tar_folders(false);
+    assert!(
+        mgr.tar_eligible(&session, OverwritePolicy::Overwrite, false).await.is_none(),
+        "the setting turns it off"
+    );
+    mgr.set_tar_folders(true);
+    assert!(
+        tarstream::remote_inventory(ssh, &format!("{remote_parent}/nope")).await.is_none(),
+        "a missing folder has no inventory, so the per-file path reports it"
+    );
+
+    // ---- Skip existing ----
+    if support.skip_old {
+        ssh.exec(&format!("printf 'edited on the server' > '{remote_root}/index.html'")).await.unwrap();
+        let job = RetryInfo::TarFolder {
+            session: Arc::clone(&session),
+            upload: true,
+            local_root: src.clone(),
+            remote_root: remote_root.clone(),
+            policy: OverwritePolicy::Skip,
+        };
+        let (t, _, _) = run(
+            &mgr,
+            row(&Uuid::new_v4().to_string(), TransferKind::Upload, &src.to_string_lossy(), &remote_root, 0),
+            job,
+        )
+        .await;
+        assert!(matches!(t.status, TransferStatus::Done), "skip upload: {:?} {:?}", t.status, t.error);
+        let kept = ssh.exec(&format!("cat '{remote_root}/index.html'")).await.unwrap();
+        assert_eq!(kept.stdout, "edited on the server", "skip left the server's file alone");
+        ssh.exec(&format!("printf '<h1>local</h1>' > '{remote_root}/index.html'")).await.unwrap();
+    }
+
+    // ---- Download ----
+    let dst = scratch("tar-dst").join("site");
+    let job = RetryInfo::TarFolder {
+        session: Arc::clone(&session),
+        upload: false,
+        local_root: dst.clone(),
+        remote_root: remote_root.clone(),
+        policy: OverwritePolicy::Overwrite,
+    };
+    let (t, took, _) = run(
+        &mgr,
+        row(&Uuid::new_v4().to_string(), TransferKind::Download, &remote_root, &dst.to_string_lossy(), 0),
+        job,
+    )
+    .await;
+    assert!(matches!(t.status, TransferStatus::Done), "download: {:?} {:?}", t.status, t.error);
+    assert_eq!(t.transferred, expected_bytes);
+    assert_eq!(t.files, Some(expected_files as u32));
+    println!("tar download: {expected_files} files in {took:?}");
+
+    fn files_under(root: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() { stack.push(p) } else { out.push(p) }
+            }
+        }
+        out
+    }
+    let sent = files_under(&src);
+    assert_eq!(sent.len(), expected_files);
+    for file in &sent {
+        let rel = file.strip_prefix(&src).unwrap();
+        let back = dst.join(rel);
+        assert_eq!(
+            std::fs::read(&back).unwrap_or_default(),
+            std::fs::read(file).unwrap(),
+            "{} came back identical",
+            rel.display()
+        );
+    }
+    assert_eq!(files_under(&dst).len(), expected_files, "nothing extra, no part files");
+    assert!(dst.join("empty dir").is_dir());
+
+    // ---- A stream that fails is reported, not half-reported as done ----
+    let job = RetryInfo::TarFolder {
+        session: Arc::clone(&session),
+        upload: false,
+        local_root: scratch("tar-missing").join("x"),
+        remote_root: format!("{remote_parent}/does-not-exist"),
+        policy: OverwritePolicy::Overwrite,
+    };
+    let (t, _, _) = run(
+        &mgr,
+        row(&Uuid::new_v4().to_string(), TransferKind::Download, "missing", "x", 0),
+        job,
+    )
+    .await;
+    assert!(matches!(t.status, TransferStatus::Error), "a missing folder fails: {:?}", t.status);
+
+    let _ = ssh.exec(&format!("rm -rf '{remote_parent}'")).await;
 }

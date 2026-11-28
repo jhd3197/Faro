@@ -5,6 +5,7 @@ import { ACCENTS } from "@/lib/accent";
 import type { UiLanguage } from "@/lib/i18n";
 import {
   useSettings,
+  setSetting,
   LIGHT_THEMES,
   DARK_THEMES,
   TERMINAL_THEMES,
@@ -26,7 +27,8 @@ import { useBridge } from "@/stores/bridgeStore";
 import { ipc } from "@/lib/ipc";
 import { toast } from "@/stores/toastStore";
 import { toastError } from "@/lib/errors";
-import type { BackupSummary, CacheId, CacheUsage } from "@/lib/types";
+import type { BackupSummary, CacheId, CacheUsage, LocalShell } from "@/lib/types";
+import { localShells } from "@/lib/localTerminal";
 import { fmtSize } from "@/lib/format";
 import { useBindings } from "@/stores/bindingsStore";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -41,6 +43,9 @@ import { KeyboardSettings } from "./KeyboardSettings";
 import { Dropdown } from "./ui/Dropdown";
 import { AboutSettings } from "./AboutSettings";
 import { PasswordManagerSettings } from "./PasswordManagerSettings";
+import { TerminalExtras } from "./settings/TerminalExtras";
+import { ChangedSettings } from "./settings/ChangedSettings";
+import { INTERNAL_SETTINGS, SETTINGS_REGISTRY, looseMatch } from "@/lib/settingsRegistry";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
 import {
@@ -71,7 +76,7 @@ interface Props {
 // Which saved settings each section shows, for the "changed" dot in the nav.
 // Sections that keep their config elsewhere are checked separately below.
 const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSettings)[]>> = {
-  appearance: ["themeMode", "lightTheme", "darkTheme", "accentColor", "uiZoom", "frameStyle", "uiLanguage"],
+  appearance: ["themeMode", "lightTheme", "darkTheme", "accentColor", "uiZoom", "frameStyle", "uiLanguage", "timeFormat"],
   transfers: [
     "overwritePolicy",
     "promptOnOverwrite",
@@ -80,6 +85,7 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "transferThrottleKbps",
     "transferSegments",
     "transferVerify",
+    "transferTarFolders",
     "deltaSync",
     "defaultDownloadFolder",
   ],
@@ -92,6 +98,8 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "browserLayout",
     "remoteImagePreviews",
     "defaultEditor",
+    "editorOpenWith",
+    "editorAutoSave",
   ],
   terminal: [
     "terminalFontSize",
@@ -100,6 +108,17 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "terminalScrollback",
     "terminalCopyOnSelect",
     "terminalSuggestions",
+    "terminalLocalShell",
+    "terminalPersist",
+    "terminalRestoreWorkspace",
+    "terminalCursorStyle",
+    "terminalCursorBlink",
+    "terminalLineHeight",
+    "terminalPasteImages",
+    "terminalPlainPaste",
+    "terminalOsc52",
+    "terminalHighlight",
+    "terminalHighlightRules",
   ],
   connections: ["defaultPort", "storePasswordsInKeychain", "restoreLastSession"],
   about: ["notifications"],
@@ -129,6 +148,17 @@ function useChangedSections(): Set<SettingsSectionId> {
   if (policy.allowAll || policy.autoRead || policy.autoSafeExec) out.add("bridge");
   if (Object.keys(overrides).length > 0 || !shortcutsOn) out.add("keyboard");
   return out;
+}
+
+/** How many registered settings differ from their default. */
+function useChangedCount(): number {
+  const s = useSettings() as unknown as Record<string, unknown>;
+  let n = 0;
+  for (const e of SETTINGS_REGISTRY) {
+    if (INTERNAL_SETTINGS.includes(e.key) || !(e.key in SETTINGS_DEFAULTS)) continue;
+    if (isChangedSetting(e.key as keyof PersistedSettings, s[e.key])) n++;
+  }
+  return n;
 }
 
 const SECTIONS = SETTINGS_SECTIONS;
@@ -225,7 +255,14 @@ export function Settings({ onClose }: Props) {
 
   // --- Search: filters every section at once; the nav keeps only sections
   // with a hit (read back from the rendered rows).
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => useLayout.getState().settingsTarget?.query ?? "");
+  // A setting picked in the command palette opens Settings searching for it.
+  useEffect(() => {
+    if (target?.query) setQuery(target.query);
+  }, [target]);
+  // The "Changed" page: every setting that differs from its default.
+  const [showChanged, setShowChanged] = useState(false);
+  const changedCount = useChangedCount();
   const q = query.trim().toLowerCase();
   const searching = q.length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
@@ -279,6 +316,7 @@ export function Settings({ onClose }: Props) {
         ?.scrollIntoView({ block: "start" });
       return;
     }
+    setShowChanged(false);
     setActive(id);
     contentRef.current?.scrollTo({ top: 0 });
   };
@@ -348,6 +386,22 @@ export function Settings({ onClose }: Props) {
                 />
               </Row>
             )}
+            <Row
+              label="Time format"
+              keywords="12 hour 24 hour clock am pm dates"
+              help="How times are written everywhere: file dates, logs, the agent panel. Automatic follows the language."
+            >
+              <Segmented<"auto" | "12h" | "24h">
+                label="Time format"
+                value={s.timeFormat}
+                onChange={(v) => setSetting("timeFormat", v)}
+                options={[
+                  { value: "auto", label: "Automatic" },
+                  { value: "12h", label: "12-hour" },
+                  { value: "24h", label: "24-hour" },
+                ]}
+              />
+            </Row>
             <Row label="Accent color" keywords="highlight color" help="Buttons, links, focus rings and selection. Layers on top of the theme.">
               <AccentGrid value={s.accentColor} onChange={s.setAccentColor} />
             </Row>
@@ -469,6 +523,13 @@ export function Settings({ onClose }: Props) {
                 )}
               </Row>
               <BandwidthLimit kbps={s.transferThrottleKbps} onChange={s.setTransferThrottleKbps} />
+              <CheckRow
+                label="Send folders of small files as one stream"
+                keywords="tar fast folder many small files ssh stream"
+                help="Over SSH, a folder with 50 or more small files travels as a single tar stream instead of one file at a time, which is much faster. It shows as one row in the queue. Needs tar on the server; if a stream fails, the files are sent one by one."
+                checked={s.transferTarFolders !== "off"}
+                onChange={(v) => setSetting("transferTarFolders", v ? "auto" : "off")}
+              />
             </Group>
             <Group title="Integrity">
               <CheckRow
@@ -574,6 +635,28 @@ export function Settings({ onClose }: Props) {
                 ]}
               />
             </Row>
+            <Row
+              label="Open files for editing in"
+              keywords="edit editor built-in external text code"
+              help="Faro's editor opens text files up to 5 MB and checks that the file didn't change before saving. Your own editor is used for everything else, and is one click away from Faro's."
+            >
+              <Segmented<"builtin" | "external">
+                label="Open files for editing in"
+                value={s.editorOpenWith}
+                onChange={(v) => setSetting("editorOpenWith", v)}
+                options={[
+                  { value: "builtin", label: "Faro's editor" },
+                  { value: "external", label: "My editor" },
+                ]}
+              />
+            </Row>
+            <CheckRow
+              label="Auto-save in Faro's editor"
+              keywords="autosave save automatically"
+              help="Saves a moment after you stop typing. A file that changed on the server is never overwritten without asking."
+              checked={s.editorAutoSave}
+              onChange={(v) => setSetting("editorAutoSave", v)}
+            />
             <Row label="Default editor" keywords="edit in place code vscode" help="Command for edit-in-place, e.g. code. Blank opens the OS default app.">
               <DebouncedText
                 value={s.defaultEditor}
@@ -645,6 +728,7 @@ export function Settings({ onClose }: Props) {
                 ]}
               />
             </Row>
+            <LocalShellRow />
             <CheckRow
               label="Copy on select"
               keywords="clipboard"
@@ -659,6 +743,7 @@ export function Settings({ onClose }: Props) {
               checked={s.terminalSuggestions}
               onChange={s.setTerminalSuggestions}
             />
+            <TerminalExtras />
           </>
         );
 
@@ -832,6 +917,29 @@ export function Settings({ onClose }: Props) {
             onKeyDown={onNavKeyDown}
             className="flex w-44 shrink-0 flex-col overflow-y-auto border-r border-border py-2"
           >
+            {!searching && (
+              <button
+                type="button"
+                data-settings-changed-view
+                onClick={() => {
+                  setShowChanged(true);
+                  contentRef.current?.scrollTo({ top: 0 });
+                }}
+                aria-current={showChanged ? "page" : undefined}
+                title="Every setting that differs from its default"
+                className={cn(
+                  "mx-1 mb-1 flex h-6 items-center rounded-sm px-3 text-left text-sm",
+                  showChanged ? "bg-bg-hover text-text" : "text-text-muted hover:bg-bg-hover/50 hover:text-text"
+                )}
+              >
+                <span className="truncate">Changed</span>
+                {changedCount > 0 && (
+                  <span data-settings-changed-count className="ml-auto text-xs tabular-nums text-text-dim">
+                    {changedCount}
+                  </span>
+                )}
+              </button>
+            )}
             {SETTINGS_GROUPS.map((g) => {
               const items = SECTIONS.filter((sec) => sec.group === g.id && (!searching || hits.has(sec.id)));
               if (!items.length) return null;
@@ -839,7 +947,7 @@ export function Settings({ onClose }: Props) {
                 <div key={g.id} className="mb-2">
                   <div className="px-4 pb-1 pt-1.5 text-xs text-text-dim">{g.label}</div>
                   {items.map((sec) => {
-                    const on = !searching && active === sec.id;
+                    const on = !searching && !showChanged && active === sec.id;
                     const isChanged = changed.has(sec.id);
                     return (
                       <button
@@ -902,6 +1010,18 @@ export function Settings({ onClose }: Props) {
                   <p className="pt-2 text-sm text-text-muted">No settings match “{query.trim()}”.</p>
                 )}
               </div>
+            ) : showChanged ? (
+              <div className="max-w-[48rem] px-7 pb-8 pt-4">
+                <h2 className="sr-only">Changed settings</h2>
+                <ChangedSettings
+                  isChanged={isChangedSetting}
+                  onOpenSection={(section, label) => {
+                    setShowChanged(false);
+                    setActive(section);
+                    setQuery(label);
+                  }}
+                />
+              </div>
             ) : (
               <div className="max-w-[48rem] px-7 pb-8 pt-4">
                 {/* The nav already names the page; the heading is for screen readers. */}
@@ -937,7 +1057,7 @@ const SECTION_HELP: Partial<Record<SettingsSectionId, string>> = {
 };
 
 function sectionMatches(sec: { label: string; keywords: string }, q: string): boolean {
-  return sec.label.toLowerCase().includes(q) || sec.keywords.toLowerCase().includes(q);
+  return looseMatch(sec.label, q) || looseMatch(sec.keywords, q);
 }
 
 /** A small icon button that puts a setting back to its default. */
@@ -1655,5 +1775,37 @@ function StorageSettings() {
         );
       })}
     </List>
+  );
+}
+
+/// Which shell a new local terminal tab starts (Plan 36 Phase 1).
+function LocalShellRow() {
+  const value = useSettings((s) => s.terminalLocalShell);
+  const [shells, setShells] = useState<LocalShell[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void localShells().then((list) => {
+      if (alive) setShells(list);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return (
+    <Row
+      label="Local shell"
+      keywords="powershell bash zsh cmd wsl git default this computer"
+      help="The shell a new local terminal tab starts. Right-click the + in the terminal to pick another one for a single tab."
+    >
+      <Select<string>
+        label="Local shell"
+        value={shells.some((s) => s.id === value) ? value : ""}
+        onChange={(v) => setSetting("terminalLocalShell", v)}
+        options={[
+          { value: "", label: shells[0] ? `Default (${shells[0].name})` : "Default" },
+          ...shells.map((s) => ({ value: s.id, label: s.name })),
+        ]}
+      />
+    </Row>
   );
 }

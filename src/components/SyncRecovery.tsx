@@ -1,3 +1,4 @@
+import { fmtDateTime } from "@/lib/time";
 import { useEffect, useState } from "react";
 import { Loader2, RefreshCw, Undo2 } from "lucide-react";
 import { ipc } from "@/lib/ipc";
@@ -79,7 +80,7 @@ export function SyncRecovery({ sessionId, root, local, onRestored }: {
         return <div key={`${entry.batch}/${entry.relative}`} className="flex items-center gap-2 border-t border-border-subtle px-3 py-2">
           <div className="min-w-0 flex-1">
             <div className="truncate font-mono" title={entry.relative}>{entry.relative}</div>
-            <div className="text-[10px] text-text-dim">{Number.isFinite(saved) ? new Date(saved).toLocaleString() : entry.batch} · {entry.size.toLocaleString()} bytes</div>
+            <div className="text-[10px] text-text-dim">{Number.isFinite(saved) ? fmtDateTime(saved, { seconds: true }) : entry.batch} · {entry.size.toLocaleString()} bytes</div>
           </div>
           {!staging && <button disabled={busy || confirmCleanup} onClick={() => void restore(entry)} aria-label={`Restore ${entry.relative}`}
             className="flex shrink-0 items-center gap-1 rounded border border-border px-2 py-1 hover:bg-bg-hover disabled:opacity-40">

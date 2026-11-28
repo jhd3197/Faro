@@ -100,6 +100,10 @@ import type {
   SyncRecoveryEntry,
   SyncStrategy,
   TerminalDataEvent,
+  LocalShell,
+  PersistedSession,
+  EditorFile,
+  FileStamp,
   TerminalExitEvent,
   Transfer,
   TransferQueueState,
@@ -405,8 +409,45 @@ export const ipc = {
   cacheUsage: () => invoke<CacheUsage[]>("cache_usage"),
   cacheClear: (id: CacheId) => invoke<CacheUsage>("cache_clear", { id }),
 
-  openTerminal: (sessionId: SessionId, cols: number, rows: number) =>
-    invoke<string>("open_terminal", { sessionId, cols, rows }),
+  /** `shell` (a local profile id) and `cwd` apply to the local machine only. */
+  openTerminal: (
+    sessionId: SessionId,
+    cols: number,
+    rows: number,
+    opts?: { shell?: string; cwd?: string; persistName?: string; scrollback?: number }
+  ) =>
+    invoke<string>("open_terminal", {
+      sessionId,
+      cols,
+      rows,
+      shell: opts?.shell ?? null,
+      cwd: opts?.cwd ?? null,
+      persistName: opts?.persistName ?? null,
+      scrollback: opts?.scrollback ?? null,
+    }),
+
+  /** Faro's tmux sessions on a connection's host. */
+  terminalPersistList: (sessionId: SessionId) =>
+    invoke<PersistedSession[]>("terminal_persist_list", { sessionId }),
+  /** End one of them. */
+  terminalPersistKill: (sessionId: SessionId, name: string) =>
+    invoke<void>("terminal_persist_kill", { sessionId, name }),
+
+  /** Save a pasted image (base64) where the session's shell runs; returns
+   *  the path to type. */
+  terminalPasteImage: (sessionId: SessionId, data: string, ext: string) =>
+    invoke<string>("terminal_paste_image", { sessionId, data, ext }),
+
+  /** Write base64-encoded bytes to a local path picked in a save dialog. */
+  writeBase64File: (path: string, data: string) =>
+    invoke<void>("write_base64_file", { path, data }),
+
+  /** Write text to a local path picked in a save dialog. */
+  writeTextFile: (path: string, contents: string) =>
+    invoke<void>("write_text_file", { path, contents }),
+
+  /** Shells installed on this machine, the default first. */
+  listLocalShells: () => invoke<LocalShell[]>("list_local_shells"),
 
   terminalWrite: (terminalId: string, data: string) =>
     invoke<void>("terminal_write", { terminalId, data }),
@@ -414,8 +455,10 @@ export const ipc = {
   terminalResize: (terminalId: string, cols: number, rows: number) =>
     invoke<void>("terminal_resize", { terminalId, cols, rows }),
 
-  closeTerminal: (terminalId: string) =>
-    invoke<void>("close_terminal", { terminalId }),
+  /** `endSession: false` leaves a persistent pane's shell running on the
+   *  host (the connection is closing, not the pane). */
+  closeTerminal: (terminalId: string, endSession = true) =>
+    invoke<void>("close_terminal", { terminalId, endSession }),
 
   // ---- Command snippets (Plan 11 Phase 4) ----
   // Every mutation returns the full, re-ordered list (most-used first).
@@ -491,6 +534,9 @@ export const ipc = {
   transferSetSegments: (count: number) =>
     invoke<void>("transfer_set_segments", { count }),
 
+  /** Send folders of many small files over SSH as one tar stream. */
+  transferSetTarFolders: (enabled: boolean) =>
+    invoke<void>("transfer_set_tar_folders", { enabled }),
   transferSetVerify: (enabled: boolean) =>
     invoke<void>("transfer_set_verify", { enabled }),
 
@@ -702,6 +748,23 @@ export const ipc = {
 
   stopEdit: (editId: string) => invoke<void>("stop_edit", { editId }),
 
+  // ---- Built-in editor and image viewer (Plan 37 Phase 3) ----
+  /** Read a UTF-8 text file (up to 5 MB) and the stamp of the version read. */
+  editorRead: (sessionId: SessionId, path: string) =>
+    invoke<EditorFile>("editor_read", { sessionId, path }),
+  /** Save. Rejects with kind `conflict` when the file is no longer the
+   *  version `expected` describes, unless `force`. */
+  editorWrite: (
+    sessionId: SessionId,
+    path: string,
+    text: string,
+    expected: FileStamp | null,
+    force = false
+  ) => invoke<FileStamp | null>("editor_write", { sessionId, path, text, expected, force }),
+  /** A whole image file (up to 25 MB), base64-encoded. */
+  readImageFile: (sessionId: SessionId, path: string) =>
+    invoke<string>("read_image_file", { sessionId, path }),
+
   // Agent Bridge
   bridgeStart: () => invoke<BridgeStatus>("bridge_start"),
   bridgeStop: () => invoke<BridgeStatus>("bridge_stop"),
@@ -739,6 +802,8 @@ export const ipc = {
   /** Every setting as `key -> raw JSON value`. */
   settingsGetAll: () =>
     invoke<Record<string, string>>("settings_get_all"),
+  /** One setting's raw JSON value; null when never set. */
+  settingsGet: (key: string) => invoke<string | null>("settings_get", { key }),
   /** Upsert one setting (`value` is a JSON-stringified value). */
   settingsSet: (key: string, value: string) =>
     invoke<void>("settings_set", { key, value }),

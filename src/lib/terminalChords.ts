@@ -23,6 +23,7 @@ export const TERMINAL_CHORDS = {
   prevTab: "mod+shift+[",
   nextTab: "mod+shift+]",
   lastTab: "mod+9",
+  clear: "mod+shift+k",
 } as const;
 
 /** Command id for "go to terminal tab n" (1–8); tab 9 is `term-tab-last`. */
@@ -39,6 +40,14 @@ const CHORD_COMMAND_DEFAULTS: Record<string, string | undefined> = {
   "term-tab-prev": TERMINAL_CHORDS.prevTab,
   "term-tab-next": TERMINAL_CHORDS.nextTab,
   "term-tab-last": TERMINAL_CHORDS.lastTab,
+  "term-clear": TERMINAL_CHORDS.clear,
+  "term-select-all": undefined,
+  "term-copy-output": undefined,
+  "term-save-output": undefined,
+  "term-broadcast": undefined,
+  "term-lock-tab": undefined,
+  "term-pin-tab": undefined,
+  "term-duplicate-tab": undefined,
   "term-tab-move-left": undefined,
   "term-tab-move-right": undefined,
   ...Object.fromEntries(

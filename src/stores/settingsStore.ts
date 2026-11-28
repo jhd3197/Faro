@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
 import type { UiLanguage } from "@/lib/i18n";
 import type { RailSort } from "@/lib/railOps";
+import { DEFAULT_HIGHLIGHT_RULES, type HighlightRule } from "@/lib/terminalHighlight";
 
 export type OverwritePolicy = "overwrite" | "skip" | "rename";
 export type SortField = "name" | "size" | "modified";
@@ -202,6 +203,39 @@ interface SettingsState {
   /** Inline ghost-text history suggestions while typing a command (fish/VS
    *  Code style, → to accept). On by default. */
   terminalSuggestions: boolean;
+  terminalCursorStyle: "block" | "bar" | "underline";
+  terminalCursorBlink: boolean;
+  /** Line height as a multiple of the font size (1 = tight). */
+  terminalLineHeight: number;
+  /** Pasting a clipboard image uploads it and types its path. */
+  terminalPasteImages: boolean;
+  /** Paste without bracketed-paste markers. */
+  terminalPlainPaste: boolean;
+  /** Let programs on the host set the local clipboard (OSC 52). */
+  terminalOsc52: boolean;
+  /** Colour words such as `error` and `ok` in command output. */
+  terminalHighlight: boolean;
+  terminalHighlightRules: HighlightRule[];
+  /** Keep server shells running on the host (inside tmux) so they survive a
+   *  disconnect or an app restart. */
+  terminalPersist: "off" | "on";
+  /** Per-connection choice, by profile id; wins over `terminalPersist`. */
+  terminalPersistOverrides: Record<string, boolean>;
+  /** Rebuild a connection's terminal tabs the next time it opens. */
+  terminalRestoreWorkspace: boolean;
+  /** Local terminal: the shell profile a new local tab starts ("" = the
+   *  machine's default). */
+  terminalLocalShell: string;
+
+  // Plan 37
+  /** How times are shown everywhere: follow the UI language, or force one. */
+  timeFormat: "auto" | "12h" | "24h";
+  /** "Edit" opens Faro's own editor, or the external one. */
+  editorOpenWith: "builtin" | "external";
+  /** The built-in editor saves by itself a moment after typing stops. */
+  editorAutoSave: boolean;
+  /** Send a folder of many small files over SSH as one tar stream. */
+  transferTarFolders: "auto" | "off";
 
   // Connections
   defaultPort: number;
@@ -366,6 +400,22 @@ const DEFAULTS: Persisted = {
   terminalScrollback: 5000,
   terminalCopyOnSelect: true,
   terminalSuggestions: true,
+  terminalCursorStyle: "block",
+  terminalCursorBlink: true,
+  terminalLineHeight: 1,
+  terminalPasteImages: true,
+  terminalPlainPaste: false,
+  terminalOsc52: true,
+  terminalHighlight: true,
+  terminalHighlightRules: DEFAULT_HIGHLIGHT_RULES,
+  terminalPersist: "off",
+  terminalPersistOverrides: {},
+  terminalRestoreWorkspace: true,
+  terminalLocalShell: "",
+  timeFormat: "auto",
+  editorOpenWith: "builtin",
+  editorAutoSave: false,
+  transferTarFolders: "auto",
   defaultPort: 22,
   storePasswordsInKeychain: false,
   restoreLastSession: true,
@@ -635,6 +685,26 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setNotifications: (v) => mutate(set, get, "notifications", v),
   setRestoreLastSession: (v) => mutate(set, get, "restoreLastSession", v),
 }));
+
+/** Set one persisted setting. For settings that need no logic of their own,
+ *  so adding one means a field and a default, not a setter. */
+export function setSetting<K extends keyof Persisted>(key: K, value: Persisted[K]) {
+  useSettings.setState({ [key]: value } as Partial<SettingsState>);
+  persistKey(key, value);
+}
+
+/** Set a setting through its own setter when it has one (`setThemeMode`,
+ *  `setTransferConcurrency`, …), so side effects still happen, and plainly
+ *  otherwise. For code that only knows a setting by its key: the Changed
+ *  view and the command palette. */
+export function applySetting<K extends keyof Persisted>(key: K, value: Persisted[K]): void | Promise<void> {
+  const name = `set${String(key)[0].toUpperCase()}${String(key).slice(1)}`;
+  const setter = (useSettings.getState() as unknown as Record<string, unknown>)[name];
+  if (typeof setter === "function") {
+    return (setter as (v: Persisted[K]) => void | Promise<void>)(value);
+  }
+  setSetting(key, value);
+}
 
 /** Reload settings from faro.db and merge them into the live store. Used by
  *  windows that didn't get the pre-paint injection (popouts) and to reflect a

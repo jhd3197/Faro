@@ -55,6 +55,7 @@ import {
   Scissors,
   Files,
   ClipboardPaste,
+  Eye,
 } from "lucide-react";
 import type {
   Capabilities,
@@ -1102,6 +1103,18 @@ export function FilePane({
       }
       if (single.kind === "file" && isRemote && onEditTags) {
         items.push({ label: "Tags…", icon: <Tag size={12} />, onClick: () => onEditTags([single]) });
+      }
+      // The host app's viewer, for the kinds of file it says it can show.
+      if (single.kind === "file" && fs.viewFile && fs.canViewFile?.(single.name)) {
+        items.push({
+          label: "View",
+          icon: <Eye size={12} />,
+          onClick: () => {
+            fs.viewFile!(sessionId ?? LOCAL_SESSION, single.path).catch((e) =>
+              setError(errorText(e))
+            );
+          },
+        });
       }
       // Edit-in-place sits right under the primary action so it's easy to find
       // (it used to be last, below chmod). Remote files only — local files open

@@ -22,6 +22,17 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  Eraser,
+  TextSelect,
+  ClipboardCopy,
+  Save,
+  RadioTower,
+  FilePen,
+  Image as ImageIcon,
+  ToggleLeft,
+  Lock,
+  Pin,
+  CopyPlus,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -46,10 +57,23 @@ import {
 } from "@/stores/settingsStore";
 import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
-import { useTerminals, sessionTabsOf } from "@/stores/terminalsStore";
+import { useTerminals, dockTabsOf } from "@/stores/terminalsStore";
+import { openLocalTerminal } from "@/lib/localTerminal";
+import { imageMime, looksEditable } from "@/lib/editorLang";
+import { useViewer } from "@/stores/viewerStore";
+import {
+  clearTerminal,
+  copyTerminalOutput,
+  saveTerminalOutput,
+  selectAllTerminal,
+  toggleBroadcast,
+} from "@/lib/terminalActions";
+import { LOCAL_SESSION } from "@/lib/types";
 import { useServerView } from "@/stores/serverViewStore";
 import { TERMINAL_CHORDS, termTabCommandId } from "@/lib/terminalChords";
 import { SETTINGS_SECTIONS, settingsCommandId } from "@/lib/settingsNav";
+import { SETTINGS_REGISTRY } from "@/lib/settingsRegistry";
+import { SETTINGS_DEFAULTS, applySetting, type PersistedSettings } from "@/stores/settingsStore";
 import { COMMAND_COMBOS } from "@/lib/bindingCatalog";
 import { useFocusedItem } from "@/stores/focusStore";
 import { toast } from "@/stores/toastStore";
@@ -64,6 +88,9 @@ export interface Command {
   enabled?: boolean; // default true
   /** Listed in Settings › Keyboard even without a default combo. */
   bindable?: boolean;
+  /** Only offered once something is typed (one entry per setting would
+   *  otherwise bury the list an empty palette shows). */
+  searchOnly?: boolean;
   run: () => void;
 }
 
@@ -91,6 +118,7 @@ export function useCommands(): Command[] {
   const openSkills = useSkills((s) => s.openPanel);
   const snippets = useSnippets((s) => s.snippets);
 
+  const settingValues = useSettings() as unknown as Record<string, unknown>;
   const appTheme = useSettings((s) => s.appTheme);
   const setAppTheme = useSettings((s) => s.setAppTheme);
   const uiZoom = useSettings((s) => s.uiZoom);
@@ -108,7 +136,8 @@ export function useCommands(): Command[] {
   const focusedShell =
     focused?.kind === "file" &&
     focused.isDir &&
-    profiles.find((p) => p.id === focusedProfileId)?.protocol === "sftp";
+    (focused.sessionId === LOCAL_SESSION ||
+      profiles.find((p) => p.id === focusedProfileId)?.protocol === "sftp");
 
   const cmds: Command[] = [
     {
@@ -242,8 +271,16 @@ export function useCommands(): Command[] {
       group: "View",
       icon: <TerminalSquare size={14} />,
       combo: COMMAND_COMBOS["toggle-terminal"],
-      enabled: !!activeSessionId && supportsTerminal,
       run: toggleTerminal,
+    },
+    {
+      id: "new-local-terminal",
+      title: "New Local Terminal",
+      group: "View",
+      icon: <TerminalSquare size={14} />,
+      keywords: "terminal shell local powershell bash zsh cmd wsl this computer",
+      bindable: true,
+      run: () => void openLocalTerminal(),
     },
     {
       id: "open-terminal-here",
@@ -255,9 +292,39 @@ export function useCommands(): Command[] {
       enabled: !!focusedShell,
       run: () => {
         if (focused?.kind !== "file" || !focused.isDir) return;
+        if (focused.sessionId === LOCAL_SESSION) {
+          void openLocalTerminal({ cwd: focused.path });
+          return;
+        }
         useLayout.getState().setTerminalOpen(true);
         const quoted = "'" + focused.path.replace(/'/g, "'\\''") + "'";
         useTerminals.getState().openTab(focused.sessionId, `cd ${quoted}\n`);
+      },
+    },
+    {
+      id: "edit-focused-file",
+      title: "Edit Focused File in Faro",
+      group: "File",
+      icon: <FilePen size={14} />,
+      keywords: "edit editor open text built-in code",
+      bindable: true,
+      enabled: focused?.kind === "file" && !focused.isDir && looksEditable(focused.path),
+      run: () => {
+        if (focused?.kind !== "file" || focused.isDir) return;
+        useViewer.getState().open({ kind: "text", sessionId: focused.sessionId, path: focused.path });
+      },
+    },
+    {
+      id: "view-focused-image",
+      title: "View Focused Image",
+      group: "File",
+      icon: <ImageIcon size={14} />,
+      keywords: "image picture photo viewer preview zoom",
+      bindable: true,
+      enabled: focused?.kind === "file" && !focused.isDir && imageMime(focused.path) !== null,
+      run: () => {
+        if (focused?.kind !== "file" || focused.isDir) return;
+        useViewer.getState().open({ kind: "image", sessionId: focused.sessionId, path: focused.path });
       },
     },
     {
@@ -348,10 +415,40 @@ export function useCommands(): Command[] {
     },
   ];
 
+  // Every setting is reachable by name: an on/off setting flips right here,
+  // anything else opens Settings searching for it.
+  for (const entry of SETTINGS_REGISTRY) {
+    if (!(entry.key in SETTINGS_DEFAULTS)) continue;
+    const section = SETTINGS_SECTIONS.find((s) => s.id === entry.section)?.label ?? "";
+    const keywords = `setting settings preference option ${section} ${entry.keywords ?? ""}`;
+    if (entry.kind === "toggle") {
+      const on = !!settingValues[entry.key];
+      cmds.push({
+        id: `setting:${entry.key}`,
+        title: `${entry.label}: turn ${on ? "off" : "on"}`,
+        group: "Settings",
+        icon: <ToggleLeft size={14} />,
+        keywords: `${keywords} toggle enable disable`,
+        searchOnly: true,
+        run: () => void applySetting(entry.key as keyof PersistedSettings, !on as never),
+      });
+    } else {
+      cmds.push({
+        id: `setting:${entry.key}`,
+        title: `Setting: ${entry.label}`,
+        group: "Settings",
+        icon: <SettingsIcon size={14} />,
+        keywords,
+        searchOnly: true,
+        run: () => openSettings({ section: entry.section, query: entry.label }),
+      });
+    }
+  }
+
   // Terminal split controls — only while a terminal is on screen. They act on
   // the active tab's active pane; the chords are swallowed by xterm (see
   // terminalChords) so they never reach the shell.
-  const terminalActive = terminalOpen && supportsTerminal && !!activeSessionId;
+  const terminalActive = terminalOpen;
   const activeTab = () => {
     const t = useTerminals.getState();
     return t.tabs.find((x) => x.id === t.activeId) ?? null;
@@ -402,7 +499,12 @@ export function useCommands(): Command[] {
       enabled: terminalActive,
       run: () => {
         const tab = activeTab();
-        if (tab) useTerminals.getState().closePane(tab.id, tab.activePaneId);
+        if (!tab) return;
+        if (tab.locked && tab.root.kind === "leaf") {
+          toast.info("This tab is locked", "Unlock it to close it.");
+          return;
+        }
+        useTerminals.getState().closePane(tab.id, tab.activePaneId);
       },
     }
   );
@@ -412,7 +514,7 @@ export function useCommands(): Command[] {
   // shell by terminalChords.
   const strip = () => {
     const t = useTerminals.getState();
-    const tabs = activeSessionId ? sessionTabsOf(t.tabs, activeSessionId) : [];
+    const tabs = dockTabsOf(t.tabs, supportsTerminal ? activeSessionId : null);
     return { t, tabs, at: tabs.findIndex((x) => x.id === t.activeId) };
   };
   const goTo = (pick: (n: number, at: number) => number) => {
@@ -434,8 +536,9 @@ export function useCommands(): Command[] {
     keywords: "undo close restore tab shell",
     enabled: terminalActive,
     run: () => {
-      if (!activeSessionId) return;
-      const tab = useTerminals.getState().reopenClosed(activeSessionId);
+      const t = useTerminals.getState();
+      const current = t.tabs.find((x) => x.id === t.activeId)?.sessionId;
+      const tab = t.reopenClosed(current ?? activeSessionId ?? LOCAL_SESSION);
       if (!tab) toast.info("No closed tabs to reopen");
     },
   });
@@ -495,6 +598,98 @@ export function useCommands(): Command[] {
       bindable: true,
       enabled: terminalActive,
       run: () => shift(1),
+    }
+  );
+
+  cmds.push(
+    {
+      id: "term-clear",
+      title: "Terminal: Clear",
+      group: "Terminal",
+      icon: <Eraser size={14} />,
+      combo: TERMINAL_CHORDS.clear,
+      keywords: "clear wipe scrollback screen reset cls",
+      enabled: terminalActive,
+      run: () => clearTerminal(),
+    },
+    {
+      id: "term-select-all",
+      title: "Terminal: Select all output",
+      group: "Terminal",
+      icon: <TextSelect size={14} />,
+      keywords: "select all output scrollback",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => selectAllTerminal(),
+    },
+    {
+      id: "term-copy-output",
+      title: "Terminal: Copy all output",
+      group: "Terminal",
+      icon: <ClipboardCopy size={14} />,
+      keywords: "copy output scrollback clipboard log",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => void copyTerminalOutput(),
+    },
+    {
+      id: "term-save-output",
+      title: "Terminal: Save output to file…",
+      group: "Terminal",
+      icon: <Save size={14} />,
+      keywords: "save export output scrollback log file",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => void saveTerminalOutput(),
+    },
+    {
+      id: "term-lock-tab",
+      title: "Terminal: Lock / unlock tab",
+      group: "Terminal",
+      icon: <Lock size={14} />,
+      keywords: "lock protect close accident tab",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => {
+        const tab = activeTab();
+        if (tab) useTerminals.getState().toggleLock(tab.id);
+      },
+    },
+    {
+      id: "term-pin-tab",
+      title: "Terminal: Pin / unpin tab",
+      group: "Terminal",
+      icon: <Pin size={14} />,
+      keywords: "pin keep first tab",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => {
+        const tab = activeTab();
+        if (tab) useTerminals.getState().togglePin(tab.id);
+      },
+    },
+    {
+      id: "term-duplicate-tab",
+      title: "Terminal: Duplicate tab",
+      group: "Terminal",
+      icon: <CopyPlus size={14} />,
+      keywords: "duplicate clone copy tab shell same server",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => {
+        const tab = activeTab();
+        if (tab) useTerminals.getState().duplicateTab(tab.id);
+      },
+    },
+    {
+      id: "term-broadcast",
+      title: "Terminal: Toggle broadcast input",
+      group: "Terminal",
+      icon: <RadioTower size={14} />,
+      keywords: "broadcast type every pane all panes multi synchronize input",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => toggleBroadcast(),
     }
   );
 

@@ -20,6 +20,16 @@ test('missing engine rows cannot disappear into success', () => {
   assert.equal(uploadOutcome(baseline, [{ status: 'done' }, undefined]).pending, true);
   assert.equal(uploadOutcome(baseline, rows('done')).complete, false);
 });
+test('a folder sent as one stream counts for every file it carried', () => {
+  const stream = [{ status: 'done', files: 2, transferred: 300 }];
+  assert.equal(uploadOutcome(baseline, stream).complete, true);
+  assert.equal(uploadOutcome(baseline, stream).done, 2);
+  assert.equal(uploadOutcome({ ...baseline, bytes: 300 }, stream).complete, true, 'file bytes add up');
+  assert.equal(uploadOutcome({ ...baseline, bytes: 999 }, stream).complete, false, 'a byte shortfall still shows');
+  assert.equal(uploadOutcome(baseline, [{ status: 'done', files: 1 }]).complete, false, 'fewer files than expected');
+  assert.equal(uploadOutcome(baseline, [{ status: 'error', files: 2 }]).complete, false, 'a failed stream is not success');
+  assert.equal(uploadOutcome(baseline, [{ status: 'transferring', files: 2 }]).pending, true);
+});
 test('missing empty directory prevents success', () => {
   assert.equal(uploadOutcome({ ...baseline, verifiedDirectories: 2 }, rows('done', 'done')).complete, false);
 });

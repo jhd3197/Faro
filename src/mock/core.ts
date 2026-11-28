@@ -17,6 +17,35 @@ type Args = Record<string, any>;
 let terminalCounter = 0;
 // Terminals that have received input (see terminal_write).
 const echoed = new Set<string>();
+/** Files the built-in editor has opened or saved, by path. */
+const editorFiles = new Map<string, { text: string; stamp: { size: number; modified: number; etag: null } }>();
+let editorClock = 1_700_000_000;
+function editorFile(path: string) {
+  let file = editorFiles.get(path);
+  if (!file) {
+    const text = path.endsWith(".bin")
+      ? "MZ\u0000\u0000binary"
+      : `# ${path.split("/").pop()}\nlisten 80;\nserver_name example.com;\n`;
+    file = { text, stamp: { size: text.length, modified: ++editorClock, etag: null } };
+    editorFiles.set(path, file);
+  }
+  return file;
+}
+/** Change a file "on the server" (tests use this to force a save conflict). */
+export function setEditorFile(path: string, text: string) {
+  editorFiles.set(path, { text, stamp: { size: text.length, modified: ++editorClock, etag: null } });
+}
+/** Every save the built-in editor made. */
+export const editorWrites: { path: string; text: string; force: boolean }[] = [];
+/** Saved terminal workspaces (settings rows), kept for the page's lifetime. */
+export const workspaceRows = new Map<string, string>();
+/** tmux sessions "on the host", for the detached-sessions menu. */
+let persistedSessions: { name: string; attached: number; lastActivity: number }[] = [];
+export function setPersistedSessions(list: typeof persistedSessions) {
+  persistedSessions = list;
+}
+/** Every terminal call the UI made, for tests: what was opened and written. */
+export const terminalCalls: { cmd: string; args: Record<string, unknown> }[] = [];
 
 // A tiny in-memory snippets store so the demo's Snippets panel / palette work
 // (save/delete round-trip) without the Rust backend (Plan 11 Phase 4).
@@ -176,7 +205,16 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- settings + credentials (Plan 12) ----
     case "settings_get_all":
       return JSON.parse(sessionStorage.getItem("faro-mock-discovery") ?? '{"discoverySeenVersion":"1.3.22"}');
+    case "settings_get":
+      return workspaceRows.get(String(a.key)) ?? null;
+    case "terminal_persist_list":
+      return persistedSessions;
+    case "terminal_persist_kill":
+      terminalCalls.push({ cmd, args: { ...a } });
+      persistedSessions = persistedSessions.filter((s) => s.name !== a.name);
+      return null;
     case "settings_set": {
+      if (String(a.key).startsWith("terminalWorkspace:")) workspaceRows.set(String(a.key), String(a.value));
       // Rows the demo keeps across reloads (in this tab): discovery state and
       // the restored-session/window rows the restore test reads back.
       if (String(a.key).startsWith("discovery") || ["sessionSnapshot", "windowBackground", "palette.recent", "layout.panels"].includes(String(a.key))) {
@@ -187,6 +225,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return null;
     }
     case "settings_delete":
+      workspaceRows.delete(String(a.key));
+      return null;
     case "settings_set_all":
     case "set_api_key":
     case "set_profile_password_keychain":
@@ -211,6 +251,10 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       // Test hooks (Plan 12 Phase 3): sentinel ids reject like a migrated
       // command — a structured {kind, message} error, exactly as Tauri delivers
       // one. Drives scripts/verify-errors.mjs.
+      // A host named for the failure, so quick connect (which mints its own
+      // profile id) can be driven into it too.
+      if (data.profiles.find((p) => p.id === a.profileId)?.host === "auth-fail.test")
+        throw { kind: "auth", message: "Authentication failed: no key was accepted" };
       if (a.profileId === "__auth_fail__")
         throw { kind: "auth", message: "Authentication failed for user demo" };
       if (a.profileId === "__net_fail__")
@@ -302,6 +346,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- terminal ----
     case "open_terminal": {
       const id = `term-${++terminalCounter}`;
+      terminalCalls.push({ cmd, args: { ...a, terminalId: id } });
       // Push the canned transcript once the xterm is listening.
       setTimeout(
         () => emit("terminal://data", { terminalId: id, data: data.TERMINAL_TRANSCRIPT }),
@@ -310,6 +355,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return id;
     }
     case "terminal_write": {
+      terminalCalls.push({ cmd, args: { ...a } });
       // Echo keystrokes like a real PTY so typed commands and inserted
       // snippets show up. The first write backs over the transcript's
       // painted cursor; Enter starts a fresh prompt.
@@ -323,8 +369,43 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       emit("terminal://data", { terminalId: a.terminalId, data: out });
       return null;
     }
+    case "terminal_paste_image":
+      terminalCalls.push({ cmd, args: { ...a, data: `${String(a.data).length} chars` } });
+      return a.sessionId === "local"
+        ? "C:\\Users\\demo\\AppData\\Local\\Temp\\faro-pastes\\paste 1.png"
+        : `/home/deploy/.cache/faro/pastes/paste-1.${a.ext}`;
+    case "editor_read": {
+      const file = editorFile(String(a.path));
+      if (file.text.includes("\u0000")) throw { kind: "unsupported", message: "This looks like a binary file, so it can't be edited as text." };
+      return { text: file.text, stamp: { ...file.stamp } };
+    }
+    case "editor_write": {
+      const file = editorFile(String(a.path));
+      const exp = a.expected;
+      if (!a.force && exp && (exp.size !== file.stamp.size || exp.modified !== file.stamp.modified)) {
+        throw { kind: "conflict", message: "The file changed since you opened it." };
+      }
+      setEditorFile(String(a.path), String(a.text));
+      editorWrites.push({ path: String(a.path), text: String(a.text), force: !!a.force });
+      return { ...editorFile(String(a.path)).stamp };
+    }
+    case "read_image_file":
+      // A 2×1 PNG: one red pixel, one blue.
+      return "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGP4z8Dwn4GBgQEADQEB/4o5HXMAAAAASUVORK5CYII=";
+    case "transfer_set_tar_folders":
+    case "write_base64_file":
+    case "write_text_file":
+      return null;
+    case "list_local_shells":
+      return [
+        { id: "pwsh", name: "PowerShell", program: "pwsh.exe", args: ["-NoLogo"] },
+        { id: "cmd", name: "Command Prompt", program: "cmd.exe", args: [] },
+        { id: "wsl:Ubuntu", name: "Ubuntu (WSL)", program: "wsl.exe", args: ["-d", "Ubuntu"] },
+      ];
     case "terminal_resize":
+      return null;
     case "close_terminal":
+      terminalCalls.push({ cmd, args: { ...a } });
       return null;
 
     // ---- snippets (Plan 11 Phase 4) ----

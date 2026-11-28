@@ -45,6 +45,13 @@ export interface FileSystemAdapter {
    */
   editFile?(sessionId: SessionId, path: string): Promise<void>;
   /**
+   * Optional: open a file in the host app's own viewer (an image viewer, a
+   * built-in editor). `canViewFile` says which names it takes; omit either
+   * and the pane doesn't offer "View".
+   */
+  viewFile?(sessionId: SessionId, path: string): Promise<void>;
+  canViewFile?(name: string): boolean;
+  /**
    * Optional: fetch raw bytes for an image so the grid can show a real preview
    * instead of a generic icon. Return the file as a Blob, or null if a preview
    * isn't available (too large, remote backend without read, not an image…).

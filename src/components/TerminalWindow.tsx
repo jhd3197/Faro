@@ -8,6 +8,7 @@ import { ipc, onTerminalData, onTerminalExit } from "@/lib/ipc";
 import { openExternal } from "@/lib/openExternal";
 import { attachSuggestions } from "@/lib/termSuggest";
 import { popoutBufferKey } from "@/lib/popout";
+import { attachOsc52, terminalOptions } from "@/lib/terminalRegistry";
 import { useSettings, TERMINAL_THEMES } from "@/stores/settingsStore";
 import { cn } from "@/lib/cn";
 
@@ -36,20 +37,13 @@ export function TerminalWindow() {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const {
-      terminalFontSize,
-      terminalFontFamily,
-      terminalTheme,
-      terminalScrollback,
-    } = useSettings.getState();
+    const settings = useSettings.getState();
     const term = new XTerm({
-      fontFamily: terminalFontFamily,
-      fontSize: terminalFontSize,
-      scrollback: terminalScrollback,
-      theme: TERMINAL_THEMES[terminalTheme],
-      cursorBlink: true,
+      ...terminalOptions(settings),
+      scrollback: settings.terminalScrollback,
       allowProposedApi: true,
     });
+    const osc52 = attachOsc52(term);
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon((_e, uri) => openExternal(uri)));
@@ -149,6 +143,7 @@ export function TerminalWindow() {
       suggest.dispose();
       dataDisposable.dispose();
       resizeDisposable.dispose();
+      osc52.dispose();
       selectionDisposable.dispose();
       if (unlistenData) unlistenData();
       if (unlistenExit) unlistenExit();

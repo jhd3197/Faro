@@ -243,7 +243,9 @@ export const useTransfers = create<TransfersState>((set, get) => ({
     for (const report of get().uploadReports) {
       if (report.preparing || report.validation !== "waiting" || report.errors.length || report.canceled || report.skipped) continue;
       const rows = report.transferIds.map((id) => get().byId[id]);
-      if (rows.length !== report.files || rows.some((t) => t?.status !== "done")) continue;
+      // A folder sent as one stream is a single row carrying many files.
+      const carried = rows.reduce((n, t) => n + (t?.files ?? 1), 0);
+      if (carried !== report.files || rows.some((t) => t?.status !== "done")) continue;
       const update = (patch: Partial<UploadReport>) => set((s) => ({ uploadReports:
         s.uploadReports.map((r) => r.id === report.id ? { ...r, ...patch } : r) }));
       update({ validation: "checking" });

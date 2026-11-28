@@ -11,11 +11,43 @@ import {
   Maximize2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Laptop,
+  Eraser,
+  ClipboardCopy,
+  Save,
+  RadioTower,
+  Lock,
+  LockOpen,
+  Pin,
+  PinOff,
+  CopyPlus,
+  History,
+  RotateCw,
+  Check,
 } from "lucide-react";
-import type { SessionId } from "@/lib/types";
+import {
+  clearTerminal,
+  copyTerminalOutput,
+  saveTerminalOutput,
+} from "@/lib/terminalActions";
+import { LOCAL_SESSION, type LocalShell, type SessionId } from "@/lib/types";
+import { localShells, openLocalTerminal } from "@/lib/localTerminal";
+import {
+  detachedSessions,
+  persistEnabled,
+  restoreWorkspace,
+  startWorkspaceSync,
+} from "@/lib/terminalWorkspace";
+import { persistNameFor } from "@/lib/terminalWorkspaceCore";
+import { ipc } from "@/lib/ipc";
+import { relTime } from "@/lib/format";
+import { setSetting } from "@/stores/settingsStore";
 import {
   acquirePane,
+  disposePane,
   getPane,
+  terminalOptions,
   type PaneState,
 } from "@/lib/terminalRegistry";
 import { noteTerminalFocus } from "@/lib/termInput";
@@ -24,6 +56,7 @@ import { useConnections } from "@/stores/connectionsStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import {
   useTerminals,
+  dockTabsOf,
   type TerminalTab,
   type PaneNode,
   type SplitDir,
@@ -62,6 +95,21 @@ export function TerminalDock({
   const renameTab = useTerminals((s) => s.renameTab);
   const splitActivePane = useTerminals((s) => s.splitActivePane);
   const toggleZoom = useTerminals((s) => s.toggleZoom);
+  const toggleBroadcast = useTerminals((s) => s.toggleBroadcast);
+  const toggleLock = useTerminals((s) => s.toggleLock);
+  const togglePin = useTerminals((s) => s.togglePin);
+  const duplicateTab = useTerminals((s) => s.duplicateTab);
+
+  // A locked tab refuses to close and says why; bulk closes report how many
+  // locked tabs they left open.
+  const closeOne = (tab: TerminalTab) => {
+    if (!closeTab(tab.id)) toast.info("This tab is locked", "Unlock it to close it.");
+  };
+  const closeMany = (ids: string[], focus?: string) => {
+    const kept = closeTabs(ids, focus);
+    if (kept > 0) toast.info(`${kept} locked ${kept === 1 ? "tab" : "tabs"} kept open`);
+    return kept;
+  };
   const snippets = useSnippets((s) => s.snippets);
   const requestInsert = useSnippets((s) => s.requestInsert);
   const openSnippets = useSnippets((s) => s.openPanel);
@@ -69,7 +117,102 @@ export function TerminalDock({
     null
   );
   const keyOf = useKeyOf();
-  const { stripRef, dragId, onPointerDown, onClickCapture } = useTabDrag(moveTab);
+
+  // The strip shows this connection's shells, then the local ones. A drag
+  // reports an index in the strip; a tab only moves among its own kind.
+  const sessionTabs = dockTabsOf(tabs, sessionId);
+  const remoteCount = sessionTabs.filter((t) => t.sessionId !== LOCAL_SESSION).length;
+  const moveInStrip = (id: string, index: number) => {
+    const local = tabs.find((t) => t.id === id)?.sessionId === LOCAL_SESSION;
+    moveTab(id, local ? index - remoteCount : index);
+  };
+  const { stripRef, dragId, onPointerDown, onClickCapture } = useTabDrag(moveInStrip);
+
+  // A new tab is a shell on the focused server when it has one, else local.
+  const newTab = () => {
+    if (sessionId) openTab(sessionId);
+    else void openLocalTerminal();
+  };
+  const openNewTabMenu = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const shells: LocalShell[] = await localShells(true);
+    const items: MenuItem[] = [];
+    if (sessionId) {
+      items.push({
+        label: "Shell on this server",
+        icon: <TerminalSquare size={12} />,
+        onClick: () => openTab(sessionId),
+        separatorAfter: true,
+      });
+    }
+    if (shells.length === 0) {
+      items.push({
+        label: "No local shell found",
+        icon: <TerminalSquare size={12} />,
+        disabled: true,
+        onClick: () => {},
+      });
+    }
+    shells.forEach((shell, i) => {
+      items.push({
+        label: shell.name,
+        icon: <Laptop size={12} />,
+        onClick: () => void openLocalTerminal({ shell: shell.id }),
+        separatorAfter: !!sessionId && i === shells.length - 1,
+      });
+    });
+    if (sessionId) {
+      // Persistent shells: the choice is per connection, and sessions left on
+      // the host by an earlier run can be picked up or ended from here.
+      const on = persistEnabled(sessionId);
+      const profileId = useConnections
+        .getState()
+        .sessions.find((x) => x.sessionId === sessionId)?.profileId;
+      const left = on ? await detachedSessions(sessionId) : [];
+      items.push({
+        label: "Keep shells running after disconnect",
+        icon: on ? <Check size={12} /> : <span className="inline-block w-3" />,
+        disabled: !profileId,
+        onClick: () => {
+          if (!profileId) return;
+          setSetting("terminalPersistOverrides", {
+            ...useSettings.getState().terminalPersistOverrides,
+            [profileId]: !on,
+          });
+          toast.info(
+            on ? "New shells here end with the connection" : "New shells here keep running",
+            on
+              ? "Shells already open are not changed."
+              : "They run inside tmux on the server and are picked up when you reconnect."
+          );
+        },
+        separatorAfter: left.length > 0,
+      });
+      for (const s of left) {
+        items.push({
+          label: s.lastActivity
+            ? `Attach shell left running (${relTime(s.lastActivity * 1000)} ago)`
+            : "Attach shell left running",
+          icon: <History size={12} />,
+          onClick: () => openTab(sessionId, undefined, { persistName: s.name }),
+        });
+      }
+      if (left.length > 0) {
+        items.push({
+          label: left.length === 1 ? "End that shell" : `End all ${left.length} left running`,
+          icon: <X size={12} />,
+          destructive: true,
+          onClick: () => {
+            void Promise.all(
+              left.map((s) => ipc.terminalPersistKill(sessionId, s.name).catch(() => {}))
+            ).then(() => toast.success(left.length === 1 ? "Shell ended" : `${left.length} shells ended`));
+          },
+        });
+      }
+    }
+    setMenu({ x: r.left, y: r.bottom + 4, items });
+  };
 
   // Move the active pane's shell into its own window: hand the live PTY over
   // (scrollback serialized through localStorage) and drop it here.
@@ -93,7 +236,9 @@ export function TerminalDock({
           .sessions.find((x) => x.sessionId === tab.sessionId)?.profileId,
       });
       // Dispose won't close the handed-off PTY; the new window owns it now.
-      useTerminals.getState().closePane(tab.id, tab.activePaneId, { remember: false });
+      useTerminals
+        .getState()
+        .closePane(tab.id, tab.activePaneId, { remember: false, force: true });
     } catch (e) {
       if (entry && terminalId) {
         entry.setHandedOff(false);
@@ -102,10 +247,6 @@ export function TerminalDock({
       toast.error("Pop out failed", String(e));
     }
   };
-
-  const sessionTabs = sessionId
-    ? tabs.filter((t) => t.sessionId === sessionId)
-    : [];
 
   // The split items act on the right-clicked tab, so their chord is shown as a
   // hint only (pressed, a chord acts on the active tab, maybe another one).
@@ -130,6 +271,30 @@ export function TerminalDock({
         ...hintOf("term-split-down", TERMINAL_CHORDS.splitDown),
       },
       {
+        label: tab.broadcast ? "Stop broadcasting input" : "Broadcast input to all panes",
+        icon: <RadioTower size={12} />,
+        disabled: tab.root.kind !== "split" && !tab.broadcast,
+        onClick: () => toggleBroadcast(tab.id),
+        separatorAfter: true,
+      },
+      {
+        label: "Clear",
+        icon: <Eraser size={12} />,
+        onClick: () => clearTerminal(tab),
+        ...hintOf("term-clear", TERMINAL_CHORDS.clear),
+      },
+      {
+        label: "Copy all output",
+        icon: <ClipboardCopy size={12} />,
+        onClick: () => void copyTerminalOutput(tab),
+      },
+      {
+        label: "Save output to file…",
+        icon: <Save size={12} />,
+        onClick: () => void saveTerminalOutput(tab),
+        separatorAfter: true,
+      },
+      {
         label: "Pop out active pane",
         icon: <PictureInPicture2 size={12} />,
         // No PTY id yet (shell still opening) → nothing to hand off.
@@ -138,33 +303,50 @@ export function TerminalDock({
         separatorAfter: true,
       },
       {
+        label: "Duplicate tab",
+        icon: <CopyPlus size={12} />,
+        onClick: () => duplicateTab(tab.id),
+      },
+      {
+        label: tab.pinned ? "Unpin tab" : "Pin tab",
+        icon: tab.pinned ? <PinOff size={12} /> : <Pin size={12} />,
+        onClick: () => togglePin(tab.id),
+      },
+      {
+        label: tab.locked ? "Unlock tab" : "Lock tab",
+        icon: tab.locked ? <LockOpen size={12} /> : <Lock size={12} />,
+        onClick: () => toggleLock(tab.id),
+        separatorAfter: true,
+      },
+      {
         label: "Close",
         icon: <X size={12} />,
         destructive: true,
-        onClick: () => closeTab(tab.id),
+        disabled: !!tab.locked,
+        onClick: () => closeOne(tab),
       },
       {
         label: "Close others",
         icon: <span className="inline-block w-3" />,
         destructive: true,
         disabled: others.length === 0,
-        onClick: () => closeTabs(others, tab.id),
+        onClick: () => closeMany(others, tab.id),
       },
       {
         label: "Close to the right",
         icon: <span className="inline-block w-3" />,
         destructive: true,
         disabled: toRight.length === 0,
-        onClick: () => closeTabs(toRight, tab.id),
+        onClick: () => closeMany(toRight, tab.id),
       },
       {
         label: "Close all",
         icon: <span className="inline-block w-3" />,
         destructive: true,
         onClick: () => {
-          closeTabs(sessionTabs.map((t) => t.id));
+          const kept = closeMany(sessionTabs.map((t) => t.id));
           // An empty dock would just open a fresh shell; hide it instead.
-          useLayout.getState().setTerminalOpen(false);
+          if (kept === 0) useLayout.getState().setTerminalOpen(false);
         },
       },
     ];
@@ -270,14 +452,34 @@ export function TerminalDock({
 
   // Open a first shell when the dock is shown for a session that has none.
   useEffect(() => {
-    if (visible && sessionId && sessionTabs.length === 0) {
-      openTab(sessionId);
-    }
+    if (!visible) return;
+    let cancelled = false;
+    // The saved workspace first: this server's, and the local shells'. Then a
+    // fresh shell where there is still nothing: on a server shown for the
+    // first time, or whenever the strip is empty.
+    void (async () => {
+      const remote = sessionId ? await restoreWorkspace(sessionId) : "done";
+      await restoreWorkspace(LOCAL_SESSION);
+      if (cancelled) return;
+      const all = useTerminals.getState().tabs;
+      const empty = dockTabsOf(all, sessionId).length === 0;
+      if (sessionId) {
+        const hasOwn = all.some((t) => t.sessionId === sessionId);
+        if (!hasOwn && (remote === "first" || empty)) openTab(sessionId);
+      } else if (empty) {
+        void openLocalTerminal();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [visible, sessionId, sessionTabs.length, openTab]);
+
+  useEffect(() => startWorkspaceSync(), []);
 
   // While shown, keep the active tab pointed at one in the focused session.
   useEffect(() => {
-    if (!visible || !sessionId) return;
+    if (!visible) return;
     if (!activeId || !sessionTabs.some((t) => t.id === activeId)) {
       const first = sessionTabs[0];
       if (first) setActive(first.id);
@@ -304,7 +506,8 @@ export function TerminalDock({
               dragging={tab.id === dragId}
               onPointerDown={(e) => onPointerDown(e, tab.id)}
               onClick={() => setActive(tab.id)}
-              onClose={() => closeTab(tab.id)}
+              onClose={() => closeOne(tab)}
+              onUnlock={() => toggleLock(tab.id)}
               onRename={(title) => renameTab(tab.id, title)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -316,17 +519,26 @@ export function TerminalDock({
         {overflow.any && (
           <StripChevron dir="right" disabled={!overflow.right} onClick={() => scrollStrip(1)} />
         )}
-        {sessionId && (
-          <button
-            onClick={() => openTab(sessionId)}
-            title="New shell"
-            className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
-          >
-            <Plus size={12} />
-          </button>
-        )}
+        <button
+          onClick={newTab}
+          onContextMenu={(e) => void openNewTabMenu(e)}
+          title={sessionId ? "New shell (right-click for local shells)" : "New local shell (right-click to choose)"}
+          data-term-new-tab
+          className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
+        >
+          <Plus size={12} />
+        </button>
+        <button
+          onClick={(e) => void openNewTabMenu(e)}
+          title="Choose a shell"
+          aria-label="Choose a shell"
+          data-term-new-tab-menu
+          className="flex h-6 w-4 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text"
+        >
+          <ChevronDown size={11} />
+        </button>
         <div className="flex-1" />
-        {sessionId && sessionTabs.length > 0 && (
+        {sessionTabs.length > 0 && (
           <button
             onClick={openSplitMenu}
             title="Split terminal"
@@ -335,7 +547,7 @@ export function TerminalDock({
             <SplitSquareHorizontal size={13} />
           </button>
         )}
-        {sessionId && (
+        {sessionTabs.length > 0 && (
           <button
             onClick={openSnippetMenu}
             title="Insert snippet"
@@ -409,6 +621,7 @@ function TabChip({
   onPointerDown,
   onClick,
   onClose,
+  onUnlock,
   onRename,
   onContextMenu,
 }: {
@@ -418,6 +631,7 @@ function TabChip({
   onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
   onClick: () => void;
   onClose: () => void;
+  onUnlock: () => void;
   onRename: (title: string) => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
@@ -451,6 +665,8 @@ function TabChip({
       data-term-tab-id={tab.id}
       data-active={active || undefined}
       data-dragging={dragging || undefined}
+      data-pinned={tab.pinned || undefined}
+      data-locked={tab.locked || undefined}
       onPointerDown={onPointerDown}
       // Middle-click closes: stop the autoscroll cursor on press, close on
       // release.
@@ -479,20 +695,45 @@ function TabChip({
         dragging && "cursor-grabbing bg-bg-hover opacity-80 shadow-sm ring-1 ring-inset ring-accent/60"
       )}
     >
-      <TerminalSquare size={11} className={cn("shrink-0", active && "text-accent")} />
-      <span className="max-w-[18rem] truncate">{tab.title}</span>
-      <span
-        role="button"
-        tabIndex={-1}
-        aria-label={`Close ${tab.title}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-text-dim opacity-0 hover:bg-bg-hover hover:text-text group-hover/tab:opacity-100"
-      >
-        <X size={10} />
+      {tab.pinned ? (
+        <Pin size={11} className={cn("shrink-0", active && "text-accent")} />
+      ) : tab.sessionId === LOCAL_SESSION ? (
+        <Laptop size={11} className={cn("shrink-0", active && "text-accent")} />
+      ) : (
+        <TerminalSquare size={11} className={cn("shrink-0", active && "text-accent")} />
+      )}
+      <span className={cn("truncate", tab.pinned ? "max-w-[7rem]" : "max-w-[18rem]")}>
+        {tab.title}
       </span>
+      {tab.locked ? (
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={`Unlock ${tab.title}`}
+          title="Locked. Click to unlock."
+          data-term-tab-lock
+          onClick={(e) => {
+            e.stopPropagation();
+            onUnlock();
+          }}
+          className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+        >
+          <Lock size={10} />
+        </span>
+      ) : tab.pinned ? null : (
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={`Close ${tab.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-text-dim opacity-0 hover:bg-bg-hover hover:text-text group-hover/tab:opacity-100"
+        >
+          <X size={10} />
+        </span>
+      )}
     </button>
   );
 }
@@ -549,7 +790,11 @@ function SplitView({
       >
         <PaneView tab={tab} node={node.a} visible={visible} />
       </div>
-      <SplitHandle dir={node.dir} onDrag={onDrag} />
+      <SplitHandle
+        dir={node.dir}
+        onDrag={onDrag}
+        onReset={() => setSplitRatio(tab.id, node.id, 0.5)}
+      />
       <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <PaneView tab={tab} node={node.b} visible={visible} />
       </div>
@@ -560,9 +805,12 @@ function SplitView({
 function SplitHandle({
   dir,
   onDrag,
+  onReset,
 }: {
   dir: SplitDir;
   onDrag: (clientX: number, clientY: number) => void;
+  /** Double-click: back to an even split. */
+  onReset: () => void;
 }) {
   const start = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -581,6 +829,9 @@ function SplitHandle({
   return (
     <div
       onMouseDown={start}
+      onDoubleClick={onReset}
+      title="Drag to resize, double-click to reset"
+      data-split-handle
       className={cn(
         "z-20 shrink-0 bg-border transition-colors hover:bg-accent/60",
         dir === "row" ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
@@ -604,10 +855,22 @@ function TerminalLeaf({
     error: null,
     exitCode: null,
   });
+  // Bumped to reopen an ended pane in place (same pane id, so a persistent
+  // pane reattaches to its shell on the host).
+  const [epoch, setEpoch] = useState(0);
+  const persistName = tab.persist
+    ? tab.persistNames?.[paneId] ?? persistNameFor(paneId)
+    : undefined;
 
   const fontSize = useSettings((s) => s.terminalFontSize);
   const fontFamily = useSettings((s) => s.terminalFontFamily);
   const themeKey = useSettings((s) => s.terminalTheme);
+  const lineHeight = useSettings((s) => s.terminalLineHeight);
+  const cursorStyle = useSettings((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettings((s) => s.terminalCursorBlink);
+  const broadcasting = useTerminals(
+    (s) => !!s.tabs.find((t) => t.id === tab.id)?.broadcast
+  );
 
   const setPaneActive = useTerminals((s) => s.setPaneActive);
   const closePane = useTerminals((s) => s.closePane);
@@ -626,7 +889,13 @@ function TerminalLeaf({
     const host = hostRef.current;
     const initialCommand =
       tab.initialPaneId === paneId ? tab.initialCommand : undefined;
-    const entry = acquirePane(paneId, { sessionId: tab.sessionId, initialCommand });
+    const entry = acquirePane(paneId, {
+      sessionId: tab.sessionId,
+      initialCommand,
+      shell: tab.shell,
+      cwd: tab.cwd,
+      persistName,
+    });
     if (host) entry.attach(host);
     const unsub = entry.subscribe(setState);
     return () => {
@@ -634,7 +903,7 @@ function TerminalLeaf({
       unsub();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paneId]);
+  }, [paneId, epoch]);
 
   // Refit whenever the host resizes (splits, ratio drags, zoom, dock show).
   useEffect(() => {
@@ -664,11 +933,9 @@ function TerminalLeaf({
   useEffect(() => {
     const entry = getPane(paneId);
     if (!entry) return;
-    entry.term.options.fontSize = fontSize;
-    entry.term.options.fontFamily = fontFamily;
-    entry.term.options.theme = TERMINAL_THEMES[themeKey];
+    Object.assign(entry.term.options, terminalOptions(useSettings.getState()));
     if (visible) entry.refit();
-  }, [fontSize, fontFamily, themeKey, visible, paneId]);
+  }, [fontSize, fontFamily, themeKey, lineHeight, cursorStyle, cursorBlink, visible, paneId]);
 
   const theme = TERMINAL_THEMES[themeKey];
 
@@ -677,7 +944,8 @@ function TerminalLeaf({
       className={cn(
         "group absolute inset-0 flex flex-col",
         visible ? "" : "pointer-events-none invisible",
-        isSplit && isActive && "z-10 ring-1 ring-inset ring-accent/50"
+        isSplit && isActive && !broadcasting && "z-10 ring-1 ring-inset ring-accent/50",
+        broadcasting && "z-10 ring-1 ring-inset ring-warning/70"
       )}
       aria-hidden={!visible}
     >
@@ -700,10 +968,33 @@ function TerminalLeaf({
           <X size={12} />
         </button>
       )}
+      {broadcasting && (
+        <div
+          data-term-broadcast
+          className="pointer-events-none absolute bottom-1.5 right-2 z-20 flex items-center gap-1 rounded bg-warning/90 px-1.5 py-0.5 text-[10px] font-medium text-black"
+        >
+          <RadioTower size={10} />
+          Broadcasting
+        </div>
+      )}
       {state.status === "opening" && (
         <div className="pointer-events-none absolute left-2 top-2 rounded bg-bg-panel/70 px-1.5 py-0.5 text-[10px] text-text-dim">
           opening…
         </div>
+      )}
+      {state.status === "exited" && (
+        <button
+          data-term-restart
+          onClick={() => {
+            // Detach, never end: a persistent shell may still be running.
+            disposePane(paneId, { detach: true });
+            setEpoch((e) => e + 1);
+          }}
+          className="absolute bottom-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-md border border-border bg-bg-panel px-2.5 py-1 text-xs text-text shadow-sm hover:bg-bg-hover"
+        >
+          <RotateCw size={12} />
+          {persistName ? "Reattach" : "Restart shell"}
+        </button>
       )}
       {state.error && (
         <div className="border-t border-border bg-danger-soft px-3 py-1 text-xs text-danger">

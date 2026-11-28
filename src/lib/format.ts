@@ -1,3 +1,5 @@
+import { fmtDateTime } from "./time";
+
 // Shared formatting helpers. Consolidated here so panes, footers, dialogs and
 // the transfer queue all render sizes / dates / modes identically.
 
@@ -22,14 +24,10 @@ export function fmtEta(secs: number): string {
   return `${Math.floor(s / 3600)}h ${pad(Math.floor((s % 3600) / 60))}m`;
 }
 
-// Unix seconds -> "2024-05-21 14:32". Empty string when unknown.
+// Unix seconds -> "2024-05-21 14:32" (the clock follows the Time format
+// setting). Empty string when unknown.
 export function fmtMtime(secs?: number): string {
-  if (!secs) return "";
-  const d = new Date(secs * 1000);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
-    d.getHours()
-  )}:${pad(d.getMinutes())}`;
+  return secs ? fmtDateTime(secs * 1000) : "";
 }
 
 // POSIX mode bits -> "rwxr-xr-x". Empty when the backend doesn't expose a mode.

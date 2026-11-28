@@ -1319,6 +1319,37 @@ export {
 // reference FileKind below.
 import type { FileKind } from "@faro/file-ui";
 
+/** A shell installed on this machine (Plan 36 Phase 1). */
+export interface LocalShell {
+  /** Stable id: `pwsh`, `cmd`, `git-bash`, `wsl:<distro>`, `zsh`, … */
+  id: string;
+  name: string;
+  program: string;
+  args: string[];
+}
+
+/** Identifies one version of a file (built-in editor, Plan 37 Phase 3). */
+export interface FileStamp {
+  size: number;
+  modified: number | null;
+  etag: string | null;
+}
+
+export interface EditorFile {
+  text: string;
+  /** Null when the backend can't tell versions apart. */
+  stamp: FileStamp | null;
+}
+
+/** One of Faro's tmux sessions on a host (Plan 36 Phase 4). */
+export interface PersistedSession {
+  name: string;
+  /** Clients attached right now; 0 = detached. */
+  attached: number;
+  /** Seconds since the epoch; 0 when unknown. */
+  lastActivity: number;
+}
+
 export interface TerminalDataEvent {
   terminalId: string;
   data: string;
@@ -1652,6 +1683,8 @@ export interface Transfer {
   /** Unfinished transfer restored from the last session (Plan 24): Paused,
    *  resumable once its connection is open. */
   restored?: boolean;
+  /** Files carried by this one row: a folder sent as a single tar stream. */
+  files?: number;
 }
 
 /** Live transfer-queue snapshot (Plan 17) — payload of `transfer://queue` and
