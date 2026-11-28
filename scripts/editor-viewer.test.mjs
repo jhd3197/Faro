@@ -273,7 +273,15 @@ test("the editor and image viewer in the app", { timeout: 300_000, skip: !CHROME
       assert.equal(await zoom(), "100%", "a small image is shown at its real size, not enlarged");
       await page.click("[data-image-zoom-in]");
       assert.equal(await zoom(), "125%");
-      const width = await page.$eval("[data-image]", (e) => e.getBoundingClientRect().width);
+      // The zoom animates, so wait for the size to settle rather than read it mid-way.
+      const imageWidth = () => page.$eval("[data-image]", (e) => e.getBoundingClientRect().width);
+      await page
+        .waitForFunction(
+          () => Math.abs(document.querySelector("[data-image]").getBoundingClientRect().width - 2.5) < 0.01,
+          { timeout: 5_000 },
+        )
+        .catch(() => {});
+      const width = await imageWidth();
       assert.ok(Math.abs(width - 2.5) < 0.01, `2px wide at 125% is 2.5px, got ${width}`);
       await page.click("[data-image-zoom-out]");
       await page.click("[data-image-zoom-out]");
