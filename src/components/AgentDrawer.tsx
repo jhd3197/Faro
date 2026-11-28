@@ -1,3 +1,4 @@
+import { fmtClock } from "@/lib/time";
 import { Ban, Check, Power, Radio, X } from "lucide-react";
 import { useBridge } from "@/stores/bridgeStore";
 import { useConnections } from "@/stores/connectionsStore";
@@ -15,7 +16,7 @@ import { approvalCopy, summaryStats } from "./AgentBridge";
 /// Clock time for activity rows — the drawer is a live log, so "14:02:19"
 /// reads better than "3m ago" when lining up with a terminal.
 export function clockTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour12: false });
+  return fmtClock(new Date(ms), { seconds: true });
 }
 
 /// One pending agent request, inline (drawer + access page). Deny is first and

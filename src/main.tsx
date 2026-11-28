@@ -1,3 +1,4 @@
+import { resolveHour12, setClock, type TimeFormat } from "./lib/time";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
@@ -58,8 +59,18 @@ let prevTheme = useSettings.getState().appTheme;
 let prevAccent = useSettings.getState().accentColor;
 let prevLanguage = useSettings.getState().uiLanguage;
 let prevZoom = useSettings.getState().uiZoom;
+let prevClock = "";
+/** Re-derive the 12/24-hour clock from the setting and the UI language. */
+function syncClock(s: { timeFormat: TimeFormat; uiLanguage: string }) {
+  const key = `${s.timeFormat}|${s.uiLanguage}`;
+  if (key === prevClock) return;
+  prevClock = key;
+  setClock(resolveHour12(s.timeFormat, s.uiLanguage));
+}
+syncClock(useSettings.getState());
 let themingTimer: ReturnType<typeof setTimeout> | undefined;
 useSettings.subscribe((s) => {
+  syncClock(s);
   if (s.accentColor !== prevAccent) {
     prevAccent = s.accentColor;
     applyAccent(s.accentColor || null);

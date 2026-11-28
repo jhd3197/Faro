@@ -82,6 +82,42 @@ test("values read back as short labels, and 'changed' respects extra defaults", 
   assert.equal(reg.isChangedValue([1], [1]), false, "compared by value");
 });
 
+test("times follow the Time format setting", { timeout: 60_000 }, async () => {
+  const { createServer } = await import("vite");
+  const server = await createServer({ mode: "mock", cacheDir: "node_modules/.vite-time-test", server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const time = await server.ssrLoadModule("/src/lib/time.ts");
+    const fmt = await server.ssrLoadModule("/src/lib/format.ts");
+    const ui = await server.ssrLoadModule("/packages/file-ui/src/lib/format.ts");
+    assert.equal(time.resolveHour12("12h", "de"), true, "forced 12-hour wins over the language");
+    assert.equal(time.resolveHour12("24h", "en-US"), false);
+    assert.equal(time.resolveHour12("auto", "en-US"), true, "US English writes AM/PM");
+    assert.equal(time.resolveHour12("auto", "de"), false, "German uses the 24-hour clock");
+
+    const afternoon = new Date(2024, 4, 21, 14, 5, 9);
+    const midnight = new Date(2024, 4, 21, 0, 7, 0);
+    const noon = new Date(2024, 4, 21, 12, 0, 0);
+    time.setClock(false);
+    assert.equal(time.fmtClock(afternoon), "14:05");
+    assert.equal(time.fmtClock(afternoon, { seconds: true }), "14:05:09");
+    assert.equal(time.fmtDateTime(afternoon.getTime()), "2024-05-21 14:05");
+    assert.equal(fmt.fmtMtime(afternoon.getTime() / 1000), "2024-05-21 14:05");
+    assert.equal(ui.fmtMtime(afternoon.getTime() / 1000), "2024-05-21 14:05");
+
+    time.setClock(true);
+    assert.equal(time.fmtClock(afternoon), "2:05 PM");
+    assert.equal(time.fmtClock(midnight), "12:07 AM");
+    assert.equal(time.fmtClock(noon), "12:00 PM");
+    assert.equal(fmt.fmtMtime(afternoon.getTime() / 1000), "2024-05-21 2:05 PM");
+    assert.equal(ui.fmtMtime(afternoon.getTime() / 1000), "2024-05-21 2:05 PM", "the file list follows too");
+    assert.equal(time.fmtDateTime(0), "", "an unknown time is blank");
+    assert.equal(fmt.fmtMtime(undefined), "");
+    time.setClock(false);
+  } finally {
+    await server.close();
+  }
+});
+
 const CHROME = [
   process.env.CHROME_PATH,
   "C:/Program Files/Google/Chrome/Application/chrome.exe",

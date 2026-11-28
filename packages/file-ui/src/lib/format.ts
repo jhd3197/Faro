@@ -9,14 +9,24 @@ export function fmtSize(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-// Unix seconds -> "2024-05-21 14:32". Empty string when unknown.
+let hour12Clock = false;
+
+/** Host apps call this to show file times as `2:32 PM` instead of `14:32`. */
+export function setHour12Clock(use12h: boolean): void {
+  hour12Clock = use12h;
+}
+
+// Unix seconds -> "2024-05-21 14:32" (or "2024-05-21 2:32 PM"). Empty string
+// when unknown.
 export function fmtMtime(secs?: number): string {
   if (!secs) return "";
   const d = new Date(secs * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
-    d.getHours()
-  )}:${pad(d.getMinutes())}`;
+  const h = d.getHours();
+  const time = hour12Clock
+    ? `${h % 12 === 0 ? 12 : h % 12}:${pad(d.getMinutes())} ${h < 12 ? "AM" : "PM"}`
+    : `${pad(h)}:${pad(d.getMinutes())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
 }
 
 // POSIX mode bits -> "rwxr-xr-x". Empty when the backend doesn't expose a mode.

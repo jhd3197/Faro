@@ -64,7 +64,7 @@ export {
   type ColumnId,
   type ColumnWidths,
 } from "./lib/columns";
-export { fmtSize, fmtMtime, formatMode } from "./lib/format";
+export { fmtSize, fmtMtime, formatMode, setHour12Clock } from "./lib/format";
 export {
   baseName,
   parentOf,

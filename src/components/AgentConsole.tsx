@@ -1,3 +1,4 @@
+import { fmtDateTime } from "@/lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   X,
@@ -423,7 +424,7 @@ function ConsoleEntry({
             <span className="max-w-[8rem] truncate">{tag.name}</span>
           </span>
         )}
-        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-text-dim" title={new Date(entry.at).toLocaleString()}>
+        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-text-dim" title={fmtDateTime(entry.at, { seconds: true })}>
           {relTime(entry.at)}
         </span>
       </button>

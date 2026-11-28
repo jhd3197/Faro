@@ -199,7 +199,6 @@ export const SETTINGS_REGISTRY: readonly SettingEntry[] = [
     ],
   },
   onOff("editorAutoSave", "panes", "Auto-save in the editor", "autosave save automatically"),
-  onOff("reopenLastFolder", "panes", "Reopen the last folder", "remember path start where left"),
 
   // ---- Terminal ----
   { key: "terminalFontSize", section: "terminal", label: "Terminal font size", keywords: "text size", kind: "number", unit: "px" },

@@ -230,8 +230,6 @@ interface SettingsState {
   // Plan 37
   /** How times are shown everywhere: follow the UI language, or force one. */
   timeFormat: "auto" | "12h" | "24h";
-  /** Start each pane where it was last time on that connection. */
-  reopenLastFolder: boolean;
   /** "Edit" opens Faro's own editor, or the external one. */
   editorOpenWith: "builtin" | "external";
   /** The built-in editor saves by itself a moment after typing stops. */
@@ -415,7 +413,6 @@ const DEFAULTS: Persisted = {
   terminalRestoreWorkspace: true,
   terminalLocalShell: "",
   timeFormat: "auto",
-  reopenLastFolder: true,
   editorOpenWith: "builtin",
   editorAutoSave: false,
   transferTarFolders: "auto",

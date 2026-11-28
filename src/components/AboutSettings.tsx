@@ -1,3 +1,4 @@
+import { fmtDateTime } from "@/lib/time";
 import { useEffect, useState } from "react";
 import { openExternal } from "@/lib/openExternal";
 import { DISCORD_URL, issueUrl, showLogFile, systemInfo } from "@/lib/feedback";
@@ -80,7 +81,7 @@ function UpdaterRows() {
     : undefined;
   const note = status === "error" ? <Note tone="danger">{error}</Note>
     : status === "ready" ? "Save your work before restarting."
-    : lastChecked && !busy ? `Last checked ${new Date(lastChecked).toLocaleString()}`
+    : lastChecked && !busy ? `Last checked ${fmtDateTime(new Date(lastChecked).getTime())}`
     : undefined;
   const action = status === "available" ? download : status === "ready" ? restart
     : status === "manual" ? () => openExternal(releaseUrl)

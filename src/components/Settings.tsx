@@ -76,7 +76,7 @@ interface Props {
 // Which saved settings each section shows, for the "changed" dot in the nav.
 // Sections that keep their config elsewhere are checked separately below.
 const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSettings)[]>> = {
-  appearance: ["themeMode", "lightTheme", "darkTheme", "accentColor", "uiZoom", "frameStyle", "uiLanguage"],
+  appearance: ["themeMode", "lightTheme", "darkTheme", "accentColor", "uiZoom", "frameStyle", "uiLanguage", "timeFormat"],
   transfers: [
     "overwritePolicy",
     "promptOnOverwrite",
@@ -383,6 +383,22 @@ export function Settings({ onClose }: Props) {
                 />
               </Row>
             )}
+            <Row
+              label="Time format"
+              keywords="12 hour 24 hour clock am pm dates"
+              help="How times are written everywhere: file dates, logs, the agent panel. Automatic follows the language."
+            >
+              <Segmented<"auto" | "12h" | "24h">
+                label="Time format"
+                value={s.timeFormat}
+                onChange={(v) => setSetting("timeFormat", v)}
+                options={[
+                  { value: "auto", label: "Automatic" },
+                  { value: "12h", label: "12-hour" },
+                  { value: "24h", label: "24-hour" },
+                ]}
+              />
+            </Row>
             <Row label="Accent color" keywords="highlight color" help="Buttons, links, focus rings and selection. Layers on top of the theme.">
               <AccentGrid value={s.accentColor} onChange={s.setAccentColor} />
             </Row>
