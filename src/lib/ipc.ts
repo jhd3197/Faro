@@ -421,6 +421,10 @@ export const ipc = {
       cwd: opts?.cwd ?? null,
     }),
 
+  /** Write text to a local path picked in a save dialog. */
+  writeTextFile: (path: string, contents: string) =>
+    invoke<void>("write_text_file", { path, contents }),
+
   /** Shells installed on this machine, the default first. */
   listLocalShells: () => invoke<LocalShell[]>("list_local_shells"),
 

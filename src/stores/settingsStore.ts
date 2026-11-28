@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
 import type { UiLanguage } from "@/lib/i18n";
 import type { RailSort } from "@/lib/railOps";
+import { DEFAULT_HIGHLIGHT_RULES, type HighlightRule } from "@/lib/terminalHighlight";
 
 export type OverwritePolicy = "overwrite" | "skip" | "rename";
 export type SortField = "name" | "size" | "modified";
@@ -202,6 +203,17 @@ interface SettingsState {
   /** Inline ghost-text history suggestions while typing a command (fish/VS
    *  Code style, → to accept). On by default. */
   terminalSuggestions: boolean;
+  terminalCursorStyle: "block" | "bar" | "underline";
+  terminalCursorBlink: boolean;
+  /** Line height as a multiple of the font size (1 = tight). */
+  terminalLineHeight: number;
+  /** Paste without bracketed-paste markers. */
+  terminalPlainPaste: boolean;
+  /** Let programs on the host set the local clipboard (OSC 52). */
+  terminalOsc52: boolean;
+  /** Colour words such as `error` and `ok` in command output. */
+  terminalHighlight: boolean;
+  terminalHighlightRules: HighlightRule[];
   /** Local terminal: the shell profile a new local tab starts ("" = the
    *  machine's default). */
   terminalLocalShell: string;
@@ -369,6 +381,13 @@ const DEFAULTS: Persisted = {
   terminalScrollback: 5000,
   terminalCopyOnSelect: true,
   terminalSuggestions: true,
+  terminalCursorStyle: "block",
+  terminalCursorBlink: true,
+  terminalLineHeight: 1,
+  terminalPlainPaste: false,
+  terminalOsc52: true,
+  terminalHighlight: true,
+  terminalHighlightRules: DEFAULT_HIGHLIGHT_RULES,
   terminalLocalShell: "",
   defaultPort: 22,
   storePasswordsInKeychain: false,

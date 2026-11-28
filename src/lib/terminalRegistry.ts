@@ -18,7 +18,9 @@ import { openExternal } from "./openExternal";
 import { attachSuggestions, type SuggestHandle } from "./termSuggest";
 import { registerTerminalPane } from "./termInput";
 import { isTerminalChord } from "./terminalChords";
-import { useSettings, TERMINAL_THEMES } from "@/stores/settingsStore";
+import { attachHighlighter, isDarkHex } from "./terminalHighlight";
+import { broadcastTargets, isTerminalReply } from "./terminalBroadcast";
+import { useSettings, TERMINAL_THEMES, type PersistedSettings } from "@/stores/settingsStore";
 import { useConnections } from "@/stores/connectionsStore";
 import type { SessionId } from "./types";
 
@@ -52,6 +54,8 @@ export interface PaneEntry {
    *  close it (the new window owns its lifetime). Reset to false to reclaim it
    *  if the popout failed to open. */
   setHandedOff(v: boolean): void;
+  /** Write to this pane's PTY. A no-op until the shell is open. */
+  send(data: string): void;
 }
 
 interface InternalEntry extends PaneEntry {
@@ -69,6 +73,55 @@ interface InternalEntry extends PaneEntry {
 }
 
 const panes = new Map<string, InternalEntry>();
+
+/** The xterm options that follow Settings › Terminal. One function so new
+ *  panes, live panes and popped-out windows can't drift apart. */
+export function terminalOptions(s: PersistedSettings) {
+  return {
+    fontFamily: s.terminalFontFamily,
+    fontSize: s.terminalFontSize,
+    lineHeight: s.terminalLineHeight,
+    cursorStyle: s.terminalCursorStyle,
+    cursorBlink: s.terminalCursorBlink,
+    theme: TERMINAL_THEMES[s.terminalTheme],
+  } as const;
+}
+
+/** Everything in a terminal's buffer as plain text: scrollback and screen,
+ *  soft-wrapped lines joined back together. */
+export function bufferText(term: XTerm): string {
+  const buf = term.buffer.active;
+  const lines: string[] = [];
+  for (let y = 0; y < buf.length; y++) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n");
+}
+
+/** OSC 52: let a program on the host put text on the local clipboard
+ *  (`ESC ] 52 ; c ; <base64> BEL`). Write-only: a `?` read request is ignored,
+ *  so a host can never read what is on the clipboard. */
+export function attachOsc52(term: XTerm): { dispose: () => void } {
+  return term.parser.registerOscHandler(52, (data) => {
+    if (!useSettings.getState().terminalOsc52) return true;
+    const at = data.indexOf(";");
+    const payload = at >= 0 ? data.slice(at + 1) : "";
+    if (!payload || payload === "?") return true;
+    try {
+      const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+      const text = new TextDecoder().decode(bytes);
+      if (text) navigator.clipboard.writeText(text).catch(() => {});
+    } catch {
+      // not base64 — ignore
+    }
+    return true;
+  });
+}
 
 export function hasPane(paneId: string): boolean {
   return panes.has(paneId);
@@ -88,19 +141,11 @@ export function acquirePane(
   if (existing) return existing;
 
   const { sessionId, initialCommand, shell, cwd } = opts;
-  const {
-    terminalFontSize,
-    terminalFontFamily,
-    terminalTheme,
-    terminalScrollback,
-  } = useSettings.getState();
+  const settings = useSettings.getState();
 
   const term = new XTerm({
-    fontFamily: terminalFontFamily,
-    fontSize: terminalFontSize,
-    scrollback: terminalScrollback,
-    theme: TERMINAL_THEMES[terminalTheme],
-    cursorBlink: true,
+    ...terminalOptions(settings),
+    scrollback: settings.terminalScrollback,
     allowProposedApi: true,
   });
   const fit = new FitAddon();
@@ -132,6 +177,7 @@ export function acquirePane(
     unlistenExit: null,
     disposables: [],
     onWindowResize: () => {},
+    send: () => {},
     getTerminalId: () => entry.terminalId,
     serialize: () => serialize.serialize({ scrollback: 2000 }),
     attach: (container) => {
@@ -183,11 +229,45 @@ export function acquirePane(
     focus: () => term.focus(),
   });
 
+  const send = (data: string) => {
+    if (entry.terminalId) ipc.terminalWrite(entry.terminalId, data).catch(() => {});
+  };
+  entry.send = send;
   entry.disposables.push(
     term.onData((data) => {
-      if (entry.terminalId) ipc.terminalWrite(entry.terminalId, data).catch(() => {});
+      send(data);
+      // Broadcast: copy what the user typed to the tab's other panes, but
+      // never the terminal's own answers to a program's queries.
+      if (isTerminalReply(data)) return;
+      for (const other of broadcastTargets(paneId)) panes.get(other)?.send(data);
     })
   );
+  entry.disposables.push(attachOsc52(term));
+  entry.disposables.push(
+    attachHighlighter(term, () => {
+      const s = useSettings.getState();
+      return {
+        enabled: s.terminalHighlight,
+        rules: s.terminalHighlightRules,
+        darkBackground: isDarkHex(TERMINAL_THEMES[s.terminalTheme].background),
+      };
+    })
+  );
+
+  // Plain paste: skip xterm's bracketed-paste markers for programs that
+  // mangle them. Capture phase, so this runs before xterm's own handler.
+  const onPaste = (e: ClipboardEvent) => {
+    if (!useSettings.getState().terminalPlainPaste) return;
+    const text = e.clipboardData?.getData("text/plain");
+    if (!text) return;
+    e.preventDefault();
+    e.stopPropagation();
+    send(text.replace(/\r?\n/g, "\r"));
+  };
+  element.addEventListener("paste", onPaste, true);
+  entry.disposables.push({
+    dispose: () => element.removeEventListener("paste", onPaste, true),
+  });
   entry.disposables.push(
     term.onResize(({ cols, rows }) => {
       if (entry.terminalId)
@@ -256,6 +336,28 @@ export function acquirePane(
 
   panes.set(paneId, entry);
   return entry;
+}
+
+/** Wipe a pane's screen and scrollback. The running program is untouched: a
+ *  `tail -f` keeps going on a clean screen. */
+export function clearPane(paneId: string): void {
+  const entry = panes.get(paneId);
+  if (!entry) return;
+  entry.term.clear();
+  entry.term.focus();
+}
+
+export function selectAllInPane(paneId: string): void {
+  const entry = panes.get(paneId);
+  if (!entry) return;
+  entry.term.selectAll();
+  entry.term.focus();
+}
+
+/** A pane's whole output as plain text, or null when the pane is gone. */
+export function paneText(paneId: string): string | null {
+  const entry = panes.get(paneId);
+  return entry ? bufferText(entry.term) : null;
 }
 
 /** Fully tear down a pane (store-driven, on tab/pane close or disconnect).

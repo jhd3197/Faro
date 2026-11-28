@@ -22,6 +22,11 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  Eraser,
+  TextSelect,
+  ClipboardCopy,
+  Save,
+  RadioTower,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -48,6 +53,13 @@ import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import { useTerminals, dockTabsOf } from "@/stores/terminalsStore";
 import { openLocalTerminal } from "@/lib/localTerminal";
+import {
+  clearTerminal,
+  copyTerminalOutput,
+  saveTerminalOutput,
+  selectAllTerminal,
+  toggleBroadcast,
+} from "@/lib/terminalActions";
 import { LOCAL_SESSION } from "@/lib/types";
 import { useServerView } from "@/stores/serverViewStore";
 import { TERMINAL_CHORDS, termTabCommandId } from "@/lib/terminalChords";
@@ -511,6 +523,59 @@ export function useCommands(): Command[] {
       bindable: true,
       enabled: terminalActive,
       run: () => shift(1),
+    }
+  );
+
+  cmds.push(
+    {
+      id: "term-clear",
+      title: "Terminal: Clear",
+      group: "Terminal",
+      icon: <Eraser size={14} />,
+      combo: TERMINAL_CHORDS.clear,
+      keywords: "clear wipe scrollback screen reset cls",
+      enabled: terminalActive,
+      run: () => clearTerminal(),
+    },
+    {
+      id: "term-select-all",
+      title: "Terminal: Select all output",
+      group: "Terminal",
+      icon: <TextSelect size={14} />,
+      keywords: "select all output scrollback",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => selectAllTerminal(),
+    },
+    {
+      id: "term-copy-output",
+      title: "Terminal: Copy all output",
+      group: "Terminal",
+      icon: <ClipboardCopy size={14} />,
+      keywords: "copy output scrollback clipboard log",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => void copyTerminalOutput(),
+    },
+    {
+      id: "term-save-output",
+      title: "Terminal: Save output to file…",
+      group: "Terminal",
+      icon: <Save size={14} />,
+      keywords: "save export output scrollback log file",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => void saveTerminalOutput(),
+    },
+    {
+      id: "term-broadcast",
+      title: "Terminal: Toggle broadcast input",
+      group: "Terminal",
+      icon: <RadioTower size={14} />,
+      keywords: "broadcast type every pane all panes multi synchronize input",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => toggleBroadcast(),
     }
   );
 

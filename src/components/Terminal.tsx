@@ -13,12 +13,22 @@ import {
   ChevronRight,
   ChevronDown,
   Laptop,
+  Eraser,
+  ClipboardCopy,
+  Save,
+  RadioTower,
 } from "lucide-react";
+import {
+  clearTerminal,
+  copyTerminalOutput,
+  saveTerminalOutput,
+} from "@/lib/terminalActions";
 import { LOCAL_SESSION, type LocalShell, type SessionId } from "@/lib/types";
 import { localShells, openLocalTerminal } from "@/lib/localTerminal";
 import {
   acquirePane,
   getPane,
+  terminalOptions,
   type PaneState,
 } from "@/lib/terminalRegistry";
 import { noteTerminalFocus } from "@/lib/termInput";
@@ -66,6 +76,7 @@ export function TerminalDock({
   const renameTab = useTerminals((s) => s.renameTab);
   const splitActivePane = useTerminals((s) => s.splitActivePane);
   const toggleZoom = useTerminals((s) => s.toggleZoom);
+  const toggleBroadcast = useTerminals((s) => s.toggleBroadcast);
   const snippets = useSnippets((s) => s.snippets);
   const requestInsert = useSnippets((s) => s.requestInsert);
   const openSnippets = useSnippets((s) => s.openPanel);
@@ -173,6 +184,30 @@ export function TerminalDock({
         onClick: () => splitActivePane(tab.id, "col"),
         separatorAfter: true,
         ...hintOf("term-split-down", TERMINAL_CHORDS.splitDown),
+      },
+      {
+        label: tab.broadcast ? "Stop broadcasting input" : "Broadcast input to all panes",
+        icon: <RadioTower size={12} />,
+        disabled: tab.root.kind !== "split" && !tab.broadcast,
+        onClick: () => toggleBroadcast(tab.id),
+        separatorAfter: true,
+      },
+      {
+        label: "Clear",
+        icon: <Eraser size={12} />,
+        onClick: () => clearTerminal(tab),
+        ...hintOf("term-clear", TERMINAL_CHORDS.clear),
+      },
+      {
+        label: "Copy all output",
+        icon: <ClipboardCopy size={12} />,
+        onClick: () => void copyTerminalOutput(tab),
+      },
+      {
+        label: "Save output to file…",
+        icon: <Save size={12} />,
+        onClick: () => void saveTerminalOutput(tab),
+        separatorAfter: true,
       },
       {
         label: "Pop out active pane",
@@ -607,7 +642,11 @@ function SplitView({
       >
         <PaneView tab={tab} node={node.a} visible={visible} />
       </div>
-      <SplitHandle dir={node.dir} onDrag={onDrag} />
+      <SplitHandle
+        dir={node.dir}
+        onDrag={onDrag}
+        onReset={() => setSplitRatio(tab.id, node.id, 0.5)}
+      />
       <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <PaneView tab={tab} node={node.b} visible={visible} />
       </div>
@@ -618,9 +657,12 @@ function SplitView({
 function SplitHandle({
   dir,
   onDrag,
+  onReset,
 }: {
   dir: SplitDir;
   onDrag: (clientX: number, clientY: number) => void;
+  /** Double-click: back to an even split. */
+  onReset: () => void;
 }) {
   const start = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -639,6 +681,9 @@ function SplitHandle({
   return (
     <div
       onMouseDown={start}
+      onDoubleClick={onReset}
+      title="Drag to resize, double-click to reset"
+      data-split-handle
       className={cn(
         "z-20 shrink-0 bg-border transition-colors hover:bg-accent/60",
         dir === "row" ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
@@ -666,6 +711,12 @@ function TerminalLeaf({
   const fontSize = useSettings((s) => s.terminalFontSize);
   const fontFamily = useSettings((s) => s.terminalFontFamily);
   const themeKey = useSettings((s) => s.terminalTheme);
+  const lineHeight = useSettings((s) => s.terminalLineHeight);
+  const cursorStyle = useSettings((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettings((s) => s.terminalCursorBlink);
+  const broadcasting = useTerminals(
+    (s) => !!s.tabs.find((t) => t.id === tab.id)?.broadcast
+  );
 
   const setPaneActive = useTerminals((s) => s.setPaneActive);
   const closePane = useTerminals((s) => s.closePane);
@@ -727,11 +778,9 @@ function TerminalLeaf({
   useEffect(() => {
     const entry = getPane(paneId);
     if (!entry) return;
-    entry.term.options.fontSize = fontSize;
-    entry.term.options.fontFamily = fontFamily;
-    entry.term.options.theme = TERMINAL_THEMES[themeKey];
+    Object.assign(entry.term.options, terminalOptions(useSettings.getState()));
     if (visible) entry.refit();
-  }, [fontSize, fontFamily, themeKey, visible, paneId]);
+  }, [fontSize, fontFamily, themeKey, lineHeight, cursorStyle, cursorBlink, visible, paneId]);
 
   const theme = TERMINAL_THEMES[themeKey];
 
@@ -740,7 +789,8 @@ function TerminalLeaf({
       className={cn(
         "group absolute inset-0 flex flex-col",
         visible ? "" : "pointer-events-none invisible",
-        isSplit && isActive && "z-10 ring-1 ring-inset ring-accent/50"
+        isSplit && isActive && !broadcasting && "z-10 ring-1 ring-inset ring-accent/50",
+        broadcasting && "z-10 ring-1 ring-inset ring-warning/70"
       )}
       aria-hidden={!visible}
     >
@@ -762,6 +812,15 @@ function TerminalLeaf({
         >
           <X size={12} />
         </button>
+      )}
+      {broadcasting && (
+        <div
+          data-term-broadcast
+          className="pointer-events-none absolute bottom-1.5 right-2 z-20 flex items-center gap-1 rounded bg-warning/90 px-1.5 py-0.5 text-[10px] font-medium text-black"
+        >
+          <RadioTower size={10} />
+          Broadcasting
+        </div>
       )}
       {state.status === "opening" && (
         <div className="pointer-events-none absolute left-2 top-2 rounded bg-bg-panel/70 px-1.5 py-0.5 text-[10px] text-text-dim">

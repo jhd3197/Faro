@@ -38,6 +38,8 @@ import {
   setAgents as setSshAgents,
   reset as resetPasswordManagers,
 } from "./passwords";
+import { terminalCalls } from "./core";
+import { getPane, paneText } from "@/lib/terminalRegistry";
 // window.__primitives: a bench for the shared UI primitives (tests only).
 import "./primitives";
 
@@ -68,6 +70,8 @@ import "./primitives";
   // Palette recent commands.
   usePalette,
   usePanelSizes,
+  terminalCalls,
+  terminal: { getPane, paneText },
   // Ask the window to close, as the title bar's close button does.
   requestClose: () => getCurrentWindow().close(),
   // Convenience: focus a server by profile id (connects if needed).

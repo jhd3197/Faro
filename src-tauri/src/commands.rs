@@ -950,6 +950,15 @@ pub async fn open_terminal(
         .map_err(err)
 }
 
+/// Write text to a local file the user just picked in a save dialog (the
+/// terminal's "Save output to file").
+#[tauri::command]
+pub async fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    tokio::fs::write(&path, contents)
+        .await
+        .map_err(|e| format!("Couldn't write {path}: {e}"))
+}
+
 /// Shells installed on this machine, the default first (Plan 36 Phase 1).
 #[tauri::command]
 pub async fn list_local_shells() -> Result<Vec<crate::local_shell::LocalShell>, String> {

@@ -17,6 +17,8 @@ type Args = Record<string, any>;
 let terminalCounter = 0;
 // Terminals that have received input (see terminal_write).
 const echoed = new Set<string>();
+/** Every terminal call the UI made, for tests: what was opened and written. */
+export const terminalCalls: { cmd: string; args: Record<string, unknown> }[] = [];
 
 // A tiny in-memory snippets store so the demo's Snippets panel / palette work
 // (save/delete round-trip) without the Rust backend (Plan 11 Phase 4).
@@ -302,6 +304,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- terminal ----
     case "open_terminal": {
       const id = `term-${++terminalCounter}`;
+      terminalCalls.push({ cmd, args: { ...a, terminalId: id } });
       // Push the canned transcript once the xterm is listening.
       setTimeout(
         () => emit("terminal://data", { terminalId: id, data: data.TERMINAL_TRANSCRIPT }),
@@ -310,6 +313,7 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return id;
     }
     case "terminal_write": {
+      terminalCalls.push({ cmd, args: { ...a } });
       // Echo keystrokes like a real PTY so typed commands and inserted
       // snippets show up. The first write backs over the transcript's
       // painted cursor; Enter starts a fresh prompt.
@@ -323,6 +327,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       emit("terminal://data", { terminalId: a.terminalId, data: out });
       return null;
     }
+    case "write_text_file":
+      return null;
     case "list_local_shells":
       return [
         { id: "pwsh", name: "PowerShell", program: "pwsh.exe", args: ["-NoLogo"] },

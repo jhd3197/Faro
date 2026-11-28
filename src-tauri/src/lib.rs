@@ -689,6 +689,7 @@ pub fn run() {
             cache::cache_clear,
             commands::open_terminal,
             commands::list_local_shells,
+            commands::write_text_file,
             commands::terminal_write,
             commands::terminal_resize,
             commands::close_terminal,

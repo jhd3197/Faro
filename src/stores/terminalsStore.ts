@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { LOCAL_SESSION, type SessionId } from "@/lib/types";
 import { disposePane } from "@/lib/terminalRegistry";
+import { setBroadcastResolver } from "@/lib/terminalBroadcast";
 
 // A terminal tab owns a LAYOUT TREE of panes (Plan 11 Phase 2). A fresh tab is
 // a single leaf; splitting a leaf replaces it with a split node holding the
@@ -39,6 +40,8 @@ export interface TerminalTab {
   initialPaneId: string;
   /** Sent to that pane's PTY once, right after it opens (e.g. a `cd`). */
   initialCommand?: string;
+  /** Typing in one pane goes to every pane of this tab. Never saved. */
+  broadcast?: boolean;
   /** Local tabs: the shell profile id every pane of this tab runs. */
   shell?: string;
   /** Local tabs: the folder the shell starts in. */
@@ -96,6 +99,8 @@ interface TerminalsState {
   toggleZoom: (tabId: string) => void;
   /** Drag-resize: set a split node's ratio. */
   setSplitRatio: (tabId: string, splitId: string, ratio: number) => void;
+  /** Turn broadcast input on or off for a tab. */
+  toggleBroadcast: (tabId: string) => void;
 }
 
 function genId() {
@@ -341,6 +346,11 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
       ),
     })),
 
+  toggleBroadcast: (tabId) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, broadcast: !t.broadcast } : t)),
+    })),
+
   setSplitRatio: (tabId, splitId, ratio) =>
     set((s) => ({
       tabs: s.tabs.map((t) =>
@@ -350,6 +360,16 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
       ),
     })),
 }));
+
+// Broadcast input: the registry asks which other panes share a pane's tab.
+setBroadcastResolver((paneId) => {
+  for (const t of useTerminals.getState().tabs) {
+    if (!t.broadcast) continue;
+    const ids = leafIds(t.root);
+    if (ids.includes(paneId)) return ids.filter((id) => id !== paneId);
+  }
+  return null;
+});
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));

@@ -43,6 +43,7 @@ import { KeyboardSettings } from "./KeyboardSettings";
 import { Dropdown } from "./ui/Dropdown";
 import { AboutSettings } from "./AboutSettings";
 import { PasswordManagerSettings } from "./PasswordManagerSettings";
+import { TerminalExtras } from "./settings/TerminalExtras";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
 import {
@@ -103,6 +104,13 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "terminalCopyOnSelect",
     "terminalSuggestions",
     "terminalLocalShell",
+    "terminalCursorStyle",
+    "terminalCursorBlink",
+    "terminalLineHeight",
+    "terminalPlainPaste",
+    "terminalOsc52",
+    "terminalHighlight",
+    "terminalHighlightRules",
   ],
   connections: ["defaultPort", "storePasswordsInKeychain", "restoreLastSession"],
   about: ["notifications"],
@@ -663,6 +671,7 @@ export function Settings({ onClose }: Props) {
               checked={s.terminalSuggestions}
               onChange={s.setTerminalSuggestions}
             />
+            <TerminalExtras />
           </>
         );
 
