@@ -216,6 +216,13 @@ interface SettingsState {
   /** Colour words such as `error` and `ok` in command output. */
   terminalHighlight: boolean;
   terminalHighlightRules: HighlightRule[];
+  /** Keep server shells running on the host (inside tmux) so they survive a
+   *  disconnect or an app restart. */
+  terminalPersist: "off" | "on";
+  /** Per-connection choice, by profile id; wins over `terminalPersist`. */
+  terminalPersistOverrides: Record<string, boolean>;
+  /** Rebuild a connection's terminal tabs the next time it opens. */
+  terminalRestoreWorkspace: boolean;
   /** Local terminal: the shell profile a new local tab starts ("" = the
    *  machine's default). */
   terminalLocalShell: string;
@@ -391,6 +398,9 @@ const DEFAULTS: Persisted = {
   terminalOsc52: true,
   terminalHighlight: true,
   terminalHighlightRules: DEFAULT_HIGHLIGHT_RULES,
+  terminalPersist: "off",
+  terminalPersistOverrides: {},
+  terminalRestoreWorkspace: true,
   terminalLocalShell: "",
   defaultPort: 22,
   storePasswordsInKeychain: false,

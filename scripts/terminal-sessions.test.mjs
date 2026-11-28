@@ -119,6 +119,60 @@ test("quick connect parses addresses and nothing else", () => {
   assert.deepEqual(qc.quickProfile({ username: "a", host: "h", port: 22 }, "x").auth, { kind: "agent" });
 });
 
+const wsCore = await load("src/lib/terminalWorkspaceCore.ts");
+
+test("a workspace round-trips, and anything malformed is refused", () => {
+  const tabs = [
+    {
+      title: "deploy",
+      root: { kind: "split", id: "s1", dir: "row", ratio: 0.3, a: { kind: "leaf", paneId: "p-1" }, b: { kind: "leaf", paneId: "p-2" } },
+      activePaneId: "p-2",
+      pinned: true,
+      locked: true,
+      persist: true,
+      persistNames: { "p-2": "faro-adopted1" },
+      zoomedPaneId: "p-1",
+      broadcast: true,
+      initialCommand: "cd /srv\n",
+    },
+    { title: "logs", root: { kind: "leaf", paneId: "p-3" }, activePaneId: "p-3", shell: "pwsh", cwd: "C:\\work" },
+  ];
+  const saved = wsCore.serializeWorkspace(tabs);
+  assert.equal(saved.v, 1);
+  assert.equal("broadcast" in saved.tabs[0], false, "broadcast is never saved");
+  assert.equal("initialCommand" in saved.tabs[0], false, "the start command is not replayed");
+  assert.equal("zoomedPaneId" in saved.tabs[0], false);
+  const back = wsCore.parseWorkspace(JSON.stringify(saved));
+  assert.deepEqual(back, saved, "what is read back is what was stored");
+  assert.deepEqual(back.tabs[1], { title: "logs", root: { kind: "leaf", paneId: "p-3" }, activePaneId: "p-3", shell: "pwsh", cwd: "C:\\work" });
+
+  const bad = (v) => wsCore.parseWorkspace(typeof v === "string" ? v : JSON.stringify(v));
+  assert.equal(bad(""), null);
+  assert.equal(bad("{not json"), null);
+  assert.equal(bad({ v: 2, tabs: saved.tabs }), null, "an unknown version");
+  assert.equal(bad({ v: 1, tabs: [] }), null, "no tabs");
+  assert.equal(bad({ v: 1, tabs: [{ title: "x", root: { kind: "leaf" } }] }), null, "a leaf without an id");
+  assert.equal(
+    bad({ v: 1, tabs: [{ title: "a", root: { kind: "leaf", paneId: "p" } }, { title: "b", root: { kind: "leaf", paneId: "p" } }] }),
+    null,
+    "the same pane id twice"
+  );
+  assert.equal(bad({ v: 1, tabs: [{ title: "a", root: { kind: "split", id: "s", dir: "row", ratio: 1.5, a: { kind: "leaf", paneId: "a" }, b: { kind: "leaf", paneId: "b" } } }] }), null, "a ratio out of range");
+  const fixed = bad({ v: 1, tabs: [{ title: "a", root: { kind: "leaf", paneId: "p" }, activePaneId: "gone", persist: true, persistNames: { p: "main; rm -rf /", other: "faro-x" } }] });
+  assert.equal(fixed.tabs[0].activePaneId, "p", "an unknown active pane falls back to the first");
+  assert.equal(fixed.tabs[0].persistNames, undefined, "a name that isn't a Faro session is dropped");
+});
+
+test("session names derive from pane ids and are counted as claimed", () => {
+  assert.equal(wsCore.persistNameFor("3F2504E0-4F89-41D3-9A0C-0305E82C3301"), "faro-3f2504e04f8941d39a0c0305");
+  assert.match(wsCore.persistNameFor("---"), /^faro-[a-z0-9]+$/);
+  const claimed = wsCore.claimedSessionNames([
+    { title: "a", persist: true, activePaneId: "aa", root: { kind: "split", id: "s", dir: "col", ratio: 0.5, a: { kind: "leaf", paneId: "aa" }, b: { kind: "leaf", paneId: "bb" } }, persistNames: { bb: "faro-adopted" } },
+    { title: "b", activePaneId: "cc", root: { kind: "leaf", paneId: "cc" } },
+  ]);
+  assert.deepEqual([...claimed].sort(), ["faro-aa", "faro-adopted"]);
+});
+
 const CHROME = [
   process.env.CHROME_PATH,
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -481,6 +535,162 @@ test("terminal sessions in the app", { timeout: 300_000, skip: !CHROME && "no Ch
       assert.equal(result.offPrevented, false, "off: left to the terminal");
       assert.deepEqual(result.uploads, [["png", "12 chars"]], "one upload, the 7 bytes as base64");
       assert.ok(result.typed.includes("/home/deploy/.cache/faro/pastes/paste-1.png "), JSON.stringify(result.typed));
+    });
+
+    const opens = () =>
+      demo(() => window.__demo.terminalCalls.filter((c) => c.cmd === "open_terminal").map((c) => c.args));
+    const closes = () =>
+      demo(() => window.__demo.terminalCalls.filter((c) => c.cmd === "close_terminal").map((c) => c.args));
+
+    await t.test("persistent shells: each pane gets its own session; closing ends it, disconnecting does not", async () => {
+      await demo(() => window.__demo.useSettings.setState({ terminalPersist: "on" }));
+      await reset();
+      await demo(() => {
+        const s = window.__demo.useTerminals.getState();
+        s.splitActivePane(s.activeId, "row");
+      });
+      await sleep(700);
+      const opened = await opens();
+      assert.equal(opened.length, 2);
+      assert.match(opened[0].persistName, /^faro-[a-z0-9]{8,24}$/);
+      assert.match(opened[1].persistName, /^faro-[a-z0-9]{8,24}$/);
+      assert.notEqual(opened[0].persistName, opened[1].persistName);
+      assert.equal(opened[0].scrollback, 5000);
+
+      // Closing one pane by hand ends its session.
+      await demo(() => {
+        const s = window.__demo.useTerminals.getState();
+        const tab = s.tabs.find((x) => x.id === s.activeId);
+        s.closePane(tab.id, tab.activePaneId);
+      });
+      await sleep(200);
+      assert.deepEqual((await closes()).map((c) => c.endSession), [true]);
+
+      // Dropping the connection's tabs only detaches.
+      await demo(() => {
+        const { useTerminals, useConnections } = window.__demo;
+        useTerminals.getState().dropSessionTabs(useConnections.getState().activeSessionId);
+      });
+      await sleep(200);
+      assert.deepEqual((await closes()).map((c) => c.endSession), [true, false]);
+      await demo(() => window.__demo.useSettings.setState({ terminalPersist: "off" }));
+    });
+
+    await t.test("a connection's choice overrides the global setting, and local shells never persist", async () => {
+      await demo(() => {
+        const { useSettings, useConnections } = window.__demo;
+        const c = useConnections.getState();
+        const profileId = c.sessions.find((s) => s.sessionId === c.activeSessionId).profileId;
+        useSettings.setState({ terminalPersist: "off", terminalPersistOverrides: { [profileId]: true } });
+      });
+      await reset();
+      await sleep(300);
+      assert.match((await opens())[0].persistName, /^faro-/, "override on");
+      await demo(() => {
+        const { useSettings, useTerminals } = window.__demo;
+        useSettings.setState({ terminalPersist: "on", terminalPersistOverrides: {} });
+        useTerminals.getState().openTab("local", undefined, { title: "Local", shell: "cmd" });
+      });
+      await sleep(500);
+      const local = (await opens()).find((a) => a.sessionId === "local");
+      assert.equal(local.persistName, null, "local shells have nothing to survive");
+      await demo(() => window.__demo.useSettings.setState({ terminalPersist: "off" }));
+    });
+
+    await t.test("the workspace is saved and comes back after a reconnect, with the same shells", async () => {
+      await demo(() => window.__demo.useSettings.setState({ terminalPersist: "on", terminalRestoreWorkspace: true }));
+      await reset();
+      const before = await demo(() => {
+        const { useTerminals, useConnections } = window.__demo;
+        const sid = useConnections.getState().activeSessionId;
+        const t = useTerminals.getState();
+        t.renameTab(t.activeId, "deploy");
+        t.splitActivePane(t.activeId, "col");
+        const second = useTerminals.getState().openTab(sid);
+        useTerminals.getState().renameTab(second.id, "logs");
+        useTerminals.getState().toggleLock(second.id);
+        useTerminals.getState().togglePin(second.id);
+        const c = useConnections.getState();
+        return { profileId: c.sessions.find((s) => s.sessionId === sid).profileId, sid };
+      });
+      await sleep(1200);
+      const row = await demo((key) => window.__demo.workspaceRows.get(key), `terminalWorkspace:${before.profileId}`);
+      assert.ok(row, "the workspace row was written");
+      const names = async () => (await opens()).map((a) => a.persistName).sort();
+      const firstNames = await names();
+      assert.equal(firstNames.length, 3, "three panes were opened");
+
+      // Disconnect and connect again: a new session id, the same profile.
+      await demo(async () => {
+        const { useConnections } = window.__demo;
+        await useConnections.getState().disconnect();
+      });
+      await sleep(600);
+      assert.equal(await demo(() => window.__demo.useTerminals.getState().tabs.filter((x) => x.sessionId !== "local").length), 0);
+      assert.ok(await demo((key) => window.__demo.workspaceRows.has(key), `terminalWorkspace:${before.profileId}`), "a disconnect keeps the saved workspace");
+      await demo(async (profileId) => {
+        const { useConnections, useLayout } = window.__demo;
+        window.__demo.terminalCalls.length = 0;
+        await useConnections.getState().connect(profileId);
+        useLayout.getState().setTerminalOpen(true);
+      }, before.profileId);
+      await page.waitForFunction(() => window.__demo.useTerminals.getState().tabs.filter((x) => x.sessionId !== "local").length === 2, { timeout: 10_000 });
+      await sleep(900);
+      const after = await demo(() => {
+        const { useTerminals, useConnections } = window.__demo;
+        const sid = useConnections.getState().activeSessionId;
+        return {
+          sid,
+          tabs: useTerminals.getState().tabs.filter((x) => x.sessionId === sid).map((x) => ({
+            title: x.title,
+            split: x.root.kind,
+            pinned: !!x.pinned,
+            locked: !!x.locked,
+            persist: !!x.persist,
+          })),
+        };
+      });
+      assert.deepEqual(after.tabs, [
+        { title: "logs", split: "leaf", pinned: true, locked: true, persist: true },
+        { title: "deploy", split: "split", pinned: false, locked: false, persist: true },
+      ]);
+      assert.deepEqual(await names(), firstNames, "every pane reattached to the session it had");
+      await demo(() => {
+        const t = window.__demo.useTerminals.getState();
+        for (const x of t.tabs) if (x.locked) t.toggleLock(x.id);
+      });
+    });
+
+    await t.test("closing every tab by hand forgets the workspace", async () => {
+      const profileId = await demo(() => {
+        const { useTerminals, useConnections } = window.__demo;
+        const c = useConnections.getState();
+        const t = useTerminals.getState();
+        t.closeTabs(t.tabs.map((x) => x.id));
+        window.__demo.useLayout.getState().setTerminalOpen(false);
+        return c.sessions.find((s) => s.sessionId === c.activeSessionId).profileId;
+      });
+      await sleep(1000);
+      assert.equal(await demo((key) => window.__demo.workspaceRows.has(key), `terminalWorkspace:${profileId}`), false);
+    });
+
+    await t.test("a shell left running on the server can be attached from the + menu", async () => {
+      await reset();
+      await demo(() => window.__demo.setPersistedSessions([{ name: "faro-leftover01", attached: 0, lastActivity: Math.floor(Date.now() / 1000) - 7200 }]));
+      await page.click("[data-term-new-tab-menu]");
+      await page.waitForFunction(() => [...document.querySelectorAll('[role="menuitem"]')].some((e) => e.textContent.includes("Attach shell left running")));
+      const labels = await page.$$eval('[role="menuitem"]', (els) => els.map((e) => e.textContent.trim()));
+      assert.ok(labels.some((l) => /Attach shell left running \(2h ago\)/.test(l)), labels.join(" | "));
+      assert.ok(labels.includes("Keep shells running after disconnect"));
+      for (const h of await page.$$('[role="menuitem"]')) {
+        if ((await h.evaluate((e) => e.textContent)).includes("Attach shell left running")) await h.click();
+      }
+      await sleep(600);
+      assert.ok((await opens()).some((a) => a.persistName === "faro-leftover01"), "attached to the leftover session");
+      await demo(() => {
+        window.__demo.setPersistedSessions([]);
+        window.__demo.useSettings.setState({ terminalPersist: "off", terminalPersistOverrides: {} });
+      });
     });
 
     const palette = async (text) => {

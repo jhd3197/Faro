@@ -101,6 +101,7 @@ import type {
   SyncStrategy,
   TerminalDataEvent,
   LocalShell,
+  PersistedSession,
   TerminalExitEvent,
   Transfer,
   TransferQueueState,
@@ -411,7 +412,7 @@ export const ipc = {
     sessionId: SessionId,
     cols: number,
     rows: number,
-    opts?: { shell?: string; cwd?: string }
+    opts?: { shell?: string; cwd?: string; persistName?: string; scrollback?: number }
   ) =>
     invoke<string>("open_terminal", {
       sessionId,
@@ -419,7 +420,16 @@ export const ipc = {
       rows,
       shell: opts?.shell ?? null,
       cwd: opts?.cwd ?? null,
+      persistName: opts?.persistName ?? null,
+      scrollback: opts?.scrollback ?? null,
     }),
+
+  /** Faro's tmux sessions on a connection's host. */
+  terminalPersistList: (sessionId: SessionId) =>
+    invoke<PersistedSession[]>("terminal_persist_list", { sessionId }),
+  /** End one of them. */
+  terminalPersistKill: (sessionId: SessionId, name: string) =>
+    invoke<void>("terminal_persist_kill", { sessionId, name }),
 
   /** Save a pasted image (base64) where the session's shell runs; returns
    *  the path to type. */
@@ -439,8 +449,10 @@ export const ipc = {
   terminalResize: (terminalId: string, cols: number, rows: number) =>
     invoke<void>("terminal_resize", { terminalId, cols, rows }),
 
-  closeTerminal: (terminalId: string) =>
-    invoke<void>("close_terminal", { terminalId }),
+  /** `endSession: false` leaves a persistent pane's shell running on the
+   *  host (the connection is closing, not the pane). */
+  closeTerminal: (terminalId: string, endSession = true) =>
+    invoke<void>("close_terminal", { terminalId, endSession }),
 
   // ---- Command snippets (Plan 11 Phase 4) ----
   // Every mutation returns the full, re-ordered list (most-used first).
@@ -764,6 +776,8 @@ export const ipc = {
   /** Every setting as `key -> raw JSON value`. */
   settingsGetAll: () =>
     invoke<Record<string, string>>("settings_get_all"),
+  /** One setting's raw JSON value; null when never set. */
+  settingsGet: (key: string) => invoke<string | null>("settings_get", { key }),
   /** Upsert one setting (`value` is a JSON-stringified value). */
   settingsSet: (key: string, value: string) =>
     invoke<void>("settings_set", { key, value }),

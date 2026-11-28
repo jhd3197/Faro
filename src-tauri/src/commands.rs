@@ -276,6 +276,7 @@ pub async fn disconnect(
     let profile_id = state.sessions.get(&session_id).await.map(|s| s.profile().id.clone());
     // Stop streamed execs first, while the transport can still carry the kill.
     state.streams.stop_session(&session_id).await;
+    state.ptys.forget_session(&session_id).await;
     state.sessions.disconnect(&session_id).await.map_err(err)?;
     // Stop this connection's forwards once nothing is using the session.
     // A forward started from faro-cli is left running.
@@ -927,6 +928,8 @@ pub async fn open_terminal(
     rows: u32,
     shell: Option<String>,
     cwd: Option<String>,
+    persist_name: Option<String>,
+    scrollback: Option<u32>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -943,11 +946,49 @@ pub async fn open_terminal(
         .get_ssh(&session_id)
         .await
         .ok_or_else(|| "FTP sessions have no shell".to_string())?;
+    let persist = persist_name.map(|name| crate::terminal::PersistRequest {
+        name,
+        scrollback: scrollback.unwrap_or(5000),
+    });
     state
         .ptys
-        .open(&ssh, cols, rows, app)
+        .open(&session_id, &ssh, cols, rows, persist, app)
         .await
         .map_err(err)
+}
+
+/// Faro's tmux sessions on a connection's host (Plan 36 Phase 4): the ones a
+/// restored workspace reattaches to, and any left over from earlier.
+#[tauri::command]
+pub async fn terminal_persist_list(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::term_persist::PersistedSession>, String> {
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "This connection has no shell".to_string())?;
+    Ok(crate::term_persist::list(&ssh).await)
+}
+
+/// End one of Faro's tmux sessions on the host.
+#[tauri::command]
+pub async fn terminal_persist_kill(
+    session_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !crate::term_persist::valid_name(&name) {
+        return Err("Not a Faro session name".into());
+    }
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "This connection has no shell".to_string())?;
+    crate::term_persist::kill(&ssh, &name).await;
+    Ok(())
 }
 
 /// Save a pasted clipboard image where a terminal's shell runs and return its
@@ -1019,9 +1060,14 @@ pub async fn terminal_resize(
 #[tauri::command]
 pub async fn close_terminal(
     terminal_id: String,
+    end_session: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.ptys.close(&terminal_id).await.map_err(err)
+    state
+        .ptys
+        .close(&terminal_id, end_session.unwrap_or(true))
+        .await
+        .map_err(err)
 }
 
 // ---------- Command snippets (Plan 11 Phase 4) ----------
@@ -2785,6 +2831,15 @@ pub async fn settings_set(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.db.settings_set(&key, &value).map_err(err)
+}
+
+/// One setting's raw JSON value, or null when it was never set.
+#[tauri::command]
+pub async fn settings_get(
+    key: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state.db.settings_get(&key).map_err(err)
 }
 
 /// Delete one setting row (reset-to-default for shortcut overrides & friends).

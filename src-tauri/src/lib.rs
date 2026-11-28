@@ -70,6 +70,7 @@ mod logfollow;
 mod stream_exec;
 mod sysmon;
 mod term_paste;
+mod term_persist;
 mod terminal;
 mod tls_trust;
 mod transfer;
@@ -692,6 +693,8 @@ pub fn run() {
             commands::list_local_shells,
             commands::write_text_file,
             commands::terminal_paste_image,
+            commands::terminal_persist_list,
+            commands::terminal_persist_kill,
             commands::terminal_write,
             commands::terminal_resize,
             commands::close_terminal,
@@ -748,6 +751,7 @@ pub fn run() {
             commands::api_key_status,
             commands::settings_get_all,
             commands::settings_set,
+            commands::settings_get,
             commands::open_external_url,
             commands::wordpress_authorize,
             commands::settings_delete,

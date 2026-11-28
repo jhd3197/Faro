@@ -123,7 +123,7 @@ pub async fn save_remote(ssh: &Arc<SshSession>, bytes: Vec<u8>, ext: &str) -> Re
             file.shutdown().await.context("finish the image")?;
             let attrs = FileAttributes {
                 permissions: Some(0o600),
-                ..Default::default()
+                ..FileAttributes::empty()
             };
             sftp.set_metadata(path_ref, attrs)
                 .await
@@ -178,5 +178,48 @@ mod tests {
         assert!(fresh.exists(), "a recent paste is kept");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Against a real SSH host: `FARO_LIVE_SFTP=host:port:user:pass cargo test -p
+/// faro --lib term_paste::live_tests -- --ignored --nocapture`.
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::session::Session;
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_pasted_image_lands_on_the_host_readable_by_its_owner_only() {
+        let session = crate::transfer::live_tests::sftp_session()
+            .await
+            .expect("FARO_LIVE_SFTP");
+        let Session::Ssh(ssh) = &*session else {
+            unreachable!()
+        };
+        let bytes: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+        let path = save_remote(ssh, bytes.clone(), "png").await.expect("paste");
+        assert!(path.contains("/.cache/faro/pastes/paste-") && path.ends_with(".png"), "{path}");
+
+        let quoted = crate::scp::quote_path(&path);
+        let out = ssh
+            .exec(&format!(
+                "stat -c '%a %s' {quoted}; stat -c '%a' \"$(dirname {quoted})\"; cksum < {quoted}"
+            ))
+            .await
+            .unwrap();
+        let mut lines = out.stdout.lines();
+        assert_eq!(lines.next(), Some("600 5000"), "owner-only file, every byte");
+        assert_eq!(lines.next(), Some("700"), "owner-only folder");
+        // Same bytes as were pasted: compare with a checksum of a second copy.
+        let again = save_remote(ssh, bytes, "png").await.unwrap();
+        let sum = ssh
+            .exec(&format!("cksum < {}", crate::scp::quote_path(&again)))
+            .await
+            .unwrap();
+        assert_eq!(lines.next().map(str::trim), Some(sum.stdout.trim()));
+        let _ = ssh
+            .exec(&format!("rm -f {quoted} {}", crate::scp::quote_path(&again)))
+            .await;
     }
 }

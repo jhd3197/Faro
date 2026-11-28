@@ -30,27 +30,95 @@ struct TerminalExitEvent {
 
 struct PtyHandle {
     tx: mpsc::Sender<PtyCommand>,
+    /// Set for a pane running inside a tmux session: closing the pane by hand
+    /// ends that session, while a dropped connection only detaches from it.
+    persist: Option<(Arc<SshSession>, String)>,
+}
+
+/// A pane that should survive the connection (Plan 36 Phase 4).
+pub struct PersistRequest {
+    /// The tmux session name (`faro-…`).
+    pub name: String,
+    /// Scrollback lines the session keeps.
+    pub scrollback: u32,
 }
 
 pub struct PtyManager {
     ptys: Mutex<HashMap<String, PtyHandle>>,
+    /// Per connection: the host's tmux version, or None when it has no tmux.
+    /// Looked up once per connection.
+    tmux: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         Self {
             ptys: Mutex::new(HashMap::new()),
+            tmux: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The host's tmux version (cached). The bool is true the first time a
+    /// connection turns out to have no tmux, so the hint is shown once.
+    async fn tmux_version(
+        &self,
+        session_id: &str,
+        session: &Arc<SshSession>,
+    ) -> (Option<String>, bool) {
+        if let Some(known) = self.tmux.lock().await.get(session_id) {
+            return (known.clone(), false);
+        }
+        let found = crate::term_persist::detect(session).await;
+        self.tmux
+            .lock()
+            .await
+            .insert(session_id.to_string(), found.clone());
+        let first_miss = found.is_none();
+        (found, first_miss)
+    }
+
+    /// Forget what is known about a connection (it was closed).
+    pub async fn forget_session(&self, session_id: &str) {
+        self.tmux.lock().await.remove(session_id);
     }
 
     pub async fn open(
         &self,
+        session_id: &str,
         session: &Arc<SshSession>,
         cols: u32,
         rows: u32,
+        persist: Option<PersistRequest>,
         app: AppHandle,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
+
+        // Persistent pane: run inside tmux when the host has it. Whatever is
+        // written here reaches the frontend before the shell's own output.
+        let mut intro = String::new();
+        let mut tmux_command = None;
+        let mut persisted = None;
+        if let Some(req) = persist {
+            if !crate::term_persist::valid_name(&req.name) {
+                return Err(anyhow!("invalid persistent session name"));
+            }
+            match self.tmux_version(session_id, session).await {
+                (Some(_), _) => {
+                    intro = crate::term_persist::history(session, &req.name).await;
+                    tmux_command = Some(crate::term_persist::attach_command(
+                        &req.name,
+                        req.scrollback,
+                    ));
+                    persisted = Some((session.clone(), req.name));
+                }
+                (None, true) => {
+                    intro = "\x1b[2m[tmux isn't installed on this server, so shells here \
+                             won't survive a disconnect]\x1b[0m\r\n"
+                        .to_string();
+                }
+                (None, false) => {}
+            }
+        }
 
         let channel = {
             let h = session.handle.lock().await;
@@ -59,7 +127,19 @@ impl PtyManager {
         channel
             .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
-        channel.request_shell(true).await?;
+        match &tmux_command {
+            Some(command) => channel.exec(true, command.as_bytes()).await?,
+            None => channel.request_shell(true).await?,
+        }
+        if !intro.is_empty() {
+            let _ = app.emit(
+                "terminal://data",
+                TerminalDataEvent {
+                    terminal_id: id.clone(),
+                    data: intro,
+                },
+            );
+        }
 
         let (tx, mut rx) = mpsc::channel::<PtyCommand>(64);
         let id_for_task = id.clone();
@@ -84,6 +164,10 @@ impl PtyManager {
                             }
                             PtyCommand::Close => {
                                 let _ = channel.eof().await;
+                                // An explicit close makes sshd hang up the
+                                // PTY. A tmux client only detaches on that;
+                                // end-of-input alone leaves it attached.
+                                let _ = channel.close().await;
                                 break;
                             }
                         }
@@ -135,10 +219,13 @@ impl PtyManager {
             );
         });
 
-        self.ptys
-            .lock()
-            .await
-            .insert(id.clone(), PtyHandle { tx });
+        self.ptys.lock().await.insert(
+            id.clone(),
+            PtyHandle {
+                tx,
+                persist: persisted,
+            },
+        );
         Ok(id)
     }
 
@@ -183,7 +270,7 @@ impl PtyManager {
         self.ptys
             .lock()
             .await
-            .insert(id.clone(), PtyHandle { tx });
+            .insert(id.clone(), PtyHandle { tx, persist: None });
         Ok(id)
     }
 
@@ -207,10 +294,17 @@ impl PtyManager {
             .map_err(|_| anyhow!("terminal closed"))
     }
 
-    pub async fn close(&self, id: &str) -> Result<()> {
+    /// Close a pane. `end_session` also ends a persistent pane's tmux session
+    /// (the user closed it); without it the session keeps running on the host.
+    pub async fn close(&self, id: &str, end_session: bool) -> Result<()> {
         let h = self.ptys.lock().await.remove(id);
         if let Some(h) = h {
             let _ = h.tx.send(PtyCommand::Close).await;
+            if end_session {
+                if let Some((session, name)) = h.persist {
+                    crate::term_persist::kill(&session, &name).await;
+                }
+            }
         }
         Ok(())
     }

@@ -1328,6 +1328,15 @@ export interface LocalShell {
   args: string[];
 }
 
+/** One of Faro's tmux sessions on a host (Plan 36 Phase 4). */
+export interface PersistedSession {
+  name: string;
+  /** Clients attached right now; 0 = detached. */
+  attached: number;
+  /** Seconds since the epoch; 0 when unknown. */
+  lastActivity: number;
+}
+
 export interface TerminalDataEvent {
   terminalId: string;
   data: string;

@@ -104,6 +104,8 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "terminalCopyOnSelect",
     "terminalSuggestions",
     "terminalLocalShell",
+    "terminalPersist",
+    "terminalRestoreWorkspace",
     "terminalCursorStyle",
     "terminalCursorBlink",
     "terminalLineHeight",

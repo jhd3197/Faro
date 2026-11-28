@@ -17,6 +17,13 @@ type Args = Record<string, any>;
 let terminalCounter = 0;
 // Terminals that have received input (see terminal_write).
 const echoed = new Set<string>();
+/** Saved terminal workspaces (settings rows), kept for the page's lifetime. */
+export const workspaceRows = new Map<string, string>();
+/** tmux sessions "on the host", for the detached-sessions menu. */
+let persistedSessions: { name: string; attached: number; lastActivity: number }[] = [];
+export function setPersistedSessions(list: typeof persistedSessions) {
+  persistedSessions = list;
+}
 /** Every terminal call the UI made, for tests: what was opened and written. */
 export const terminalCalls: { cmd: string; args: Record<string, unknown> }[] = [];
 
@@ -178,7 +185,16 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
     // ---- settings + credentials (Plan 12) ----
     case "settings_get_all":
       return JSON.parse(sessionStorage.getItem("faro-mock-discovery") ?? '{"discoverySeenVersion":"1.3.22"}');
+    case "settings_get":
+      return workspaceRows.get(String(a.key)) ?? null;
+    case "terminal_persist_list":
+      return persistedSessions;
+    case "terminal_persist_kill":
+      terminalCalls.push({ cmd, args: { ...a } });
+      persistedSessions = persistedSessions.filter((s) => s.name !== a.name);
+      return null;
     case "settings_set": {
+      if (String(a.key).startsWith("terminalWorkspace:")) workspaceRows.set(String(a.key), String(a.value));
       // Rows the demo keeps across reloads (in this tab): discovery state and
       // the restored-session/window rows the restore test reads back.
       if (String(a.key).startsWith("discovery") || ["sessionSnapshot", "windowBackground", "palette.recent", "layout.panels"].includes(String(a.key))) {
@@ -189,6 +205,8 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return null;
     }
     case "settings_delete":
+      workspaceRows.delete(String(a.key));
+      return null;
     case "settings_set_all":
     case "set_api_key":
     case "set_profile_password_keychain":
@@ -345,7 +363,9 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
         { id: "wsl:Ubuntu", name: "Ubuntu (WSL)", program: "wsl.exe", args: ["-d", "Ubuntu"] },
       ];
     case "terminal_resize":
+      return null;
     case "close_terminal":
+      terminalCalls.push({ cmd, args: { ...a } });
       return null;
 
     // ---- snippets (Plan 11 Phase 4) ----

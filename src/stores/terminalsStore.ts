@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { LOCAL_SESSION, type SessionId } from "@/lib/types";
 import { disposePane } from "@/lib/terminalRegistry";
 import { setBroadcastResolver } from "@/lib/terminalBroadcast";
+import type { SavedTab } from "@/lib/terminalWorkspaceCore";
 
 // A terminal tab owns a LAYOUT TREE of panes (Plan 11 Phase 2). A fresh tab is
 // a single leaf; splitting a leaf replaces it with a split node holding the
@@ -40,6 +41,11 @@ export interface TerminalTab {
   initialPaneId: string;
   /** Sent to that pane's PTY once, right after it opens (e.g. a `cd`). */
   initialCommand?: string;
+  /** Panes run inside tmux sessions on the host, so they survive a
+   *  disconnect and are picked up again on restore. */
+  persist?: boolean;
+  /** Panes attached to a tmux session not named after the pane id. */
+  persistNames?: Record<string, string>;
   /** Protected from closing: shortcut, middle click and bulk closes skip it. */
   locked?: boolean;
   /** Kept first in the strip, shown compact. */
@@ -74,8 +80,18 @@ interface TerminalsState {
   openTab: (
     sessionId: SessionId,
     initialCommand?: string,
-    opts?: { title?: string; shell?: string; cwd?: string }
+    opts?: {
+      title?: string;
+      shell?: string;
+      cwd?: string;
+      /** Override the connection's persistence choice for this tab. */
+      persist?: boolean;
+      /** Attach the first pane to this existing tmux session. */
+      persistName?: string;
+    }
   ) => TerminalTab;
+  /** Rebuild saved tabs for a session, reusing their pane ids. */
+  restoreTabs: (sessionId: SessionId, saved: SavedTab[]) => void;
   /** Close a tab. Closing the active one focuses its right-hand neighbour in
    *  the same session (else the left one). `remember: false` keeps it off the
    *  reopen stack (a pane handed to its own window isn't "closed"). */
@@ -119,6 +135,14 @@ interface TerminalsState {
 
 function genId() {
   return crypto.randomUUID();
+}
+
+// Whether a connection's new shells are persistent. Injected (see
+// terminalWorkspace.ts) because that depends on the connections store, which
+// itself imports this one.
+let persistDecider: (sessionId: SessionId) => boolean = () => false;
+export function setPersistDecider(fn: (sessionId: SessionId) => boolean): void {
+  persistDecider = fn;
 }
 
 // ---- Pure tree helpers ----
@@ -202,8 +226,37 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
       shell: opts?.shell,
       cwd: opts?.cwd,
     };
+    if (opts?.persist ?? (opts?.persistName ? true : persistDecider(sessionId))) {
+      tab.persist = true;
+      if (opts?.persistName) tab.persistNames = { [paneId]: opts.persistName };
+    }
     set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
     return tab;
+  },
+
+  restoreTabs: (sessionId, saved) => {
+    if (saved.length === 0) return;
+    const tabs: TerminalTab[] = saved.map((t) => ({
+      id: genId(),
+      sessionId,
+      title: t.title,
+      root: t.root,
+      activePaneId: t.activePaneId,
+      zoomedPaneId: null,
+      // No start command on restore: a persistent pane's shell is already
+      // where the user left it.
+      initialPaneId: "",
+      pinned: t.pinned,
+      locked: t.locked,
+      persist: t.persist,
+      persistNames: t.persistNames,
+      shell: t.shell,
+      cwd: t.cwd,
+    }));
+    set((s) => ({
+      tabs: pinnedFirst([...s.tabs, ...tabs], sessionId),
+      activeId: s.activeId ?? tabs[0].id,
+    }));
   },
 
   closeTab: (id, opts) => {
@@ -326,7 +379,9 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     const s = get();
     for (const t of s.tabs) {
       if (t.sessionId === sessionId)
-        for (const paneId of leafIds(t.root)) disposePane(paneId);
+        // Detach: the connection is closing. Persistent shells stay on the
+        // host for the next connect.
+        for (const paneId of leafIds(t.root)) disposePane(paneId, { detach: true });
     }
     const tabs = s.tabs.filter((t) => t.sessionId !== sessionId);
     const activeStillThere = tabs.some((t) => t.id === s.activeId);

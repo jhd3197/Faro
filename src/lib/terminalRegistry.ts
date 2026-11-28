@@ -144,12 +144,19 @@ export function getPane(paneId: string): PaneEntry | undefined {
  *  Idempotent: a second call with the same id returns the live instance. */
 export function acquirePane(
   paneId: string,
-  opts: { sessionId: SessionId; initialCommand?: string; shell?: string; cwd?: string }
+  opts: {
+    sessionId: SessionId;
+    initialCommand?: string;
+    shell?: string;
+    cwd?: string;
+    /** Run inside this tmux session on the host (persistent pane). */
+    persistName?: string;
+  }
 ): PaneEntry {
   const existing = panes.get(paneId);
   if (existing) return existing;
 
-  const { sessionId, initialCommand, shell, cwd } = opts;
+  const { sessionId, initialCommand, shell, cwd, persistName } = opts;
   const settings = useSettings.getState();
 
   const term = new XTerm({
@@ -355,6 +362,8 @@ export function acquirePane(
       const id = await ipc.openTerminal(sessionId, term.cols || 80, term.rows || 24, {
         shell,
         cwd,
+        persistName,
+        scrollback: settings.terminalScrollback,
       });
       entry.terminalId = id;
       for (const e of early ?? []) if (e.terminalId === id) term.write(e.data);
@@ -400,7 +409,7 @@ export function paneText(paneId: string): string | null {
 
 /** Fully tear down a pane (store-driven, on tab/pane close or disconnect).
  *  Closes the PTY unless it was handed off to a popout window. */
-export function disposePane(paneId: string): void {
+export function disposePane(paneId: string, opts?: { detach?: boolean }): void {
   const entry = panes.get(paneId);
   if (!entry) return;
   panes.delete(paneId);
@@ -412,7 +421,9 @@ export function disposePane(paneId: string): void {
   entry.unlistenData?.();
   entry.unlistenExit?.();
   if (entry.terminalId && !entry.handedOff) {
-    ipc.closeTerminal(entry.terminalId).catch(() => {});
+    // `detach`: the connection is going away, or the pane is being reopened.
+    // A persistent pane's shell keeps running on the host either way.
+    ipc.closeTerminal(entry.terminalId, !opts?.detach).catch(() => {});
   }
   entry.detach();
   entry.term.dispose();
@@ -422,6 +433,6 @@ export function disposePane(paneId: string): void {
 // orphan PTYs. The store re-acquires panes on the next render.
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    for (const id of [...panes.keys()]) disposePane(id);
+    for (const id of [...panes.keys()]) disposePane(id, { detach: true });
   });
 }

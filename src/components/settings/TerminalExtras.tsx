@@ -24,6 +24,8 @@ export function TerminalExtras() {
   const pasteImages = useSettings((s) => s.terminalPasteImages);
   const osc52 = useSettings((s) => s.terminalOsc52);
   const highlight = useSettings((s) => s.terminalHighlight);
+  const persist = useSettings((s) => s.terminalPersist);
+  const restore = useSettings((s) => s.terminalRestoreWorkspace);
 
   return (
     <>
@@ -57,6 +59,20 @@ export function TerminalExtras() {
           ]}
         />
       </Row>
+      <CheckRow
+        label="Restore terminal tabs"
+        keywords="workspace layout splits reopen restart remember tabs"
+        help="When a connection opens its terminal again, its tabs, splits, pins and locks come back."
+        checked={restore}
+        onChange={(v) => setSetting("terminalRestoreWorkspace", v)}
+      />
+      <CheckRow
+        label="Keep server shells running"
+        keywords="persistent sessions tmux survive disconnect restart reattach background"
+        help="Server shells run inside tmux on the server, so a dropped connection or closing Faro doesn't end them, and they are picked up when you reconnect. Needs tmux on the server; closing a tab still ends its shell. Each connection can choose differently from the terminal's + menu."
+        checked={persist === "on"}
+        onChange={(v) => setSetting("terminalPersist", v ? "on" : "off")}
+      />
       <CheckRow
         label="Paste images as a file path"
         keywords="screenshot image clipboard upload picture png"

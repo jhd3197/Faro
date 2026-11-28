@@ -22,6 +22,9 @@ import {
   Pin,
   PinOff,
   CopyPlus,
+  History,
+  RotateCw,
+  Check,
 } from "lucide-react";
 import {
   clearTerminal,
@@ -31,7 +34,18 @@ import {
 import { LOCAL_SESSION, type LocalShell, type SessionId } from "@/lib/types";
 import { localShells, openLocalTerminal } from "@/lib/localTerminal";
 import {
+  detachedSessions,
+  persistEnabled,
+  restoreWorkspace,
+  startWorkspaceSync,
+} from "@/lib/terminalWorkspace";
+import { persistNameFor } from "@/lib/terminalWorkspaceCore";
+import { ipc } from "@/lib/ipc";
+import { relTime } from "@/lib/format";
+import { setSetting } from "@/stores/settingsStore";
+import {
   acquirePane,
+  disposePane,
   getPane,
   terminalOptions,
   type PaneState,
@@ -140,12 +154,62 @@ export function TerminalDock({
         onClick: () => {},
       });
     }
-    for (const shell of shells) {
+    shells.forEach((shell, i) => {
       items.push({
         label: shell.name,
         icon: <Laptop size={12} />,
         onClick: () => void openLocalTerminal({ shell: shell.id }),
+        separatorAfter: !!sessionId && i === shells.length - 1,
       });
+    });
+    if (sessionId) {
+      // Persistent shells: the choice is per connection, and sessions left on
+      // the host by an earlier run can be picked up or ended from here.
+      const on = persistEnabled(sessionId);
+      const profileId = useConnections
+        .getState()
+        .sessions.find((x) => x.sessionId === sessionId)?.profileId;
+      const left = on ? await detachedSessions(sessionId) : [];
+      items.push({
+        label: "Keep shells running after disconnect",
+        icon: on ? <Check size={12} /> : <span className="inline-block w-3" />,
+        disabled: !profileId,
+        onClick: () => {
+          if (!profileId) return;
+          setSetting("terminalPersistOverrides", {
+            ...useSettings.getState().terminalPersistOverrides,
+            [profileId]: !on,
+          });
+          toast.info(
+            on ? "New shells here end with the connection" : "New shells here keep running",
+            on
+              ? "Shells already open are not changed."
+              : "They run inside tmux on the server and are picked up when you reconnect."
+          );
+        },
+        separatorAfter: left.length > 0,
+      });
+      for (const s of left) {
+        items.push({
+          label: s.lastActivity
+            ? `Attach shell left running (${relTime(s.lastActivity * 1000)} ago)`
+            : "Attach shell left running",
+          icon: <History size={12} />,
+          onClick: () => openTab(sessionId, undefined, { persistName: s.name }),
+        });
+      }
+      if (left.length > 0) {
+        items.push({
+          label: left.length === 1 ? "End that shell" : `End all ${left.length} left running`,
+          icon: <X size={12} />,
+          destructive: true,
+          onClick: () => {
+            void Promise.all(
+              left.map((s) => ipc.terminalPersistKill(sessionId, s.name).catch(() => {}))
+            ).then(() => toast.success(left.length === 1 ? "Shell ended" : `${left.length} shells ended`));
+          },
+        });
+      }
     }
     setMenu({ x: r.left, y: r.bottom + 4, items });
   };
@@ -388,10 +452,30 @@ export function TerminalDock({
 
   // Open a first shell when the dock is shown for a session that has none.
   useEffect(() => {
-    if (!visible || sessionTabs.length > 0) return;
-    if (sessionId) openTab(sessionId);
-    else void openLocalTerminal();
+    if (!visible) return;
+    let cancelled = false;
+    // The saved workspace first: this server's, and the local shells'. Then a
+    // fresh shell where there is still nothing: on a server shown for the
+    // first time, or whenever the strip is empty.
+    void (async () => {
+      const remote = sessionId ? await restoreWorkspace(sessionId) : "done";
+      await restoreWorkspace(LOCAL_SESSION);
+      if (cancelled) return;
+      const all = useTerminals.getState().tabs;
+      const empty = dockTabsOf(all, sessionId).length === 0;
+      if (sessionId) {
+        const hasOwn = all.some((t) => t.sessionId === sessionId);
+        if (!hasOwn && (remote === "first" || empty)) openTab(sessionId);
+      } else if (empty) {
+        void openLocalTerminal();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [visible, sessionId, sessionTabs.length, openTab]);
+
+  useEffect(() => startWorkspaceSync(), []);
 
   // While shown, keep the active tab pointed at one in the focused session.
   useEffect(() => {
@@ -771,6 +855,12 @@ function TerminalLeaf({
     error: null,
     exitCode: null,
   });
+  // Bumped to reopen an ended pane in place (same pane id, so a persistent
+  // pane reattaches to its shell on the host).
+  const [epoch, setEpoch] = useState(0);
+  const persistName = tab.persist
+    ? tab.persistNames?.[paneId] ?? persistNameFor(paneId)
+    : undefined;
 
   const fontSize = useSettings((s) => s.terminalFontSize);
   const fontFamily = useSettings((s) => s.terminalFontFamily);
@@ -804,6 +894,7 @@ function TerminalLeaf({
       initialCommand,
       shell: tab.shell,
       cwd: tab.cwd,
+      persistName,
     });
     if (host) entry.attach(host);
     const unsub = entry.subscribe(setState);
@@ -812,7 +903,7 @@ function TerminalLeaf({
       unsub();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paneId]);
+  }, [paneId, epoch]);
 
   // Refit whenever the host resizes (splits, ratio drags, zoom, dock show).
   useEffect(() => {
@@ -890,6 +981,20 @@ function TerminalLeaf({
         <div className="pointer-events-none absolute left-2 top-2 rounded bg-bg-panel/70 px-1.5 py-0.5 text-[10px] text-text-dim">
           opening…
         </div>
+      )}
+      {state.status === "exited" && (
+        <button
+          data-term-restart
+          onClick={() => {
+            // Detach, never end: a persistent shell may still be running.
+            disposePane(paneId, { detach: true });
+            setEpoch((e) => e + 1);
+          }}
+          className="absolute bottom-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-md border border-border bg-bg-panel px-2.5 py-1 text-xs text-text shadow-sm hover:bg-bg-hover"
+        >
+          <RotateCw size={12} />
+          {persistName ? "Reattach" : "Restart shell"}
+        </button>
       )}
       {state.error && (
         <div className="border-t border-border bg-danger-soft px-3 py-1 text-xs text-danger">
