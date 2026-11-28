@@ -144,7 +144,10 @@ impl RemoteFs for SftpFs {
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let sftp_cell = self.session.ensure_sftp().await?;
         let sftp = sftp_cell.lock().await;
-        let attrs = FileAttributes { permissions: Some(mode), ..Default::default() };
+        // `empty()`, not `default()`: the library's default carries size 0,
+        // owner 0 and epoch times, which a server applies along with the mode
+        // (emptying the file) before failing on the owner change.
+        let attrs = FileAttributes { permissions: Some(mode), ..FileAttributes::empty() };
         sftp.set_metadata(path, attrs)
             .await
             .with_context(|| format!("sftp chmod {path}"))?;
@@ -167,3 +170,47 @@ impl RemoteFs for SftpFs {
 #[cfg(all(test, unix))]
 #[path = "sftp_links.rs"]
 mod sftp_links;
+
+/// Against a real SSH host: `FARO_LIVE_SFTP=host:port:user:pass cargo test -p
+/// faro --lib remotefs::sftp::live_tests -- --ignored --nocapture`.
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::session::Session;
+
+    /// Changing permissions must change the mode and nothing else. A
+    /// "set attributes" request that also carries a size, owner or times
+    /// empties the file and resets its date.
+    #[tokio::test]
+    #[ignore]
+    async fn chmod_changes_the_mode_and_nothing_else() {
+        let session = crate::transfer::live_tests::sftp_session()
+            .await
+            .expect("FARO_LIVE_SFTP");
+        let Session::Ssh(ssh) = &*session else {
+            unreachable!()
+        };
+        let path = format!("/tmp/faro-chmod-test-{:08x}", rand::random::<u32>());
+        let made = ssh
+            .exec(&format!(
+                "printf 'keep these bytes' > {path} && chmod 644 {path} && touch -d '2024-05-06 07:08:09' {path}"
+            ))
+            .await
+            .unwrap();
+        assert_eq!(made.exit_code, Some(0), "{}", made.stderr);
+
+        let result = SftpFs::new(ssh.clone()).chmod(&path, 0o600).await;
+
+        let after = ssh
+            .exec(&format!("stat -c '%a %s %Y' {path}; cat {path}; rm -f {path}"))
+            .await
+            .unwrap();
+        let mut lines = after.stdout.lines();
+        let stat = lines.next().unwrap_or_default().to_string();
+        let body = lines.next().unwrap_or_default().to_string();
+        assert!(result.is_ok(), "chmod failed: {result:?} (file is now: {stat:?})");
+        assert!(stat.starts_with("600 16 "), "mode changed, size kept: {stat:?}");
+        assert!(!stat.ends_with(" 0"), "the date was not reset: {stat:?}");
+        assert_eq!(body, "keep these bytes");
+    }
+}
