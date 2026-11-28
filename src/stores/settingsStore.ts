@@ -227,6 +227,18 @@ interface SettingsState {
    *  machine's default). */
   terminalLocalShell: string;
 
+  // Plan 37
+  /** How times are shown everywhere: follow the UI language, or force one. */
+  timeFormat: "auto" | "12h" | "24h";
+  /** Start each pane where it was last time on that connection. */
+  reopenLastFolder: boolean;
+  /** "Edit" opens Faro's own editor, or the external one. */
+  editorOpenWith: "builtin" | "external";
+  /** The built-in editor saves by itself a moment after typing stops. */
+  editorAutoSave: boolean;
+  /** Send a folder of many small files over SSH as one tar stream. */
+  transferTarFolders: "auto" | "off";
+
   // Connections
   defaultPort: number;
   /** Keep saved connection passwords in the OS keychain instead of profiles.json. */
@@ -402,6 +414,11 @@ const DEFAULTS: Persisted = {
   terminalPersistOverrides: {},
   terminalRestoreWorkspace: true,
   terminalLocalShell: "",
+  timeFormat: "auto",
+  reopenLastFolder: true,
+  editorOpenWith: "builtin",
+  editorAutoSave: false,
+  transferTarFolders: "auto",
   defaultPort: 22,
   storePasswordsInKeychain: false,
   restoreLastSession: true,
@@ -677,6 +694,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
 export function setSetting<K extends keyof Persisted>(key: K, value: Persisted[K]) {
   useSettings.setState({ [key]: value } as Partial<SettingsState>);
   persistKey(key, value);
+}
+
+/** Set a setting through its own setter when it has one (`setThemeMode`,
+ *  `setTransferConcurrency`, …), so side effects still happen, and plainly
+ *  otherwise. For code that only knows a setting by its key: the Changed
+ *  view and the command palette. */
+export function applySetting<K extends keyof Persisted>(key: K, value: Persisted[K]): void | Promise<void> {
+  const name = `set${String(key)[0].toUpperCase()}${String(key).slice(1)}`;
+  const setter = (useSettings.getState() as unknown as Record<string, unknown>)[name];
+  if (typeof setter === "function") {
+    return (setter as (v: Persisted[K]) => void | Promise<void>)(value);
+  }
+  setSetting(key, value);
 }
 
 /** Reload settings from faro.db and merge them into the live store. Used by

@@ -98,7 +98,7 @@ export function CommandPalette() {
       const seen = new Set(rec.map((c) => c.id));
       const servers = live.filter((c) => c.id.startsWith("connect:") && !seen.has(c.id));
       servers.forEach((c) => seen.add(c.id));
-      const rest = live.filter((c) => !seen.has(c.id));
+      const rest = live.filter((c) => !seen.has(c.id) && !c.searchOnly);
       return [
         { label: "Recent", rows: rec.map(asRow) },
         { label: "Servers", rows: servers.map(asRow) },

@@ -17,6 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { Check, Info, Loader2, Minus } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { looseMatch } from "@/lib/settingsRegistry";
 
 // ---------------------------------------------------------------------------
 // Search
@@ -46,7 +47,7 @@ export function useSettingsSearch() {
 function useRowMatch(...texts: (string | undefined)[]): { show: boolean; hit: boolean } {
   const { query, sectionMatched } = useContext(SearchCtx);
   if (!query) return { show: true, hit: false };
-  const hit = texts.some((t) => t && t.toLowerCase().includes(query));
+  const hit = texts.some((t) => t && looseMatch(t, query));
   return { show: hit || sectionMatched, hit };
 }
 

@@ -62,7 +62,9 @@ interface LayoutState {
   // Where Settings should land. Set by openSettings; cleared by a generic
   // open (the gear, Preferences, "Open Settings") so those stay on Appearance.
   settingsTarget: SettingsTarget | null;
-  openSettings: (target: SettingsSectionId | string | { section: string; focus?: string }) => void;
+  openSettings: (
+    target: SettingsSectionId | string | { section: string; focus?: string; query?: string }
+  ) => void;
 
   // Prefill for the New Connection editor, set by a faro:// deep link so the
   // editor opens pointed at the right server (never auto-connecting). Cleared

@@ -27,6 +27,7 @@ import {
   ClipboardCopy,
   Save,
   RadioTower,
+  ToggleLeft,
   Lock,
   Pin,
   CopyPlus,
@@ -67,6 +68,8 @@ import { LOCAL_SESSION } from "@/lib/types";
 import { useServerView } from "@/stores/serverViewStore";
 import { TERMINAL_CHORDS, termTabCommandId } from "@/lib/terminalChords";
 import { SETTINGS_SECTIONS, settingsCommandId } from "@/lib/settingsNav";
+import { SETTINGS_REGISTRY } from "@/lib/settingsRegistry";
+import { SETTINGS_DEFAULTS, applySetting, type PersistedSettings } from "@/stores/settingsStore";
 import { COMMAND_COMBOS } from "@/lib/bindingCatalog";
 import { useFocusedItem } from "@/stores/focusStore";
 import { toast } from "@/stores/toastStore";
@@ -81,6 +84,9 @@ export interface Command {
   enabled?: boolean; // default true
   /** Listed in Settings › Keyboard even without a default combo. */
   bindable?: boolean;
+  /** Only offered once something is typed (one entry per setting would
+   *  otherwise bury the list an empty palette shows). */
+  searchOnly?: boolean;
   run: () => void;
 }
 
@@ -108,6 +114,7 @@ export function useCommands(): Command[] {
   const openSkills = useSkills((s) => s.openPanel);
   const snippets = useSnippets((s) => s.snippets);
 
+  const settingValues = useSettings() as unknown as Record<string, unknown>;
   const appTheme = useSettings((s) => s.appTheme);
   const setAppTheme = useSettings((s) => s.setAppTheme);
   const uiZoom = useSettings((s) => s.uiZoom);
@@ -377,6 +384,36 @@ export function useCommands(): Command[] {
       run: () => setUiZoom(100),
     },
   ];
+
+  // Every setting is reachable by name: an on/off setting flips right here,
+  // anything else opens Settings searching for it.
+  for (const entry of SETTINGS_REGISTRY) {
+    if (!(entry.key in SETTINGS_DEFAULTS)) continue;
+    const section = SETTINGS_SECTIONS.find((s) => s.id === entry.section)?.label ?? "";
+    const keywords = `setting settings preference option ${section} ${entry.keywords ?? ""}`;
+    if (entry.kind === "toggle") {
+      const on = !!settingValues[entry.key];
+      cmds.push({
+        id: `setting:${entry.key}`,
+        title: `${entry.label}: turn ${on ? "off" : "on"}`,
+        group: "Settings",
+        icon: <ToggleLeft size={14} />,
+        keywords: `${keywords} toggle enable disable`,
+        searchOnly: true,
+        run: () => void applySetting(entry.key as keyof PersistedSettings, !on as never),
+      });
+    } else {
+      cmds.push({
+        id: `setting:${entry.key}`,
+        title: `Setting: ${entry.label}`,
+        group: "Settings",
+        icon: <SettingsIcon size={14} />,
+        keywords,
+        searchOnly: true,
+        run: () => openSettings({ section: entry.section, query: entry.label }),
+      });
+    }
+  }
 
   // Terminal split controls — only while a terminal is on screen. They act on
   // the active tab's active pane; the chords are swallowed by xterm (see

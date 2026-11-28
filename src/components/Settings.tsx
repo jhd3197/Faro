@@ -44,6 +44,8 @@ import { Dropdown } from "./ui/Dropdown";
 import { AboutSettings } from "./AboutSettings";
 import { PasswordManagerSettings } from "./PasswordManagerSettings";
 import { TerminalExtras } from "./settings/TerminalExtras";
+import { ChangedSettings } from "./settings/ChangedSettings";
+import { INTERNAL_SETTINGS, SETTINGS_REGISTRY, looseMatch } from "@/lib/settingsRegistry";
 import { useLayout } from "@/stores/layoutStore";
 import { useSession } from "@/stores/sessionStore";
 import {
@@ -145,6 +147,17 @@ function useChangedSections(): Set<SettingsSectionId> {
   return out;
 }
 
+/** How many registered settings differ from their default. */
+function useChangedCount(): number {
+  const s = useSettings() as unknown as Record<string, unknown>;
+  let n = 0;
+  for (const e of SETTINGS_REGISTRY) {
+    if (INTERNAL_SETTINGS.includes(e.key) || !(e.key in SETTINGS_DEFAULTS)) continue;
+    if (isChangedSetting(e.key as keyof PersistedSettings, s[e.key])) n++;
+  }
+  return n;
+}
+
 const SECTIONS = SETTINGS_SECTIONS;
 
 /** The section shown last time Settings was open (Appearance on first use). */
@@ -239,7 +252,14 @@ export function Settings({ onClose }: Props) {
 
   // --- Search: filters every section at once; the nav keeps only sections
   // with a hit (read back from the rendered rows).
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => useLayout.getState().settingsTarget?.query ?? "");
+  // A setting picked in the command palette opens Settings searching for it.
+  useEffect(() => {
+    if (target?.query) setQuery(target.query);
+  }, [target]);
+  // The "Changed" page: every setting that differs from its default.
+  const [showChanged, setShowChanged] = useState(false);
+  const changedCount = useChangedCount();
   const q = query.trim().toLowerCase();
   const searching = q.length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
@@ -293,6 +313,7 @@ export function Settings({ onClose }: Props) {
         ?.scrollIntoView({ block: "start" });
       return;
     }
+    setShowChanged(false);
     setActive(id);
     contentRef.current?.scrollTo({ top: 0 });
   };
@@ -848,6 +869,29 @@ export function Settings({ onClose }: Props) {
             onKeyDown={onNavKeyDown}
             className="flex w-44 shrink-0 flex-col overflow-y-auto border-r border-border py-2"
           >
+            {!searching && (
+              <button
+                type="button"
+                data-settings-changed-view
+                onClick={() => {
+                  setShowChanged(true);
+                  contentRef.current?.scrollTo({ top: 0 });
+                }}
+                aria-current={showChanged ? "page" : undefined}
+                title="Every setting that differs from its default"
+                className={cn(
+                  "mx-1 mb-1 flex h-6 items-center rounded-sm px-3 text-left text-sm",
+                  showChanged ? "bg-bg-hover text-text" : "text-text-muted hover:bg-bg-hover/50 hover:text-text"
+                )}
+              >
+                <span className="truncate">Changed</span>
+                {changedCount > 0 && (
+                  <span data-settings-changed-count className="ml-auto text-xs tabular-nums text-text-dim">
+                    {changedCount}
+                  </span>
+                )}
+              </button>
+            )}
             {SETTINGS_GROUPS.map((g) => {
               const items = SECTIONS.filter((sec) => sec.group === g.id && (!searching || hits.has(sec.id)));
               if (!items.length) return null;
@@ -855,7 +899,7 @@ export function Settings({ onClose }: Props) {
                 <div key={g.id} className="mb-2">
                   <div className="px-4 pb-1 pt-1.5 text-xs text-text-dim">{g.label}</div>
                   {items.map((sec) => {
-                    const on = !searching && active === sec.id;
+                    const on = !searching && !showChanged && active === sec.id;
                     const isChanged = changed.has(sec.id);
                     return (
                       <button
@@ -918,6 +962,18 @@ export function Settings({ onClose }: Props) {
                   <p className="pt-2 text-sm text-text-muted">No settings match “{query.trim()}”.</p>
                 )}
               </div>
+            ) : showChanged ? (
+              <div className="max-w-[48rem] px-7 pb-8 pt-4">
+                <h2 className="sr-only">Changed settings</h2>
+                <ChangedSettings
+                  isChanged={isChangedSetting}
+                  onOpenSection={(section, label) => {
+                    setShowChanged(false);
+                    setActive(section);
+                    setQuery(label);
+                  }}
+                />
+              </div>
             ) : (
               <div className="max-w-[48rem] px-7 pb-8 pt-4">
                 {/* The nav already names the page; the heading is for screen readers. */}
@@ -953,7 +1009,7 @@ const SECTION_HELP: Partial<Record<SettingsSectionId, string>> = {
 };
 
 function sectionMatches(sec: { label: string; keywords: string }, q: string): boolean {
-  return sec.label.toLowerCase().includes(q) || sec.keywords.toLowerCase().includes(q);
+  return looseMatch(sec.label, q) || looseMatch(sec.keywords, q);
 }
 
 /** A small icon button that puts a setting back to its default. */
