@@ -1574,7 +1574,7 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "faro"
-version = "1.4.21"
+version = "1.4.23"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1644,7 +1644,7 @@ dependencies = [
 
 [[package]]
 name = "faro-agent-proto"
-version = "1.4.21"
+version = "1.4.23"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "faro-agentd"
-version = "1.4.21"
+version = "1.4.23"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1679,7 +1679,7 @@ dependencies = [
 
 [[package]]
 name = "faro-cli"
-version = "1.4.21"
+version = "1.4.23"
 dependencies = [
  "anyhow",
  "async-trait",
