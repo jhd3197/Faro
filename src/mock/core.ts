@@ -213,6 +213,10 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       // Test hooks (Plan 12 Phase 3): sentinel ids reject like a migrated
       // command — a structured {kind, message} error, exactly as Tauri delivers
       // one. Drives scripts/verify-errors.mjs.
+      // A host named for the failure, so quick connect (which mints its own
+      // profile id) can be driven into it too.
+      if (data.profiles.find((p) => p.id === a.profileId)?.host === "auth-fail.test")
+        throw { kind: "auth", message: "Authentication failed: no key was accepted" };
       if (a.profileId === "__auth_fail__")
         throw { kind: "auth", message: "Authentication failed for user demo" };
       if (a.profileId === "__net_fail__")
@@ -327,6 +331,11 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       emit("terminal://data", { terminalId: a.terminalId, data: out });
       return null;
     }
+    case "terminal_paste_image":
+      terminalCalls.push({ cmd, args: { ...a, data: `${String(a.data).length} chars` } });
+      return a.sessionId === "local"
+        ? "C:\\Users\\demo\\AppData\\Local\\Temp\\faro-pastes\\paste 1.png"
+        : `/home/deploy/.cache/faro/pastes/paste-1.${a.ext}`;
     case "write_text_file":
       return null;
     case "list_local_shells":

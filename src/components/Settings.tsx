@@ -107,6 +107,7 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "terminalCursorStyle",
     "terminalCursorBlink",
     "terminalLineHeight",
+    "terminalPasteImages",
     "terminalPlainPaste",
     "terminalOsc52",
     "terminalHighlight",

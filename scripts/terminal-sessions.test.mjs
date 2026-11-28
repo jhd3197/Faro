@@ -87,6 +87,38 @@ test("broadcast copies typing but never the terminal's own replies", () => {
   }
 });
 
+const paste = await load("src/lib/terminalPaste.ts");
+const qc = await load("src/lib/quickConnect.ts");
+
+test("a pasted image's path is quoted for the shell it lands in", () => {
+  assert.equal(paste.quotePastePath("/home/me/.cache/faro/pastes/paste-1.png"), "/home/me/.cache/faro/pastes/paste-1.png");
+  assert.equal(paste.quotePastePath("/home/me/my pics/a'b.png"), `'/home/me/my pics/a'\\''b.png'`);
+  assert.equal(paste.quotePastePath("C:\\Temp\\faro-pastes\\p.png"), "C:\\Temp\\faro-pastes\\p.png");
+  assert.equal(paste.quotePastePath("C:\\Users\\Jo Doe\\p.png"), `"C:\\Users\\Jo Doe\\p.png"`);
+  assert.equal(paste.imageExt("image/jpeg"), "jpg");
+  assert.equal(paste.imageExt("image/svg+xml"), "svg");
+  assert.equal(paste.imageExt(""), "png");
+});
+
+test("quick connect parses addresses and nothing else", () => {
+  const p = qc.parseQuickConnect;
+  assert.deepEqual(p("deploy@web1.example.com"), { username: "deploy", host: "web1.example.com", port: 22 });
+  assert.deepEqual(p("  root@10.0.0.5:2222 "), { username: "root", host: "10.0.0.5", port: 2222 });
+  assert.deepEqual(p("ssh deploy@web1 -p 2200"), { username: "deploy", host: "web1", port: 2200 });
+  assert.deepEqual(p("ssh -p2200 deploy@web1"), { username: "deploy", host: "web1", port: 2200 });
+  assert.deepEqual(p("sftp://me@files.example.com:2022/var/www"), { username: "me", host: "files.example.com", port: 2022 });
+  assert.deepEqual(p("me@[2001:db8::1]:2222"), { username: "me", host: "2001:db8::1", port: 2222 });
+  for (const no of ["", "toggle terminal", "web1.example.com", "me@", "@host", "me@host:99999", "me@host:abc", "ssh -i key me@host", "me@ho st", "a b@host", "mail me@example.com now"]) {
+    assert.equal(p(no), null, JSON.stringify(no));
+  }
+  assert.equal(qc.quickTargetLabel({ username: "a", host: "h", port: 22 }), "a@h");
+  assert.equal(qc.quickTargetLabel({ username: "a", host: "h", port: 2222 }), "a@h:2222");
+  const saved = [{ id: "1", protocol: "sftp", host: "Web1.example.com", port: 22, username: "deploy" }, { id: "2", protocol: "ftp", host: "web1.example.com", port: 22, username: "deploy" }];
+  assert.equal(qc.findSavedTarget(saved, { username: "deploy", host: "web1.example.com", port: 22 })?.id, "1");
+  assert.equal(qc.findSavedTarget(saved, { username: "root", host: "web1.example.com", port: 22 }), undefined);
+  assert.deepEqual(qc.quickProfile({ username: "a", host: "h", port: 22 }, "x").auth, { kind: "agent" });
+});
+
 const CHROME = [
   process.env.CHROME_PATH,
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -335,6 +367,166 @@ test("terminal sessions in the app", { timeout: 300_000, skip: !CHROME && "no Ch
         return writes;
       });
       assert.deepEqual(result, ["from the server"]);
+    });
+
+    await t.test("a locked tab survives close, middle-click and close all", async () => {
+      await reset();
+      await demo(() => {
+        const { useTerminals, useConnections } = window.__demo;
+        const sid = useConnections.getState().activeSessionId;
+        useTerminals.getState().openTab(sid);
+        useTerminals.getState().openTab(sid);
+        const first = useTerminals.getState().tabs[0];
+        useTerminals.getState().toggleLock(first.id);
+      });
+      await page.waitForSelector("[data-term-tab-lock]");
+      const kept = await demo(() => {
+        const t = window.__demo.useTerminals.getState();
+        const closedSingle = t.closeTab(t.tabs[0].id);
+        const keptCount = t.closeTabs(t.tabs.map((x) => x.id));
+        return { closedSingle, keptCount, left: window.__demo.useTerminals.getState().tabs.map((x) => x.title) };
+      });
+      assert.deepEqual(kept, { closedSingle: false, keptCount: 1, left: ["Shell 1"] });
+      // Middle-click on the locked chip leaves it open.
+      const chip = await page.$(`${STRIP} [data-term-tab-id]`);
+      const box = await chip.boundingBox();
+      await page.mouse.move(box.x + 12, box.y + box.height / 2);
+      await page.mouse.down({ button: "middle" });
+      await page.mouse.up({ button: "middle" });
+      await sleep(200);
+      assert.deepEqual(await titles(), ["Shell 1"]);
+      // Clicking the lock unlocks; then it closes like any tab.
+      await page.click("[data-term-tab-lock]");
+      await sleep(150);
+      assert.equal(await demo(() => !!window.__demo.useTerminals.getState().tabs[0].locked), false);
+    });
+
+    await t.test("pinned tabs sort first and stay first through a move", async () => {
+      await reset();
+      const order = await demo(() => {
+        const { useTerminals, useConnections } = window.__demo;
+        const sid = useConnections.getState().activeSessionId;
+        const names = () => useTerminals.getState().tabs.filter((x) => x.sessionId === sid).map((x) => x.title);
+        useTerminals.getState().openTab(sid);
+        useTerminals.getState().openTab(sid);
+        const third = useTerminals.getState().tabs.find((x) => x.title === "Shell 3");
+        useTerminals.getState().togglePin(third.id);
+        const afterPin = names();
+        const first = useTerminals.getState().tabs.find((x) => x.title === "Shell 1");
+        useTerminals.getState().moveTab(first.id, 0);
+        const afterMove = names();
+        useTerminals.getState().togglePin(third.id);
+        return { afterPin, afterMove, afterUnpin: names() };
+      });
+      assert.deepEqual(order.afterPin, ["Shell 3", "Shell 1", "Shell 2"]);
+      assert.deepEqual(order.afterMove, ["Shell 3", "Shell 1", "Shell 2"], "an unpinned tab can't jump the pinned one");
+      assert.deepEqual(order.afterUnpin, ["Shell 3", "Shell 1", "Shell 2"]);
+    });
+
+    await t.test("duplicate opens a tab on the same connection, next to the original", async () => {
+      await reset();
+      const out = await demo(() => {
+        const { useTerminals, useConnections } = window.__demo;
+        const sid = useConnections.getState().activeSessionId;
+        useTerminals.getState().openTab(sid);
+        const first = useTerminals.getState().tabs.find((x) => x.title === "Shell 1");
+        const copy = useTerminals.getState().duplicateTab(first.id);
+        return {
+          titles: useTerminals.getState().tabs.filter((x) => x.sessionId === sid).map((x) => x.title),
+          sameSession: copy.sessionId === first.sessionId,
+          newPane: copy.activePaneId !== first.activePaneId,
+        };
+      });
+      assert.deepEqual(out, { titles: ["Shell 1", "Shell 1 copy", "Shell 2"], sameSession: true, newPane: true });
+    });
+
+    await t.test("pasting an image uploads it and types its path; text still pastes as text", async () => {
+      await reset();
+      const result = await demo(async () => {
+        const s = window.__demo.useTerminals.getState();
+        const tab = s.tabs.find((x) => x.id === s.activeId);
+        const el = window.__demo.terminal.getPane(tab.activePaneId).element;
+        const target = el.querySelector("textarea");
+        const fire = (dt) => {
+          const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+          target.dispatchEvent(ev);
+          return ev.defaultPrevented;
+        };
+        const image = new DataTransfer();
+        image.items.add(new File([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], "shot.png", { type: "image/png" }));
+        const imagePrevented = fire(image);
+        await new Promise((r) => setTimeout(r, 300));
+        const both = new DataTransfer();
+        both.items.add(new File([new Uint8Array([1])], "x.png", { type: "image/png" }));
+        both.setData("text/plain", "cell text");
+        const bothPrevented = fire(both);
+        await new Promise((r) => setTimeout(r, 200));
+        window.__demo.useSettings.setState({ terminalPasteImages: false });
+        const off = new DataTransfer();
+        off.items.add(new File([new Uint8Array([1])], "y.png", { type: "image/png" }));
+        const offPrevented = fire(off);
+        window.__demo.useSettings.setState({ terminalPasteImages: true });
+        await new Promise((r) => setTimeout(r, 200));
+        const calls = window.__demo.terminalCalls;
+        return {
+          imagePrevented,
+          bothPrevented,
+          offPrevented,
+          uploads: calls.filter((c) => c.cmd === "terminal_paste_image").map((c) => [c.args.ext, c.args.data]),
+          typed: calls.filter((c) => c.cmd === "terminal_write").map((c) => c.args.data),
+        };
+      });
+      assert.equal(result.imagePrevented, true, "the image paste is handled here");
+      assert.equal(result.bothPrevented, false, "text on the clipboard wins");
+      assert.equal(result.offPrevented, false, "off: left to the terminal");
+      assert.deepEqual(result.uploads, [["png", "12 chars"]], "one upload, the 7 bytes as base64");
+      assert.ok(result.typed.includes("/home/deploy/.cache/faro/pastes/paste-1.png "), JSON.stringify(result.typed));
+    });
+
+    const palette = async (text) => {
+      await demo(() => window.__demo.useLayout.getState().setPaletteOpen(true));
+      const input = await page.waitForSelector('input[placeholder^="Type a command"]');
+      await input.click();
+      await page.keyboard.type(text);
+      await sleep(250);
+    };
+
+    await t.test("quick connect: an address in the palette connects and saves the host", async () => {
+      const before = await demo(() => window.__demo.useConnections.getState().profiles.length);
+      await palette("newuser@fresh.example.com:2200");
+      const first = await page.$eval('[data-idx="0"]', (e) => e.textContent);
+      assert.match(first, /Connect to newuser@fresh\.example\.com:2200/);
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        (n) => window.__demo.useConnections.getState().profiles.length === n + 1,
+        { timeout: 10_000 },
+        before
+      );
+      const saved = await demo(() => {
+        const c = window.__demo.useConnections.getState();
+        const p = c.profiles.find((x) => x.host === "fresh.example.com");
+        return { p, connected: c.sessions.some((s) => s.profileId === p.id) };
+      });
+      assert.equal(saved.p.username, "newuser");
+      assert.equal(saved.p.port, 2200);
+      assert.deepEqual(saved.p.auth, { kind: "agent" });
+      assert.equal(saved.connected, true);
+    });
+
+    await t.test("quick connect: a host that refuses sign-in is not kept, and the editor opens", async () => {
+      const before = await demo(() => window.__demo.useConnections.getState().profiles.length);
+      await palette("someone@auth-fail.test");
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => !!window.__demo.useLayout.getState().connectionPrefill, { timeout: 10_000 });
+      const after = await demo(() => ({
+        count: window.__demo.useConnections.getState().profiles.length,
+        prefill: window.__demo.useLayout.getState().connectionPrefill,
+      }));
+      assert.equal(after.count, before, "nothing left behind");
+      assert.equal(after.prefill.host, "auth-fail.test");
+      assert.equal(after.prefill.username, "someone");
+      assert.equal(after.prefill.auth.kind, "password");
+      await demo(() => window.__demo.useLayout.getState().closeDialog?.());
     });
 
     assert.deepEqual(errors, [], "no page errors");

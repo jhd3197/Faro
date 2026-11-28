@@ -207,6 +207,8 @@ interface SettingsState {
   terminalCursorBlink: boolean;
   /** Line height as a multiple of the font size (1 = tight). */
   terminalLineHeight: number;
+  /** Pasting a clipboard image uploads it and types its path. */
+  terminalPasteImages: boolean;
   /** Paste without bracketed-paste markers. */
   terminalPlainPaste: boolean;
   /** Let programs on the host set the local clipboard (OSC 52). */
@@ -384,6 +386,7 @@ const DEFAULTS: Persisted = {
   terminalCursorStyle: "block",
   terminalCursorBlink: true,
   terminalLineHeight: 1,
+  terminalPasteImages: true,
   terminalPlainPaste: false,
   terminalOsc52: true,
   terminalHighlight: true,

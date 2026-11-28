@@ -69,6 +69,7 @@ pub mod sync;
 mod logfollow;
 mod stream_exec;
 mod sysmon;
+mod term_paste;
 mod terminal;
 mod tls_trust;
 mod transfer;
@@ -690,6 +691,7 @@ pub fn run() {
             commands::open_terminal,
             commands::list_local_shells,
             commands::write_text_file,
+            commands::terminal_paste_image,
             commands::terminal_write,
             commands::terminal_resize,
             commands::close_terminal,

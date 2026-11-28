@@ -8,6 +8,8 @@ import { type Command } from "@/lib/commands";
 import { useResolvedCommands } from "@/lib/keybindings";
 import { useDialog } from "@/hooks/useDialog";
 import { matchCommand } from "@/lib/paletteMatch";
+import { parseQuickConnect, quickTargetLabel } from "@/lib/quickConnect";
+import { runQuickConnect } from "@/lib/quickConnectRun";
 import { searchRank } from "@/lib/serverSearch";
 import { formatCombo } from "@/lib/shortcuts";
 import { PROTOCOL_LABEL, type ConnectionProfile } from "@/lib/types";
@@ -104,13 +106,32 @@ export function CommandPalette() {
       ].filter((s) => s.rows.length > 0);
     }
 
+    // An address (`user@host`) offers to connect to it, ahead of any command.
+    const target = parseQuickConnect(q);
+    const quick: Row[] = target
+      ? [
+          {
+            kind: "cmd",
+            c: {
+              id: "quick-connect",
+              title: `Connect to ${quickTargetLabel(target)}`,
+              group: "Connection",
+              icon: <Plug size={14} />,
+              run: () => void runQuickConnect(target),
+            },
+            ranges: [],
+            keywordHits: [],
+          },
+        ]
+      : [];
+
     const ranked: { row: Row; score: number }[] = [];
     for (const c of live) {
       const m = matchCommand(q, c.title, c.keywords);
       if (m) ranked.push({ row: { kind: "cmd", c, ranges: m.ranges, keywordHits: m.keywordHits }, score: m.score });
     }
     ranked.sort((a, b) => b.score - a.score);
-    if (ranked.length) return [{ rows: ranked.map((r) => r.row) }];
+    if (ranked.length || quick.length) return [{ rows: [...quick, ...ranked.map((r) => r.row)] }];
     return [
       {
         rows: [profiles.length ? { kind: "searchServers", q } : { kind: "newConnection" }],

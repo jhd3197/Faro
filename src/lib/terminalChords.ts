@@ -45,6 +45,9 @@ const CHORD_COMMAND_DEFAULTS: Record<string, string | undefined> = {
   "term-copy-output": undefined,
   "term-save-output": undefined,
   "term-broadcast": undefined,
+  "term-lock-tab": undefined,
+  "term-pin-tab": undefined,
+  "term-duplicate-tab": undefined,
   "term-tab-move-left": undefined,
   "term-tab-move-right": undefined,
   ...Object.fromEntries(

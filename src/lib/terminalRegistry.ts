@@ -20,6 +20,15 @@ import { registerTerminalPane } from "./termInput";
 import { isTerminalChord } from "./terminalChords";
 import { attachHighlighter, isDarkHex } from "./terminalHighlight";
 import { broadcastTargets, isTerminalReply } from "./terminalBroadcast";
+import {
+  MAX_PASTE_BYTES,
+  blobToBase64,
+  clipboardImage,
+  imageExt,
+  quotePastePath,
+} from "./terminalPaste";
+import { toastError } from "./errors";
+import { toast } from "@/stores/toastStore";
 import { useSettings, TERMINAL_THEMES, type PersistedSettings } from "@/stores/settingsStore";
 import { useConnections } from "@/stores/connectionsStore";
 import type { SessionId } from "./types";
@@ -256,7 +265,36 @@ export function acquirePane(
 
   // Plain paste: skip xterm's bracketed-paste markers for programs that
   // mangle them. Capture phase, so this runs before xterm's own handler.
+  // Image paste: save the image where the shell runs and type its path.
+  const pasteImage = async (file: File) => {
+    if (file.size > MAX_PASTE_BYTES) {
+      toast.warning(
+        "Image too large to paste",
+        `Pasted images can be at most ${MAX_PASTE_BYTES / (1024 * 1024)} MB.`
+      );
+      return;
+    }
+    try {
+      const path = await ipc.terminalPasteImage(
+        sessionId,
+        await blobToBase64(file),
+        imageExt(file.type)
+      );
+      send(quotePastePath(path) + " ");
+    } catch (e) {
+      toastError(e, "Couldn't paste the image");
+    }
+  };
   const onPaste = (e: ClipboardEvent) => {
+    if (useSettings.getState().terminalPasteImages) {
+      const image = clipboardImage(e.clipboardData);
+      if (image) {
+        e.preventDefault();
+        e.stopPropagation();
+        void pasteImage(image);
+        return;
+      }
+    }
     if (!useSettings.getState().terminalPlainPaste) return;
     const text = e.clipboardData?.getData("text/plain");
     if (!text) return;

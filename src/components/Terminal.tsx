@@ -17,6 +17,11 @@ import {
   ClipboardCopy,
   Save,
   RadioTower,
+  Lock,
+  LockOpen,
+  Pin,
+  PinOff,
+  CopyPlus,
 } from "lucide-react";
 import {
   clearTerminal,
@@ -77,6 +82,20 @@ export function TerminalDock({
   const splitActivePane = useTerminals((s) => s.splitActivePane);
   const toggleZoom = useTerminals((s) => s.toggleZoom);
   const toggleBroadcast = useTerminals((s) => s.toggleBroadcast);
+  const toggleLock = useTerminals((s) => s.toggleLock);
+  const togglePin = useTerminals((s) => s.togglePin);
+  const duplicateTab = useTerminals((s) => s.duplicateTab);
+
+  // A locked tab refuses to close and says why; bulk closes report how many
+  // locked tabs they left open.
+  const closeOne = (tab: TerminalTab) => {
+    if (!closeTab(tab.id)) toast.info("This tab is locked", "Unlock it to close it.");
+  };
+  const closeMany = (ids: string[], focus?: string) => {
+    const kept = closeTabs(ids, focus);
+    if (kept > 0) toast.info(`${kept} locked ${kept === 1 ? "tab" : "tabs"} kept open`);
+    return kept;
+  };
   const snippets = useSnippets((s) => s.snippets);
   const requestInsert = useSnippets((s) => s.requestInsert);
   const openSnippets = useSnippets((s) => s.openPanel);
@@ -153,7 +172,9 @@ export function TerminalDock({
           .sessions.find((x) => x.sessionId === tab.sessionId)?.profileId,
       });
       // Dispose won't close the handed-off PTY; the new window owns it now.
-      useTerminals.getState().closePane(tab.id, tab.activePaneId, { remember: false });
+      useTerminals
+        .getState()
+        .closePane(tab.id, tab.activePaneId, { remember: false, force: true });
     } catch (e) {
       if (entry && terminalId) {
         entry.setHandedOff(false);
@@ -218,33 +239,50 @@ export function TerminalDock({
         separatorAfter: true,
       },
       {
+        label: "Duplicate tab",
+        icon: <CopyPlus size={12} />,
+        onClick: () => duplicateTab(tab.id),
+      },
+      {
+        label: tab.pinned ? "Unpin tab" : "Pin tab",
+        icon: tab.pinned ? <PinOff size={12} /> : <Pin size={12} />,
+        onClick: () => togglePin(tab.id),
+      },
+      {
+        label: tab.locked ? "Unlock tab" : "Lock tab",
+        icon: tab.locked ? <LockOpen size={12} /> : <Lock size={12} />,
+        onClick: () => toggleLock(tab.id),
+        separatorAfter: true,
+      },
+      {
         label: "Close",
         icon: <X size={12} />,
         destructive: true,
-        onClick: () => closeTab(tab.id),
+        disabled: !!tab.locked,
+        onClick: () => closeOne(tab),
       },
       {
         label: "Close others",
         icon: <span className="inline-block w-3" />,
         destructive: true,
         disabled: others.length === 0,
-        onClick: () => closeTabs(others, tab.id),
+        onClick: () => closeMany(others, tab.id),
       },
       {
         label: "Close to the right",
         icon: <span className="inline-block w-3" />,
         destructive: true,
         disabled: toRight.length === 0,
-        onClick: () => closeTabs(toRight, tab.id),
+        onClick: () => closeMany(toRight, tab.id),
       },
       {
         label: "Close all",
         icon: <span className="inline-block w-3" />,
         destructive: true,
         onClick: () => {
-          closeTabs(sessionTabs.map((t) => t.id));
+          const kept = closeMany(sessionTabs.map((t) => t.id));
           // An empty dock would just open a fresh shell; hide it instead.
-          useLayout.getState().setTerminalOpen(false);
+          if (kept === 0) useLayout.getState().setTerminalOpen(false);
         },
       },
     ];
@@ -384,7 +422,8 @@ export function TerminalDock({
               dragging={tab.id === dragId}
               onPointerDown={(e) => onPointerDown(e, tab.id)}
               onClick={() => setActive(tab.id)}
-              onClose={() => closeTab(tab.id)}
+              onClose={() => closeOne(tab)}
+              onUnlock={() => toggleLock(tab.id)}
               onRename={(title) => renameTab(tab.id, title)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -498,6 +537,7 @@ function TabChip({
   onPointerDown,
   onClick,
   onClose,
+  onUnlock,
   onRename,
   onContextMenu,
 }: {
@@ -507,6 +547,7 @@ function TabChip({
   onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
   onClick: () => void;
   onClose: () => void;
+  onUnlock: () => void;
   onRename: (title: string) => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
@@ -540,6 +581,8 @@ function TabChip({
       data-term-tab-id={tab.id}
       data-active={active || undefined}
       data-dragging={dragging || undefined}
+      data-pinned={tab.pinned || undefined}
+      data-locked={tab.locked || undefined}
       onPointerDown={onPointerDown}
       // Middle-click closes: stop the autoscroll cursor on press, close on
       // release.
@@ -568,24 +611,45 @@ function TabChip({
         dragging && "cursor-grabbing bg-bg-hover opacity-80 shadow-sm ring-1 ring-inset ring-accent/60"
       )}
     >
-      {tab.sessionId === LOCAL_SESSION ? (
+      {tab.pinned ? (
+        <Pin size={11} className={cn("shrink-0", active && "text-accent")} />
+      ) : tab.sessionId === LOCAL_SESSION ? (
         <Laptop size={11} className={cn("shrink-0", active && "text-accent")} />
       ) : (
         <TerminalSquare size={11} className={cn("shrink-0", active && "text-accent")} />
       )}
-      <span className="max-w-[18rem] truncate">{tab.title}</span>
-      <span
-        role="button"
-        tabIndex={-1}
-        aria-label={`Close ${tab.title}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-text-dim opacity-0 hover:bg-bg-hover hover:text-text group-hover/tab:opacity-100"
-      >
-        <X size={10} />
+      <span className={cn("truncate", tab.pinned ? "max-w-[7rem]" : "max-w-[18rem]")}>
+        {tab.title}
       </span>
+      {tab.locked ? (
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={`Unlock ${tab.title}`}
+          title="Locked. Click to unlock."
+          data-term-tab-lock
+          onClick={(e) => {
+            e.stopPropagation();
+            onUnlock();
+          }}
+          className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+        >
+          <Lock size={10} />
+        </span>
+      ) : tab.pinned ? null : (
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={`Close ${tab.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-text-dim opacity-0 hover:bg-bg-hover hover:text-text group-hover/tab:opacity-100"
+        >
+          <X size={10} />
+        </span>
+      )}
     </button>
   );
 }

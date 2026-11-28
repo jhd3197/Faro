@@ -21,6 +21,7 @@ export function TerminalExtras() {
   const cursorBlink = useSettings((s) => s.terminalCursorBlink);
   const lineHeight = useSettings((s) => s.terminalLineHeight);
   const plainPaste = useSettings((s) => s.terminalPlainPaste);
+  const pasteImages = useSettings((s) => s.terminalPasteImages);
   const osc52 = useSettings((s) => s.terminalOsc52);
   const highlight = useSettings((s) => s.terminalHighlight);
 
@@ -56,6 +57,13 @@ export function TerminalExtras() {
           ]}
         />
       </Row>
+      <CheckRow
+        label="Paste images as a file path"
+        keywords="screenshot image clipboard upload picture png"
+        help="Pasting a screenshot uploads it to ~/.cache/faro/pastes on the server (or this computer's temp folder for a local shell) and types its path. Files are yours only and are removed after a day."
+        checked={pasteImages}
+        onChange={(v) => setSetting("terminalPasteImages", v)}
+      />
       <CheckRow
         label="Plain paste"
         keywords="bracketed paste markers raw"

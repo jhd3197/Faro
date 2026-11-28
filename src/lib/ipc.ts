@@ -421,6 +421,11 @@ export const ipc = {
       cwd: opts?.cwd ?? null,
     }),
 
+  /** Save a pasted image (base64) where the session's shell runs; returns
+   *  the path to type. */
+  terminalPasteImage: (sessionId: SessionId, data: string, ext: string) =>
+    invoke<string>("terminal_paste_image", { sessionId, data, ext }),
+
   /** Write text to a local path picked in a save dialog. */
   writeTextFile: (path: string, contents: string) =>
     invoke<void>("write_text_file", { path, contents }),

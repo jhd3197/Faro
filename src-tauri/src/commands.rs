@@ -950,6 +950,32 @@ pub async fn open_terminal(
         .map_err(err)
 }
 
+/// Save a pasted clipboard image where a terminal's shell runs and return its
+/// path, which the frontend types into the shell (Plan 36 Phase 3).
+#[tauri::command]
+pub async fn terminal_paste_image(
+    session_id: String,
+    data: String,
+    ext: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|e| format!("The pasted image couldn't be read: {e}"))?;
+    if session_id == LOCAL_SESSION {
+        return crate::term_paste::save_local(bytes, &ext).await.map_err(err);
+    }
+    let ssh = state
+        .sessions
+        .get_ssh(&session_id)
+        .await
+        .ok_or_else(|| "This connection has no shell".to_string())?;
+    crate::term_paste::save_remote(&ssh, bytes, &ext)
+        .await
+        .map_err(err)
+}
+
 /// Write text to a local file the user just picked in a save dialog (the
 /// terminal's "Save output to file").
 #[tauri::command]

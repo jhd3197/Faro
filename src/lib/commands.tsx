@@ -27,6 +27,9 @@ import {
   ClipboardCopy,
   Save,
   RadioTower,
+  Lock,
+  Pin,
+  CopyPlus,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -429,7 +432,12 @@ export function useCommands(): Command[] {
       enabled: terminalActive,
       run: () => {
         const tab = activeTab();
-        if (tab) useTerminals.getState().closePane(tab.id, tab.activePaneId);
+        if (!tab) return;
+        if (tab.locked && tab.root.kind === "leaf") {
+          toast.info("This tab is locked", "Unlock it to close it.");
+          return;
+        }
+        useTerminals.getState().closePane(tab.id, tab.activePaneId);
       },
     }
   );
@@ -566,6 +574,45 @@ export function useCommands(): Command[] {
       bindable: true,
       enabled: terminalActive,
       run: () => void saveTerminalOutput(),
+    },
+    {
+      id: "term-lock-tab",
+      title: "Terminal: Lock / unlock tab",
+      group: "Terminal",
+      icon: <Lock size={14} />,
+      keywords: "lock protect close accident tab",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => {
+        const tab = activeTab();
+        if (tab) useTerminals.getState().toggleLock(tab.id);
+      },
+    },
+    {
+      id: "term-pin-tab",
+      title: "Terminal: Pin / unpin tab",
+      group: "Terminal",
+      icon: <Pin size={14} />,
+      keywords: "pin keep first tab",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => {
+        const tab = activeTab();
+        if (tab) useTerminals.getState().togglePin(tab.id);
+      },
+    },
+    {
+      id: "term-duplicate-tab",
+      title: "Terminal: Duplicate tab",
+      group: "Terminal",
+      icon: <CopyPlus size={14} />,
+      keywords: "duplicate clone copy tab shell same server",
+      bindable: true,
+      enabled: terminalActive,
+      run: () => {
+        const tab = activeTab();
+        if (tab) useTerminals.getState().duplicateTab(tab.id);
+      },
     },
     {
       id: "term-broadcast",
