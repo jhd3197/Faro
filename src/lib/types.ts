@@ -1328,6 +1328,19 @@ export interface LocalShell {
   args: string[];
 }
 
+/** Identifies one version of a file (built-in editor, Plan 37 Phase 3). */
+export interface FileStamp {
+  size: number;
+  modified: number | null;
+  etag: string | null;
+}
+
+export interface EditorFile {
+  text: string;
+  /** Null when the backend can't tell versions apart. */
+  stamp: FileStamp | null;
+}
+
 /** One of Faro's tmux sessions on a host (Plan 36 Phase 4). */
 export interface PersistedSession {
   name: string;

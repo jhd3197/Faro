@@ -22,6 +22,7 @@ import { DualPaneBrowser } from "./components/DualPaneBrowser";
 import { FileBrowser } from "./components/FileBrowser";
 import { FileUiBridge } from "./components/FileUiBridge";
 import { TerminalDock } from "./components/Terminal";
+import { FileViewer } from "./components/editor/FileViewer";
 import { TransferQueue } from "./components/TransferQueue";
 import { ResizablePanel } from "./components/ResizablePanel";
 import { Settings } from "./components/Settings";
@@ -340,6 +341,7 @@ export default function App() {
           <MountDialog />
           <TagsDialog />
           <UploadReports />
+          <FileViewer />
           <TransferQueue containerRef={columnRef} />
           {!zen && <TipStrip />}
           {!zen && <StatusBar

@@ -38,7 +38,8 @@ import {
   setAgents as setSshAgents,
   reset as resetPasswordManagers,
 } from "./passwords";
-import { terminalCalls, workspaceRows, setPersistedSessions } from "./core";
+import { terminalCalls, workspaceRows, setPersistedSessions, setEditorFile, editorWrites } from "./core";
+import { useViewer } from "@/stores/viewerStore";
 import { getPane, paneText } from "@/lib/terminalRegistry";
 // window.__primitives: a bench for the shared UI primitives (tests only).
 import "./primitives";
@@ -73,6 +74,9 @@ import "./primitives";
   terminalCalls,
   workspaceRows,
   setPersistedSessions,
+  setEditorFile,
+  editorWrites,
+  useViewer,
   terminal: { getPane, paneText },
   // Ask the window to close, as the title bar's close button does.
   requestClose: () => getCurrentWindow().close(),

@@ -97,6 +97,8 @@ const SECTION_SETTING_KEYS: Partial<Record<SettingsSectionId, (keyof PersistedSe
     "browserLayout",
     "remoteImagePreviews",
     "defaultEditor",
+    "editorOpenWith",
+    "editorAutoSave",
   ],
   terminal: [
     "terminalFontSize",
@@ -625,6 +627,28 @@ export function Settings({ onClose }: Props) {
                 ]}
               />
             </Row>
+            <Row
+              label="Open files for editing in"
+              keywords="edit editor built-in external text code"
+              help="Faro's editor opens text files up to 5 MB and checks that the file didn't change before saving. Your own editor is used for everything else, and is one click away from Faro's."
+            >
+              <Segmented<"builtin" | "external">
+                label="Open files for editing in"
+                value={s.editorOpenWith}
+                onChange={(v) => setSetting("editorOpenWith", v)}
+                options={[
+                  { value: "builtin", label: "Faro's editor" },
+                  { value: "external", label: "My editor" },
+                ]}
+              />
+            </Row>
+            <CheckRow
+              label="Auto-save in Faro's editor"
+              keywords="autosave save automatically"
+              help="Saves a moment after you stop typing. A file that changed on the server is never overwritten without asking."
+              checked={s.editorAutoSave}
+              onChange={(v) => setSetting("editorAutoSave", v)}
+            />
             <Row label="Default editor" keywords="edit in place code vscode" help="Command for edit-in-place, e.g. code. Blank opens the OS default app.">
               <DebouncedText
                 value={s.defaultEditor}

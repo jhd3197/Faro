@@ -102,6 +102,8 @@ import type {
   TerminalDataEvent,
   LocalShell,
   PersistedSession,
+  EditorFile,
+  FileStamp,
   TerminalExitEvent,
   Transfer,
   TransferQueueState,
@@ -436,6 +438,10 @@ export const ipc = {
   terminalPasteImage: (sessionId: SessionId, data: string, ext: string) =>
     invoke<string>("terminal_paste_image", { sessionId, data, ext }),
 
+  /** Write base64-encoded bytes to a local path picked in a save dialog. */
+  writeBase64File: (path: string, data: string) =>
+    invoke<void>("write_base64_file", { path, data }),
+
   /** Write text to a local path picked in a save dialog. */
   writeTextFile: (path: string, contents: string) =>
     invoke<void>("write_text_file", { path, contents }),
@@ -738,6 +744,23 @@ export const ipc = {
     invoke<EditStartedEvent>("start_edit", { sessionId, remotePath, editor }),
 
   stopEdit: (editId: string) => invoke<void>("stop_edit", { editId }),
+
+  // ---- Built-in editor and image viewer (Plan 37 Phase 3) ----
+  /** Read a UTF-8 text file (up to 5 MB) and the stamp of the version read. */
+  editorRead: (sessionId: SessionId, path: string) =>
+    invoke<EditorFile>("editor_read", { sessionId, path }),
+  /** Save. Rejects with kind `conflict` when the file is no longer the
+   *  version `expected` describes, unless `force`. */
+  editorWrite: (
+    sessionId: SessionId,
+    path: string,
+    text: string,
+    expected: FileStamp | null,
+    force = false
+  ) => invoke<FileStamp | null>("editor_write", { sessionId, path, text, expected, force }),
+  /** A whole image file (up to 25 MB), base64-encoded. */
+  readImageFile: (sessionId: SessionId, path: string) =>
+    invoke<string>("read_image_file", { sessionId, path }),
 
   // Agent Bridge
   bridgeStart: () => invoke<BridgeStatus>("bridge_start"),

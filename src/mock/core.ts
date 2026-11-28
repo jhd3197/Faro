@@ -17,6 +17,26 @@ type Args = Record<string, any>;
 let terminalCounter = 0;
 // Terminals that have received input (see terminal_write).
 const echoed = new Set<string>();
+/** Files the built-in editor has opened or saved, by path. */
+const editorFiles = new Map<string, { text: string; stamp: { size: number; modified: number; etag: null } }>();
+let editorClock = 1_700_000_000;
+function editorFile(path: string) {
+  let file = editorFiles.get(path);
+  if (!file) {
+    const text = path.endsWith(".bin")
+      ? "MZ\u0000\u0000binary"
+      : `# ${path.split("/").pop()}\nlisten 80;\nserver_name example.com;\n`;
+    file = { text, stamp: { size: text.length, modified: ++editorClock, etag: null } };
+    editorFiles.set(path, file);
+  }
+  return file;
+}
+/** Change a file "on the server" (tests use this to force a save conflict). */
+export function setEditorFile(path: string, text: string) {
+  editorFiles.set(path, { text, stamp: { size: text.length, modified: ++editorClock, etag: null } });
+}
+/** Every save the built-in editor made. */
+export const editorWrites: { path: string; text: string; force: boolean }[] = [];
 /** Saved terminal workspaces (settings rows), kept for the page's lifetime. */
 export const workspaceRows = new Map<string, string>();
 /** tmux sessions "on the host", for the detached-sessions menu. */
@@ -354,6 +374,25 @@ async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return a.sessionId === "local"
         ? "C:\\Users\\demo\\AppData\\Local\\Temp\\faro-pastes\\paste 1.png"
         : `/home/deploy/.cache/faro/pastes/paste-1.${a.ext}`;
+    case "editor_read": {
+      const file = editorFile(String(a.path));
+      if (file.text.includes("\u0000")) throw { kind: "unsupported", message: "This looks like a binary file, so it can't be edited as text." };
+      return { text: file.text, stamp: { ...file.stamp } };
+    }
+    case "editor_write": {
+      const file = editorFile(String(a.path));
+      const exp = a.expected;
+      if (!a.force && exp && (exp.size !== file.stamp.size || exp.modified !== file.stamp.modified)) {
+        throw { kind: "conflict", message: "The file changed since you opened it." };
+      }
+      setEditorFile(String(a.path), String(a.text));
+      editorWrites.push({ path: String(a.path), text: String(a.text), force: !!a.force });
+      return { ...editorFile(String(a.path)).stamp };
+    }
+    case "read_image_file":
+      // A 2×1 PNG: one red pixel, one blue.
+      return "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGP4z8Dwn4GBgQEADQEB/4o5HXMAAAAASUVORK5CYII=";
+    case "write_base64_file":
     case "write_text_file":
       return null;
     case "list_local_shells":

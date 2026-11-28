@@ -27,6 +27,8 @@ import {
   ClipboardCopy,
   Save,
   RadioTower,
+  FilePen,
+  Image as ImageIcon,
   ToggleLeft,
   Lock,
   Pin,
@@ -57,6 +59,8 @@ import { useSkills } from "@/stores/skillsStore";
 import { useSnippets } from "@/stores/snippetsStore";
 import { useTerminals, dockTabsOf } from "@/stores/terminalsStore";
 import { openLocalTerminal } from "@/lib/localTerminal";
+import { imageMime, looksEditable } from "@/lib/editorLang";
+import { useViewer } from "@/stores/viewerStore";
 import {
   clearTerminal,
   copyTerminalOutput,
@@ -295,6 +299,32 @@ export function useCommands(): Command[] {
         useLayout.getState().setTerminalOpen(true);
         const quoted = "'" + focused.path.replace(/'/g, "'\\''") + "'";
         useTerminals.getState().openTab(focused.sessionId, `cd ${quoted}\n`);
+      },
+    },
+    {
+      id: "edit-focused-file",
+      title: "Edit Focused File in Faro",
+      group: "File",
+      icon: <FilePen size={14} />,
+      keywords: "edit editor open text built-in code",
+      bindable: true,
+      enabled: focused?.kind === "file" && !focused.isDir && looksEditable(focused.path),
+      run: () => {
+        if (focused?.kind !== "file" || focused.isDir) return;
+        useViewer.getState().open({ kind: "text", sessionId: focused.sessionId, path: focused.path });
+      },
+    },
+    {
+      id: "view-focused-image",
+      title: "View Focused Image",
+      group: "File",
+      icon: <ImageIcon size={14} />,
+      keywords: "image picture photo viewer preview zoom",
+      bindable: true,
+      enabled: focused?.kind === "file" && !focused.isDir && imageMime(focused.path) !== null,
+      run: () => {
+        if (focused?.kind !== "file" || focused.isDir) return;
+        useViewer.getState().open({ kind: "image", sessionId: focused.sessionId, path: focused.path });
       },
     },
     {

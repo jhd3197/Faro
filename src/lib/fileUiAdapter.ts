@@ -1,4 +1,6 @@
 import { openLocalTerminal } from "./localTerminal";
+import { imageMime as viewableImageMime, looksEditable } from "./editorLang";
+import { useViewer } from "@/stores/viewerStore";
 import {
   LOCAL_SESSION,
   isImage,
@@ -140,8 +142,19 @@ export const tauriFileSystem: FileSystemAdapter = {
   },
   // Edit-in-place runs through the editor store, which installs the
   // save/error listeners and tracks the live-edit pill in the status bar.
-  editFile: (sessionId, path) =>
-    useEditor.getState().startEditing(sessionId, path),
+  // "Edit" opens Faro's own editor for text it can take, when that is the
+  // user's choice; otherwise the external edit-in-place flow.
+  editFile: async (sessionId, path) => {
+    if (useSettings.getState().editorOpenWith === "builtin" && looksEditable(path)) {
+      useViewer.getState().open({ kind: "text", sessionId, path });
+      return;
+    }
+    await useEditor.getState().startEditing(sessionId, path);
+  },
+  viewFile: async (sessionId, path) => {
+    useViewer.getState().open({ kind: "image", sessionId, path });
+  },
+  canViewFile: (name) => viewableImageMime(name) !== null,
 
   // Copy a file/folder next to the original. The Rust side resolves a free
   // name and does the copy server-side (cp over SSH) or on the local disk.

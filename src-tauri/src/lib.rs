@@ -18,6 +18,7 @@ pub mod diagnostics;
 pub mod credential_refs;
 pub mod faro_file;
 pub mod bridge;
+mod builtin_editor;
 pub mod commands;
 mod agent_host;
 mod cache;
@@ -681,6 +682,9 @@ pub fn run() {
             commands::sync_recovery_restore,
             commands::start_edit,
             commands::stop_edit,
+            commands::editor_read,
+            commands::editor_write,
+            commands::read_image_file,
             commands::list_directory,
             commands::browse_directory,
             commands::capabilities,
@@ -692,6 +696,7 @@ pub fn run() {
             commands::open_terminal,
             commands::list_local_shells,
             commands::write_text_file,
+            commands::write_base64_file,
             commands::terminal_paste_image,
             commands::terminal_persist_list,
             commands::terminal_persist_kill,

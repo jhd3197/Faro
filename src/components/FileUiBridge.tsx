@@ -23,7 +23,7 @@ export function FileUiBridge({ children }: { children: ReactNode }) {
         sortDirection: s.sortDirection,
         paneViewMode: s.paneViewMode,
         paneDensity: s.paneDensity,
-        editorLabel: s.defaultEditor || undefined,
+        editorLabel: s.editorOpenWith === "external" ? s.defaultEditor || undefined : undefined,
         remoteImagePreviews: s.remoteImagePreviews === "on",
         keyBindings,
         columnWidths,

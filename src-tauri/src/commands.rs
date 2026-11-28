@@ -1026,6 +1026,19 @@ pub async fn write_text_file(path: String, contents: String) -> Result<(), Strin
         .map_err(|e| format!("Couldn't write {path}: {e}"))
 }
 
+/// Write base64-encoded bytes to a local file the user just picked in a save
+/// dialog (the image viewer's "Save as").
+#[tauri::command]
+pub async fn write_base64_file(path: String, data: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|e| format!("The data couldn't be decoded: {e}"))?;
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|e| format!("Couldn't write {path}: {e}"))
+}
+
 /// Shells installed on this machine, the default first (Plan 36 Phase 1).
 #[tauri::command]
 pub async fn list_local_shells() -> Result<Vec<crate::local_shell::LocalShell>, String> {
@@ -2478,6 +2491,61 @@ pub async fn start_edit(
         .start(session, session_id, remote_path, editor, app)
         .await
         .map_err(err)
+}
+
+/// Built-in editor: read a text file and the stamp of the version read.
+#[tauri::command]
+pub async fn editor_read(
+    session_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<crate::builtin_editor::EditorFile, FaroError> {
+    let session = editor_session(&session_id, &state).await?;
+    crate::builtin_editor::read(session, &path).await
+}
+
+/// Built-in editor: save, unless the file changed since `expected` was read.
+/// A changed file fails with kind `conflict`; `force` overwrites it.
+#[tauri::command]
+pub async fn editor_write(
+    session_id: String,
+    path: String,
+    text: String,
+    expected: Option<crate::builtin_editor::FileStamp>,
+    force: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<Option<crate::builtin_editor::FileStamp>, FaroError> {
+    let session = editor_session(&session_id, &state).await?;
+    crate::builtin_editor::write(session, &path, text, expected, force.unwrap_or(false)).await
+}
+
+/// Image viewer: a whole image file, base64-encoded.
+#[tauri::command]
+pub async fn read_image_file(
+    session_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<String, FaroError> {
+    use base64::Engine;
+    let session = editor_session(&session_id, &state).await?;
+    let bytes = crate::builtin_editor::read_image(session, &path).await?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// `None` for the local machine, else the connected session.
+async fn editor_session(
+    session_id: &str,
+    state: &AppState,
+) -> Result<Option<Arc<crate::session::Session>>, FaroError> {
+    if session_id == LOCAL_SESSION {
+        return Ok(None);
+    }
+    state
+        .sessions
+        .get(session_id)
+        .await
+        .map(Some)
+        .ok_or_else(|| FaroError::from(format!("session {session_id} not found")))
 }
 
 #[tauri::command]
