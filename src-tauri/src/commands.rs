@@ -922,6 +922,7 @@ pub async fn read_file_head(
 // ---------- Terminal ----------
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn open_terminal(
     session_id: String,
     cols: u32,

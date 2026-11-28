@@ -1207,9 +1207,8 @@ async fn live_tar_folder_round_trip_and_skip() {
     assert_eq!(files, expected_files, "the planner counts every file");
     assert!(bytes >= expected_bytes, "du reports at least the file bytes: {bytes}");
     assert!(tarstream::worth_streaming(files, bytes), "this folder qualifies for a stream");
-    assert_eq!(
+    assert!(
         mgr.tar_eligible(&session, OverwritePolicy::Overwrite, false).await.is_some(),
-        true,
         "an SSH session with tar is eligible"
     );
     assert!(
