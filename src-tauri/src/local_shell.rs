@@ -173,8 +173,10 @@ fn wsl_distros() -> Vec<String> {
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn parse_wsl_list(raw: &[u8]) -> Vec<String> {
     let units: Vec<u16> = raw
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .collect();
     String::from_utf16_lossy(&units)
         .lines()
